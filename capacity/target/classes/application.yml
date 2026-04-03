@@ -1,0 +1,32 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: capacity-service
+  # 与 sx_work 一致：需要注册中心时取消注释并启动 Nacos
+  #  cloud:
+  #    nacos:
+  #      discovery:
+  #        server-addr: 127.0.0.1:8848
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/capacity?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf8&autoReconnect=true&useSSL=false&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true
+    username: root
+    password:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    druid:
+      validation-query: SELECT 1
+      test-while-idle: true
+
+logging:
+  config: classpath:logback-spring.xml
+  file:
+    path: /Users/sx/Documents/workSpace/didi-taxi/capacity/logs/capacity-service
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+  mapper-locations: classpath*:mapper/**/*.xml

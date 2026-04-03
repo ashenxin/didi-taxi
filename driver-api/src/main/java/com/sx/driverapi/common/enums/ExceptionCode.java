@@ -1,0 +1,32 @@
+package com.sx.driverapi.common.enums;
+
+public enum ExceptionCode implements NameValueEnum<Integer> {
+    SUCCESS(200, "success"),
+    BAD_REQUEST(400, "bad request"),
+    UNAUTHORIZED(401, "unauthorized"),
+    FORBIDDEN(403, "forbidden"),
+    NOT_FOUND(404, "Not Found"),
+    CONFLICT(409, "conflict"),
+    SERVER_ERROR(500, "服务异常"),
+    BAD_GATEWAY(502, "bad gateway"),
+    GATEWAY_TIMEOUT(504, "gateway timeout");
+
+    private final Integer code;
+    private final String msg;
+
+    ExceptionCode(Integer code, String msg) {
+        this.code = code;
+        this.msg = msg;
+    }
+
+    @Override
+    public String getName() {
+        return this.msg;
+    }
+
+    @Override
+    public Integer getValue() {
+        return this.code;
+    }
+}
+

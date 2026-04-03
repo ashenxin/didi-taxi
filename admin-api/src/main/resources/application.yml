@@ -1,0 +1,54 @@
+server:
+  port: 8099
+
+spring:
+  application:
+    name: admin-api
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+  cloud:
+    client:
+      hostinfo:
+        enabled: false
+    inetutils:
+      default-hostname: localhost
+      default-ip-address: 127.0.0.1
+
+logging:
+  config: classpath:logback-spring.xml
+  file:
+    path: /Users/sx/Documents/workSpace/didi-taxi/admin-api/logs/admin-api
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      # 未启动 Zipkin 时会出现 Connection refused WARN；本地可加 profile `local` 关闭上报，见 application-local.yml
+      endpoint: http://127.0.0.1:9411/api/v2/spans
+
+admin:
+  # JWT 校验时的安全上下文缓存（见《权限清单》Redis 约定）；与 passenger 删除键前缀须一致
+  security-context-cache:
+    enabled: ${ADMIN_SECURITY_CONTEXT_CACHE_ENABLED:true}
+    key-prefix: ${ADMIN_SECURITY_CONTEXT_CACHE_KEY_PREFIX:adm:user:}
+    ttl-seconds: ${ADMIN_SECURITY_CONTEXT_CACHE_TTL_SECONDS:1800}
+  jwt:
+    # 生产环境务必通过环境变量 JWT_SECRET 覆盖（建议 ≥32 字节随机串）
+    secret: ${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}
+    expiration-seconds: ${JWT_EXPIRATION_SECONDS:43200}
+
+services:
+  order:
+    base-url: http://127.0.0.1:8093
+  passenger:
+    base-url: http://127.0.0.1:8092
+  capacity:
+    base-url: http://127.0.0.1:8090
+  calculate:
+    base-url: http://127.0.0.1:8091

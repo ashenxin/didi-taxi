@@ -1,0 +1,16 @@
+com/sx/calculate/dao/FareRuleEntityMapper.class
+com/sx/calculate/model/dto/FareRuleUpsertBody.class
+com/sx/calculate/controller/TestController.class
+com/sx/calculate/model/dto/EstimateFareBody.class
+com/sx/calculate/common/enums/ExceptionCode.class
+com/sx/calculate/common/enums/NameValueEnum.class
+com/sx/calculate/model/dto/EstimateFareResult.class
+com/sx/calculate/controller/FareRuleController.class
+com/sx/calculate/controller/EstimateController.class
+com/sx/calculate/common/exception/GlobalExceptionHandler.class
+com/sx/calculate/common/enums/ValueEnum.class
+com/sx/calculate/common/util/ResultUtil.class
+com/sx/calculate/common/vo/PageVo.class
+com/sx/calculate/common/vo/ResponseVo.class
+com/sx/calculate/model/FareRule.class
+com/sx/calculate/CalculateSpringApplication.class
