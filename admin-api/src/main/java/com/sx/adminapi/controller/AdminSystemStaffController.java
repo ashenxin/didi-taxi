@@ -8,7 +8,6 @@ import com.sx.adminapi.model.system.AdminStaffUpdateBody;
 import com.sx.adminapi.model.system.AdminSystemStaffUserVO;
 import com.sx.adminapi.service.AdminSystemStaffService;
 import jakarta.validation.Valid;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,7 +22,6 @@ import org.springframework.web.bind.annotation.RestController;
  * 管理员维护：超级管理员可管省/市管理员；省管理员仅可管本省市管理员；市管理员无此接口权限。
  * <p>统一前缀：{@code /admin/api/v1/system/admin-users}。</p>
  */
-@CrossOrigin(origins = "*")
 @RestController
 @RequestMapping("/admin/api/v1/system/admin-users")
 public class AdminSystemStaffController {

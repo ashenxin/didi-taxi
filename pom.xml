@@ -27,6 +27,7 @@
         <module>admin-api</module>
         <module>passenger-api</module>
         <module>driver-api</module>
+        <module>gateway</module>
     </modules>
 
     <properties>
@@ -44,6 +45,18 @@
                 <version>${spring-cloud.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- Spring Cloud BOM 2023.0.5 带入 gateway 4.1.6，依赖 Spring 6.2 的 HttpHeaders#headerSet()；
+                 Boot 3.3.5 固定为 spring-web 6.1.x，会导致 NoSuchMethodError。固定 4.1.5 与 6.1 对齐；整仓升级 Boot 3.4+ 后可删。 -->
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-starter-gateway</artifactId>
+                <version>4.1.5</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-gateway-server</artifactId>
+                <version>4.1.5</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

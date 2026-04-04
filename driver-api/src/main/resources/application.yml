@@ -1,6 +1,9 @@
 server:
   port: 8101
 
+# 经网关访问时不要开 BFF 自带 CORS（勿设 bff.browser-cors.enabled），与《网关服务_设计》一致。
+# 仅浏览器直连本端口 8101 排障：bff.browser-cors.enabled=true
+
 spring:
   application:
     name: driver-api

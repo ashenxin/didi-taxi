@@ -5,7 +5,6 @@ import com.sx.adminapi.common.vo.ResponseVo;
 import com.sx.adminapi.model.order.AdminOrderDetailVO;
 import com.sx.adminapi.model.order.AdminOrderPageVO;
 import com.sx.adminapi.service.AdminOrderService;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,7 +19,6 @@ import java.time.LocalDateTime;
  * <p>统一前缀：{@code /admin/api/v1/orders}。</p>
  * <p>列表 {@code provinceCode}/{@code cityCode} 与登录数据域合并；详情按订单归属省市校验，跨域返回「订单不存在」。</p>
  */
-@CrossOrigin(origins = "*")
 @RestController
 @RequestMapping("/admin/api/v1/orders")
 public class AdminOrderController {

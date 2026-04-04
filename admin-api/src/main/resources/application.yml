@@ -1,6 +1,9 @@
 server:
   port: 8099
 
+# 经网关访问时请保持关默认（不要配置 bff.browser-cors.enabled），避免与网关重复下发 CORS 头。
+# 仅浏览器直连本端口排障时：bff.browser-cors.enabled=true
+
 spring:
   application:
     name: admin-api

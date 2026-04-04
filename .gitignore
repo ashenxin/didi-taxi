@@ -1,4 +1,9 @@
-/target/
+# Maven：各子模块 build 输出（勿提交）
+target/
+
+# IntelliJ IDEA（各人本地配置，勿提交）
+.idea/
+
 *.class
 *.jar
 *.war
