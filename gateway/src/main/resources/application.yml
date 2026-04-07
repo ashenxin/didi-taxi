@@ -43,7 +43,7 @@ gateway:
     # 本地 Postman / 前端无 token 联调时可设 false（或环境变量 GATEWAY_JWT_REQUIRE_AUTH=false）；生产必须为 true
     require-auth: ${GATEWAY_JWT_REQUIRE_AUTH:true}
     secret: ${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}
-    audience-check-enabled: false
+    audience-check-enabled: true
     audience-admin: admin-bff
     audience-app: app-bff
     audience-driver: driver-bff

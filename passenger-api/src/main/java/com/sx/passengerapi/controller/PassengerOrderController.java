@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -25,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class PassengerOrderController {
 
     private final PassengerOrderService passengerOrderService;
+    private static final String USER_ID_HEADER = "X-User-Id";
 
     public PassengerOrderController(PassengerOrderService passengerOrderService) {
         this.passengerOrderService = passengerOrderService;
@@ -35,7 +37,13 @@ public class PassengerOrderController {
      * <p>{@code POST /app/api/v1/orders}</p>
      */
     @PostMapping("/orders")
-    public ResponseVo<CreateAndAssignOrderResult> createAndAssign(@RequestBody @Valid CreateAndAssignOrderBody body) {
+    public ResponseVo<CreateAndAssignOrderResult> createAndAssign(
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @RequestBody @Valid CreateAndAssignOrderBody body) {
+        if (passengerId == null) {
+            throw new com.sx.passengerapi.common.exception.BizErrorException(401, "未授权，请重新登录");
+        }
+        body.setPassengerId(passengerId);
         return ResultUtil.success(passengerOrderService.createAndAssign(body));
     }
 
@@ -44,8 +52,12 @@ public class PassengerOrderController {
      * <p>{@code GET /app/api/v1/orders/{orderNo}?passengerId=}</p>
      */
     @GetMapping("/orders/{orderNo}")
-    public ResponseVo<PassengerOrderDetailVO> orderDetail(@PathVariable String orderNo,
-                                                          @RequestParam("passengerId") Long passengerId) {
+    public ResponseVo<PassengerOrderDetailVO> orderDetail(
+            @PathVariable String orderNo,
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId) {
+        if (passengerId == null) {
+            throw new com.sx.passengerapi.common.exception.BizErrorException(401, "未授权，请重新登录");
+        }
         return ResultUtil.success(passengerOrderService.getOrderDetail(orderNo, passengerId));
     }
 
@@ -55,7 +67,12 @@ public class PassengerOrderController {
      */
     @PostMapping("/orders/{orderNo}/cancel")
     public ResponseVo<Void> cancelOrder(@PathVariable String orderNo,
+                                        @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
                                         @RequestBody @Valid CancelOrderRequest body) {
+        if (passengerId == null) {
+            throw new com.sx.passengerapi.common.exception.BizErrorException(401, "未授权，请重新登录");
+        }
+        body.setPassengerId(passengerId);
         passengerOrderService.cancelOrder(orderNo, body);
         return ResultUtil.success(null);
     }

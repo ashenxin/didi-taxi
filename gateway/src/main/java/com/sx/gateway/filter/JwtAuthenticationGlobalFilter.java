@@ -84,6 +84,17 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
         if (HttpMethod.POST.equals(method) && "/admin/api/v1/auth/login".equals(path)) {
             return true;
         }
+        if (HttpMethod.POST.equals(method)) {
+            if ("/app/api/v1/auth/login-password".equals(path)) {
+                return true;
+            }
+            if ("/app/api/v1/auth/login-sms".equals(path)) {
+                return true;
+            }
+            if ("/app/api/v1/auth/sms/send".equals(path)) {
+                return true;
+            }
+        }
         return false;
     }
 

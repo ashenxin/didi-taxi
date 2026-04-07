@@ -37,6 +37,15 @@ passenger:
     # 须与 admin-api 的 admin.security-context-cache.key-prefix 一致
     security-context-cache:
       key-prefix: ${ADMIN_SECURITY_CONTEXT_CACHE_KEY_PREFIX:adm:user:}
+  app:
+    customer-auth:
+      sms:
+        code-ttl-seconds: 300
+        min-interval-seconds: 60
+        daily-limit-per-phone: 5
+        daily-login-fail-limit-per-phone: 5
+        # 生产设为 false 并接入短信网关；true 时仅在日志打印验证码
+        mock-send-enabled: ${APP_SMS_MOCK_ENABLED:true}
 
 mybatis-plus:
   configuration:
