@@ -94,6 +94,21 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
             if ("/app/api/v1/auth/sms/send".equals(path)) {
                 return true;
             }
+            if ("/driver/api/v1/auth/sms/send".equals(path)) {
+                return true;
+            }
+            if ("/driver/api/v1/auth/register-sms".equals(path)) {
+                return true;
+            }
+            if ("/driver/api/v1/auth/register-password".equals(path)) {
+                return true;
+            }
+            if ("/driver/api/v1/auth/login-sms".equals(path)) {
+                return true;
+            }
+            if ("/driver/api/v1/auth/login-password".equals(path)) {
+                return true;
+            }
         }
         return false;
     }

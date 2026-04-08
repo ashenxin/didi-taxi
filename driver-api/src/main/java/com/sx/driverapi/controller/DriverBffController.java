@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -27,6 +28,8 @@ import java.util.List;
 @RequestMapping("/driver/api/v1")
 public class DriverBffController {
 
+    private static final String USER_ID_HEADER = "X-User-Id";
+
     private final DriverBffService driverBffService;
 
     public DriverBffController(DriverBffService driverBffService) {
@@ -39,8 +42,12 @@ public class DriverBffController {
      * <p>请求体：{@code { "online": true|false }}，透传运力服务更新 {@code monitor_status}。</p>
      */
     @PostMapping("/drivers/{driverId}/online")
-    public ResponseVo<Void> online(@PathVariable Long driverId, @RequestBody @Valid DriverOnlineBody body) {
-        driverBffService.setOnline(driverId, Boolean.TRUE.equals(body.getOnline()));
+    public ResponseVo<Void> online(@PathVariable Long driverId,
+                                  @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                  @RequestBody @Valid DriverOnlineBody body) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(driverId, authedDriverId);
+        driverBffService.setOnline(authedDriverId, Boolean.TRUE.equals(body.getOnline()));
         return ResultUtil.success();
     }
 
@@ -49,8 +56,13 @@ public class DriverBffController {
      * <p>{@code GET /driver/api/v1/orders/assigned?driverId=}</p>
      */
     @GetMapping("/orders/assigned")
-    public ResponseVo<List<AssignedOrderItemVO>> assigned(@RequestParam Long driverId) {
-        return ResultUtil.success(driverBffService.listAssigned(driverId));
+    public ResponseVo<List<AssignedOrderItemVO>> assigned(@RequestParam(required = false) Long driverId,
+                                                         @RequestHeader(value = USER_ID_HEADER, required = false) String userId) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        if (driverId != null) {
+            assertSameDriver(driverId, authedDriverId);
+        }
+        return ResultUtil.success(driverBffService.listAssigned(authedDriverId));
     }
 
     /**
@@ -59,8 +71,12 @@ public class DriverBffController {
      * <p>请求体：{@code { "driverId": 80001 }}，须与订单指派司机一致。</p>
      */
     @PostMapping("/orders/{orderNo}/accept")
-    public ResponseVo<Void> accept(@PathVariable String orderNo, @RequestBody @Valid DriverIdBody body) {
-        driverBffService.accept(orderNo, body.getDriverId());
+    public ResponseVo<Void> accept(@PathVariable String orderNo,
+                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestBody @Valid DriverIdBody body) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(body.getDriverId(), authedDriverId);
+        driverBffService.accept(orderNo, authedDriverId);
         return ResultUtil.success();
     }
 
@@ -69,8 +85,12 @@ public class DriverBffController {
      * <p>{@code POST /driver/api/v1/orders/{orderNo}/arrive}</p>
      */
     @PostMapping("/orders/{orderNo}/arrive")
-    public ResponseVo<Void> arrive(@PathVariable String orderNo, @RequestBody @Valid DriverIdBody body) {
-        driverBffService.arrive(orderNo, body.getDriverId());
+    public ResponseVo<Void> arrive(@PathVariable String orderNo,
+                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestBody @Valid DriverIdBody body) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(body.getDriverId(), authedDriverId);
+        driverBffService.arrive(orderNo, authedDriverId);
         return ResultUtil.success();
     }
 
@@ -79,8 +99,12 @@ public class DriverBffController {
      * <p>{@code POST /driver/api/v1/orders/{orderNo}/start}</p>
      */
     @PostMapping("/orders/{orderNo}/start")
-    public ResponseVo<Void> start(@PathVariable String orderNo, @RequestBody @Valid DriverIdBody body) {
-        driverBffService.start(orderNo, body.getDriverId());
+    public ResponseVo<Void> start(@PathVariable String orderNo,
+                                  @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                  @RequestBody @Valid DriverIdBody body) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(body.getDriverId(), authedDriverId);
+        driverBffService.start(orderNo, authedDriverId);
         return ResultUtil.success();
     }
 
@@ -89,8 +113,30 @@ public class DriverBffController {
      * <p>{@code POST /driver/api/v1/orders/{orderNo}/finish}</p>
      */
     @PostMapping("/orders/{orderNo}/finish")
-    public ResponseVo<Void> finish(@PathVariable String orderNo, @RequestBody @Valid FinishOrderBody body) {
+    public ResponseVo<Void> finish(@PathVariable String orderNo,
+                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestBody @Valid FinishOrderBody body) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(body.getDriverId(), authedDriverId);
+        body.setDriverId(authedDriverId);
         driverBffService.finish(orderNo, body);
         return ResultUtil.success();
+    }
+
+    private static Long requireAuthedDriverId(String userId) {
+        if (userId == null || userId.isBlank()) {
+            throw new com.sx.driverapi.common.exception.BizErrorException(401, "未授权，请重新登录");
+        }
+        try {
+            return Long.valueOf(userId.trim());
+        } catch (NumberFormatException e) {
+            throw new com.sx.driverapi.common.exception.BizErrorException(401, "未授权，请重新登录");
+        }
+    }
+
+    private static void assertSameDriver(Long clientDriverId, Long authedDriverId) {
+        if (clientDriverId == null || !clientDriverId.equals(authedDriverId)) {
+            throw new com.sx.driverapi.common.exception.BizErrorException(403, "禁止操作其他司机数据");
+        }
     }
 }

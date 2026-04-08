@@ -8,6 +8,13 @@ spring:
   application:
     name: driver-api
 
+app:
+  jwt:
+    # 与 gateway.jwt.secret 保持一致（生产用 JWT_SECRET）
+    secret: ${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}
+    expiration-seconds: 604800
+    audience: driver-bff
+
 logging:
   config: classpath:logback-spring.xml
   file:

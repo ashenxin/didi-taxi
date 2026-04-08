@@ -1,12 +1,9 @@
 package com.sx.order.model.dto;
 
-import jakarta.validation.constraints.NotNull;
-
 import java.math.BigDecimal;
 
 public class FinishOrderBody {
 
-    @NotNull(message = "driverId不能为空")
     private Long driverId;
 
     /** 实际里程（公里），MVP 可选，供后续结算 */

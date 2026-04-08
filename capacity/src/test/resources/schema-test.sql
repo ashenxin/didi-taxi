@@ -19,11 +19,12 @@ CREATE TABLE IF NOT EXISTS driver (
     company_id BIGINT NULL,
     brand_no VARCHAR(32) NULL,
     brand_name VARCHAR(128) NULL,
-    name VARCHAR(64) NOT NULL,
-    id_card VARCHAR(32) NOT NULL,
+    name VARCHAR(64) NULL,
+    id_card VARCHAR(32) NULL,
     id_card_photo_a VARCHAR(1024) NULL,
     id_card_photo_b VARCHAR(1024) NULL,
     phone VARCHAR(32) NOT NULL,
+    password_hash VARCHAR(128) NULL,
     gender INT NULL,
     birthday DATE NULL,
     nationality VARCHAR(64) NULL,
@@ -39,9 +40,22 @@ CREATE TABLE IF NOT EXISTS driver (
     rpt_status INT NULL,
     monitor_status INT NULL,
     can_accept_order INT NOT NULL DEFAULT 1,
+    audit_status INT NOT NULL DEFAULT 0,
+    audit_last_record_id BIGINT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_deleted INT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS driver_audit_record (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    driver_id BIGINT NOT NULL,
+    result_status INT NOT NULL,
+    reason VARCHAR(2000) NULL,
+    operator_type INT NOT NULL,
+    operator_id BIGINT NULL,
+    submission_id BIGINT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS driver_team_change_request (

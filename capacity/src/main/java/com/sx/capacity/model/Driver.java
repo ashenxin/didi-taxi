@@ -3,7 +3,6 @@ package com.sx.capacity.model;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
@@ -58,13 +57,11 @@ public class Driver {
     /**
      * 姓名
      */
-    @NotBlank(message = "司机姓名错误")
     private String name;
 
     /**
      * 身份证
      */
-    @NotBlank(message = "司机身份证错误")
     private String idCard;
 
     /**
@@ -80,8 +77,12 @@ public class Driver {
     /**
      * 手机号码
      */
-    @NotBlank(message = "司机手机号错误")
     private String phone;
+
+    /**
+     * 密码摘要（BCrypt）；为空表示未设置密码。
+     */
+    private String passwordHash;
 
     /**
      * 性别（0：未知的性别，1：男性，2：女性）
@@ -157,6 +158,16 @@ public class Driver {
      * 是否可接单：0 否，1 是（换队审核中等场景为 0）
      */
     private Integer canAcceptOrder;
+
+    /**
+     * 审核状态快照：0待完善 1审核中 2通过 3驳回/需补件 4暂停接单
+     */
+    private Integer auditStatus;
+
+    /**
+     * 最新审核流水ID（driver_audit_record.id）
+     */
+    private Long auditLastRecordId;
 
     /**
      * 创建时间

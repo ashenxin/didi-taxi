@@ -17,6 +17,11 @@ spring:
     druid:
       validation-query: SELECT 1
       test-while-idle: true
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DB:0}
 
 logging:
   config: classpath:logback-spring.xml
@@ -30,3 +35,12 @@ mybatis-plus:
     db-config:
       id-type: auto
   mapper-locations: classpath*:mapper/**/*.xml
+
+capacity:
+  app:
+    driver-auth:
+      code-ttl-seconds: 300
+      min-interval-seconds: 60
+      daily-sms-limit-per-phone: 5
+      daily-login-fail-limit-per-phone: 5
+      mock-send-enabled: true

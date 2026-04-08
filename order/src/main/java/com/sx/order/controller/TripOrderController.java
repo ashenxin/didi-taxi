@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -37,6 +38,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/orders")
 public class TripOrderController {
+
+    private static final String USER_ID_HEADER = "X-User-Id";
 
     private final TripOrderEntityMapper tripOrderEntityMapper;
     private final TripOrderWriteService tripOrderWriteService;
@@ -91,14 +94,25 @@ public class TripOrderController {
 
     /**
      * 司机名下「待确认指派」订单列表（{@code status=ASSIGNED}）。
-     * <p>{@code GET /api/v1/orders/assigned?driverId=}</p>
+     * <p>{@code GET /api/v1/orders/assigned}</p>
+     * <p>身份从 {@code X-User-Id} 获取；为兼容旧调用方，可选传 {@code driverId}，但必须与登录身份一致。</p>
      */
     @GetMapping("/assigned")
-    public ResponseVo<List<TripOrder>> listAssigned(@RequestParam Long driverId) {
+    public ResponseVo<List<TripOrder>> listAssigned(@RequestParam(required = false) Long driverId,
+                                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId) {
         try {
-            return ResultUtil.success(tripOrderWriteService.listAssignedToDriver(driverId));
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(driverId, authedDriverId);
+            return ResultUtil.success(tripOrderWriteService.listAssignedToDriver(authedDriverId));
         } catch (IllegalArgumentException ex) {
-            return ResultUtil.requestError(ex.getMessage());
+            String msg = ex.getMessage();
+            if ("未授权，请重新登录".equals(msg)) {
+                return ResultUtil.error(401, msg);
+            }
+            if ("禁止操作其他司机数据".equals(msg)) {
+                return ResultUtil.error(403, msg);
+            }
+            return ResultUtil.requestError(msg);
         }
     }
 
@@ -107,8 +121,14 @@ public class TripOrderController {
      * <p>{@code POST /api/v1/orders/{orderNo}/accept}</p>
      */
     @PostMapping("/{orderNo}/accept")
-    public ResponseVo<Void> accept(@PathVariable String orderNo, @RequestBody @Valid DriverIdBody body) {
-        return handleDriverWrite(() -> tripOrderWriteService.accept(orderNo, body.getDriverId()));
+    public ResponseVo<Void> accept(@PathVariable String orderNo,
+                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestBody @Valid DriverIdBody body) {
+        return handleDriverWrite(() -> {
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
+            tripOrderWriteService.accept(orderNo, authedDriverId);
+        });
     }
 
     /**
@@ -116,8 +136,14 @@ public class TripOrderController {
      * <p>{@code POST /api/v1/orders/{orderNo}/arrive}</p>
      */
     @PostMapping("/{orderNo}/arrive")
-    public ResponseVo<Void> arrive(@PathVariable String orderNo, @RequestBody @Valid DriverIdBody body) {
-        return handleDriverWrite(() -> tripOrderWriteService.arrive(orderNo, body.getDriverId()));
+    public ResponseVo<Void> arrive(@PathVariable String orderNo,
+                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestBody @Valid DriverIdBody body) {
+        return handleDriverWrite(() -> {
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
+            tripOrderWriteService.arrive(orderNo, authedDriverId);
+        });
     }
 
     /**
@@ -125,8 +151,14 @@ public class TripOrderController {
      * <p>{@code POST /api/v1/orders/{orderNo}/start}</p>
      */
     @PostMapping("/{orderNo}/start")
-    public ResponseVo<Void> start(@PathVariable String orderNo, @RequestBody @Valid DriverIdBody body) {
-        return handleDriverWrite(() -> tripOrderWriteService.start(orderNo, body.getDriverId()));
+    public ResponseVo<Void> start(@PathVariable String orderNo,
+                                  @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                  @RequestBody @Valid DriverIdBody body) {
+        return handleDriverWrite(() -> {
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
+            tripOrderWriteService.start(orderNo, authedDriverId);
+        });
     }
 
     /**
@@ -134,8 +166,17 @@ public class TripOrderController {
      * <p>{@code POST /api/v1/orders/{orderNo}/finish}</p>
      */
     @PostMapping("/{orderNo}/finish")
-    public ResponseVo<Void> finish(@PathVariable String orderNo, @RequestBody @Valid FinishOrderBody body) {
-        return handleDriverWrite(() -> tripOrderWriteService.finish(orderNo, body));
+    public ResponseVo<Void> finish(@PathVariable String orderNo,
+                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestBody @Valid FinishOrderBody body) {
+        return handleDriverWrite(() -> {
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
+            if (body != null) {
+                body.setDriverId(authedDriverId);
+            }
+            tripOrderWriteService.finish(orderNo, body);
+        });
     }
 
     /**
@@ -147,6 +188,12 @@ public class TripOrderController {
             return ResultUtil.success(null);
         } catch (IllegalArgumentException ex) {
             String msg = ex.getMessage();
+            if ("未授权，请重新登录".equals(msg)) {
+                return ResultUtil.error(401, msg);
+            }
+            if ("禁止操作其他司机数据".equals(msg)) {
+                return ResultUtil.error(403, msg);
+            }
             if ("非本单指派司机".equals(msg)) {
                 return ResultUtil.error(403, msg);
             }
@@ -160,6 +207,23 @@ public class TripOrderController {
                 return ResultUtil.error(409, msg);
             }
             return ResultUtil.requestError(msg);
+        }
+    }
+
+    private static Long requireAuthedDriverId(String userId) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("未授权，请重新登录");
+        }
+        try {
+            return Long.valueOf(userId.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("未授权，请重新登录");
+        }
+    }
+
+    private static void assertSameDriverIfPresent(Long clientDriverId, Long authedDriverId) {
+        if (clientDriverId != null && !clientDriverId.equals(authedDriverId)) {
+            throw new IllegalArgumentException("禁止操作其他司机数据");
         }
     }
 
