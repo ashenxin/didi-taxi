@@ -39,7 +39,11 @@ public class AppJwtService {
     }
 
     private SecretKey signingKey() {
-        byte[] keyBytes = props.getSecret().getBytes(StandardCharsets.UTF_8);
+        String secret = props.getSecret();
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("passenger-api app.jwt.secret is empty");
+        }
+        byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 }

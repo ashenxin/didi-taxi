@@ -37,12 +37,16 @@ spring:
             allowCredentials: false
             maxAge: 3600
 
-# 与 admin-api admin.jwt.secret 保持一致（生产用 JWT_SECRET）
 gateway:
   jwt:
     # 本地 Postman / 前端无 token 联调时可设 false（或环境变量 GATEWAY_JWT_REQUIRE_AUTH=false）；生产必须为 true
     require-auth: ${GATEWAY_JWT_REQUIRE_AUTH:true}
-    secret: ${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}
+    # 分端密钥：防止跨端 token 复用（生产务必使用环境变量覆盖，建议 ≥32 字节随机串）
+    secret-admin: ${JWT_SECRET_ADMIN:${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}}
+    secret-app: ${JWT_SECRET_APP:${JWT_SECRET:dev-didi-app-jwt-secret-change-me-32b!!}}
+    secret-driver: ${JWT_SECRET_DRIVER:${JWT_SECRET:dev-didi-driver-jwt-secret-change-me-32b!!}}
+    # 兼容字段：单一 secret；建议迁移到上面的 secret-*（仅用于未知路径/历史配置兜底）
+    secret: ${JWT_SECRET:}
     audience-check-enabled: true
     audience-admin: admin-bff
     audience-app: app-bff

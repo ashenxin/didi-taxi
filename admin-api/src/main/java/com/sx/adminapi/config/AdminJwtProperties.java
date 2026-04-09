@@ -9,6 +9,11 @@ public class AdminJwtProperties {
 
     private long expirationSeconds = 43200L;
 
+    /**
+     * 与网关 {@code gateway.jwt.audience-admin} 保持一致（开启 aud 校验时必填）。
+     */
+    private String audience = "admin-bff";
+
     public String getSecret() {
         return secret;
     }
@@ -23,5 +28,13 @@ public class AdminJwtProperties {
 
     public void setExpirationSeconds(long expirationSeconds) {
         this.expirationSeconds = expirationSeconds;
+    }
+
+    public String getAudience() {
+        return audience;
+    }
+
+    public void setAudience(String audience) {
+        this.audience = audience;
     }
 }

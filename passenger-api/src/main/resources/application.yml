@@ -10,8 +10,8 @@ spring:
 
 app:
   jwt:
-    # 与 gateway.jwt.secret 保持一致（生产用 JWT_SECRET）
-    secret: ${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}
+    # 与网关 gateway.jwt.secret-app 保持一致（生产用 JWT_SECRET_APP）
+    secret: ${JWT_SECRET_APP:${JWT_SECRET:dev-didi-app-jwt-secret-change-me-32b!!}}
     expiration-seconds: 604800
     audience: app-bff
 
@@ -39,4 +39,3 @@ services:
     base-url: http://127.0.0.1:8091
   map:
     base-url: http://127.0.0.1:8094
-

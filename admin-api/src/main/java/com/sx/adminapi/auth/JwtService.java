@@ -26,6 +26,7 @@ public class JwtService {
                 .subject(String.valueOf(userId))
                 .claim("tv", tokenVersion)
                 .claim("uname", username)
+                .audience().add(props.getAudience()).and()
                 .issuedAt(new Date(now))
                 .expiration(new Date(expMs))
                 .signWith(signingKey())
@@ -45,7 +46,11 @@ public class JwtService {
     }
 
     private SecretKey signingKey() {
-        byte[] keyBytes = props.getSecret().getBytes(StandardCharsets.UTF_8);
+        String secret = props.getSecret();
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("admin-api admin.jwt.secret is empty");
+        }
+        byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 }

@@ -31,7 +31,7 @@ public class GatewayJwtVerifier {
      */
     public String verifyAndGetSubject(String compactToken, String path) throws JwtException {
         Claims claims = Jwts.parser()
-                .verifyWith(signingKey())
+                .verifyWith(signingKey(path))
                 .build()
                 .parseSignedClaims(compactToken)
                 .getPayload();
@@ -44,12 +44,36 @@ public class GatewayJwtVerifier {
         return claims.getSubject();
     }
 
-    private SecretKey signingKey() {
-        String secret = props.getSecret();
+    private SecretKey signingKey(String path) {
+        String secret = resolveSecretByPath(path);
         if (secret == null || secret.isBlank()) {
-            throw new IllegalStateException("gateway.jwt.secret is empty");
+            throw new IllegalStateException("gateway jwt secret is empty for path=" + path);
         }
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String resolveSecretByPath(String path) {
+        if (path != null) {
+            if (path.startsWith("/admin")) {
+                String s = props.getSecretAdmin();
+                if (s != null && !s.isBlank()) {
+                    return s;
+                }
+            }
+            if (path.startsWith("/app")) {
+                String s = props.getSecretApp();
+                if (s != null && !s.isBlank()) {
+                    return s;
+                }
+            }
+            if (path.startsWith("/driver")) {
+                String s = props.getSecretDriver();
+                if (s != null && !s.isBlank()) {
+                    return s;
+                }
+            }
+        }
+        return props.getSecret();
     }
 
     private String expectedAudience(String path) {

@@ -3,13 +3,31 @@ package com.sx.gateway.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 与 admin-api {@code admin.jwt.secret} 共用同一密钥字节串（建议环境变量 {@code JWT_SECRET}）。
+ * 网关 JWT 校验配置。
+ *
+ * <p>为防止跨端 token 复用，按路径前缀使用不同的签名密钥：
+ * {@code /admin/**}、{@code /app/**}、{@code /driver/**} 分别对应三套 secret。
+ *
+ * <p>兼容：保留 {@link #secret} 作为兜底（用于未知路径或历史配置），建议逐步迁移到分端 secret。
  */
 @ConfigurationProperties(prefix = "gateway.jwt")
 public class GatewayJwtProperties {
 
-    /** 与 admin-api 一致，建议 {@code JWT_SECRET} */
+    /**
+     * 兼容字段（不推荐）：单一 secret。
+     *
+     * <p>建议使用 {@link #secretAdmin}/{@link #secretApp}/{@link #secretDriver}。
+     */
     private String secret = "";
+
+    /** {@code /admin/**} 验签密钥 */
+    private String secretAdmin = "";
+
+    /** {@code /app/**} 验签密钥 */
+    private String secretApp = "";
+
+    /** {@code /driver/**} 验签密钥 */
+    private String secretDriver = "";
 
     /**
      * 若为 {@code false}，网关不对任何路径要求 JWT（仅用于本地 Postman / H5 联调）。
@@ -53,6 +71,30 @@ public class GatewayJwtProperties {
 
     public void setSecret(String secret) {
         this.secret = secret;
+    }
+
+    public String getSecretAdmin() {
+        return secretAdmin;
+    }
+
+    public void setSecretAdmin(String secretAdmin) {
+        this.secretAdmin = secretAdmin;
+    }
+
+    public String getSecretApp() {
+        return secretApp;
+    }
+
+    public void setSecretApp(String secretApp) {
+        this.secretApp = secretApp;
+    }
+
+    public String getSecretDriver() {
+        return secretDriver;
+    }
+
+    public void setSecretDriver(String secretDriver) {
+        this.secretDriver = secretDriver;
     }
 
     public String getAudienceAdmin() {

@@ -3,7 +3,8 @@ package com.sx.passengerapi.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 乘客端 JWT，须与 {@code gateway.jwt.secret} 一致；{@code audience} 与 {@code gateway.jwt.audience-app} 一致以便开启 aud 校验。
+ * 乘客端 JWT：签发密钥须与网关 {@code gateway.jwt.secret-app} 一致；
+ * {@code audience} 须与 {@code gateway.jwt.audience-app} 一致以便开启 aud 校验。
  */
 @ConfigurationProperties(prefix = "app.jwt")
 public class AppJwtProperties {

@@ -36,10 +36,9 @@ public class DriverJwtService {
 
     private SecretKey signingKey() {
         String secret = props.getSecret();
-        if (secret == null) {
-            secret = "";
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("driver-api app.jwt.secret is empty");
         }
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 }
-

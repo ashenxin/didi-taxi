@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS `driver` (
     `created_at` DATETIME NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `is_deleted` INT NOT NULL DEFAULT 0 COMMENT '逻辑删除 0否',
+    `phone_if_active` VARCHAR(32) GENERATED ALWAYS AS (CASE WHEN `is_deleted` = 0 THEN `phone` ELSE NULL END) STORED COMMENT '仅未删除行参与唯一；删除行为 NULL',
     PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_driver_phone_active` (`phone_if_active`),
     KEY `idx_driver_company_id` (`company_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='司机';

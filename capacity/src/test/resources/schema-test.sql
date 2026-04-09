@@ -44,7 +44,10 @@ CREATE TABLE IF NOT EXISTS driver (
     audit_last_record_id BIGINT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_deleted INT NOT NULL DEFAULT 0
+    is_deleted INT NOT NULL DEFAULT 0,
+    -- H2 无 MySQL 的 STORED；虚拟生成列，唯一约束语义与线上一致
+    phone_if_active VARCHAR(32) GENERATED ALWAYS AS (CASE WHEN is_deleted = 0 THEN phone ELSE NULL END),
+    CONSTRAINT uk_driver_phone_active UNIQUE (phone_if_active)
 );
 
 CREATE TABLE IF NOT EXISTS driver_audit_record (

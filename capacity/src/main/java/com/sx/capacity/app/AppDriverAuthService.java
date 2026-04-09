@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +23,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -50,16 +52,45 @@ public class AppDriverAuthService {
     private static final String KEY_LOGIN_FAIL_PREFIX = "driver:login:fail:"; // 登录失败次数（phone:yyyy-MM-dd）
     private static final String KEY_LOGIN_BAN_PREFIX = "driver:login:ban:"; // 当日禁用标记（phone:yyyy-MM-dd）
 
+    /**
+     * 原子校验并消费 OTP：避免并发下 “先 get 后 delete” 导致的重复消费。
+     *
+     * <p>返回值约定：1=校验通过并已删除；0=验证码不匹配；-1=验证码不存在/已过期。</p>
+     */
+    private static final DefaultRedisScript<Long> OTP_VERIFY_AND_DELETE_SCRIPT = new DefaultRedisScript<>(
+            """
+            local v = redis.call('GET', KEYS[1])
+            if (not v) then
+              return -1
+            end
+            if (v == ARGV[1]) then
+              redis.call('DEL', KEYS[1])
+              return 1
+            end
+            return 0
+            """,
+            Long.class
+    );
+
     private final DriverEntityMapper driverMapper;
     private final StringRedisTemplate redis;
     private final DriverAuthProperties props;
 
+    /**
+     * 注入持久化、Redis 与认证相关配置。
+     */
     public AppDriverAuthService(DriverEntityMapper driverMapper, StringRedisTemplate redis, DriverAuthProperties props) {
         this.driverMapper = driverMapper;
         this.redis = redis;
         this.props = props;
     }
 
+    /**
+     * 向指定手机号发送短信验证码：校验间隔与日上限，生成 OTP 写入 Redis；mock 模式下仅打日志。
+     *
+     * @param phone 手机号
+     * @return 成功无正文，失败带业务错误码与提示
+     */
     public ResponseVo<Void> sendSmsCode(String phone) {
         String p = phone == null ? null : phone.trim();
         if (p == null || p.isBlank()) {
@@ -95,6 +126,12 @@ public class AppDriverAuthService {
         return ResultUtil.success(null);
     }
 
+    /**
+     * 短信验证码注册：校验当日是否封禁、OTP，未存在司机则创建无密码账号。
+     *
+     * @param req 手机号与验证码
+     * @return 新建司机简要信息，或冲突/验证失败等错误
+     */
     @Transactional
     public ResponseVo<AppAuthDriverBrief> registerSms(AppSmsRegisterRequest req) {
         String phone = req.getPhone().trim();
@@ -127,9 +164,16 @@ public class AppDriverAuthService {
             }
             return ResultUtil.error(409, "该手机号已注册，请直接登录");
         }
+        clearLoginFailToday(phone);
         return ResultUtil.success(toBrief(d));
     }
 
+    /**
+     * 密码注册：在短信 OTP 通过后创建司机并写入 BCrypt 密码哈希。
+     *
+     * @param req 手机号、验证码与密码
+     * @return 司机简要信息（含最新库记录），或冲突/验证失败等错误
+     */
     @Transactional
     public ResponseVo<AppAuthDriverBrief> registerPassword(AppPasswordRegisterRequest req) {
         String phone = req.getPhone().trim();
@@ -163,9 +207,16 @@ public class AppDriverAuthService {
                 .eq(Driver::getId, d.getId())
                 .eq(Driver::getIsDeleted, 0));
         Driver refreshed = driverMapper.selectById(d.getId());
+        clearLoginFailToday(phone);
         return ResultUtil.success(toBrief(refreshed == null ? d : refreshed));
     }
 
+    /**
+     * 短信验证码登录：司机须已存在，OTP 校验通过后返回简要信息；失败计入当日失败次数。
+     *
+     * @param req 手机号与验证码
+     * @return 司机简要信息或业务错误
+     */
     public ResponseVo<AppAuthDriverBrief> loginSms(AppSmsLoginRequest req) {
         String phone = req.getPhone().trim();
         if (isLoginBannedToday(phone)) {
@@ -181,9 +232,16 @@ public class AppDriverAuthService {
             recordLoginFail(phone);
             return ResultUtil.error(otpOk.getCode(), otpOk.getMsg());
         }
+        clearLoginFailToday(phone);
         return ResultUtil.success(toBrief(d));
     }
 
+    /**
+     * 密码登录：校验 BCrypt；未设置密码或账号不存在时统一错误提示并累计失败次数。
+     *
+     * @param req 手机号与明文密码
+     * @return 司机简要信息或认证/封禁相关错误
+     */
     public ResponseVo<AppAuthDriverBrief> loginPassword(AppPasswordLoginRequest req) {
         String phone = req.getPhone().trim();
         if (isLoginBannedToday(phone)) {
@@ -202,17 +260,25 @@ public class AppDriverAuthService {
             recordLoginFail(phone);
             return ResultUtil.error(401, "手机号或密码错误");
         }
+        clearLoginFailToday(phone);
         return ResultUtil.success(toBrief(d));
     }
 
+    /**
+     * 按手机号查询未删除的司机（最多一条）。
+     */
     private Driver findActiveByPhone(String phone) {
         return driverMapper.selectOne(
                 Wrappers.<Driver>lambdaQuery()
                         .eq(Driver::getPhone, phone)
                         .eq(Driver::getIsDeleted, 0)
+                        .orderByDesc(Driver::getId)
                         .last("LIMIT 1"));
     }
 
+    /**
+     * 将 {@link Driver} 转为对外返回的简要 DTO（id、手机号、审核状态）。
+     */
     private static AppAuthDriverBrief toBrief(Driver d) {
         AppAuthDriverBrief b = new AppAuthDriverBrief();
         b.setId(d.getId());
@@ -221,16 +287,29 @@ public class AppDriverAuthService {
         return b;
     }
 
+    /**
+     * 一次性校验 Redis 中的 OTP：一致则删除 key，避免重复使用。
+     *
+     * @param phone 手机号
+     * @param code  用户提交的验证码
+     * @return 成功无正文，失败为 401 及提示文案
+     */
     private ResponseVo<Void> verifyOtpOnce(String phone, String code) {
         String otpKey = KEY_OTP_PREFIX + phone;
-        String expected = redis.opsForValue().get(otpKey);
-        if (expected == null || code == null || !expected.equals(code.trim())) {
+        String c = code == null ? null : code.trim();
+        if (c == null || c.isBlank()) {
             return ResultUtil.error(401, "验证码错误或已过期");
         }
-        redis.delete(otpKey);
+        Long r = redis.execute(OTP_VERIFY_AND_DELETE_SCRIPT, Collections.singletonList(otpKey), c);
+        if (r == null || r != 1L) {
+            return ResultUtil.error(401, "验证码错误或已过期");
+        }
         return ResultUtil.success(null);
     }
 
+    /**
+     * 判断该手机号在上海时区当前自然日是否因失败次数过多被标记为禁止登录。
+     */
     private boolean isLoginBannedToday(String phone) {
         String day = LocalDate.now(CN_ZONE).toString();
         String banKey = KEY_LOGIN_BAN_PREFIX + phone + ":" + day;
@@ -238,6 +317,9 @@ public class AppDriverAuthService {
         return v != null && !v.isBlank();
     }
 
+    /**
+     * 累加当日登录/验证失败次数，达到阈值后写入当日 ban 标记（有效期 2 天仅作 key 存活，业务按自然日 key 区分）。
+     */
     private void recordLoginFail(String phone) {
         String day = LocalDate.now(CN_ZONE).toString();
         String failKey = KEY_LOGIN_FAIL_PREFIX + phone + ":" + day;
@@ -251,8 +333,16 @@ public class AppDriverAuthService {
         }
     }
 
+    private void clearLoginFailToday(String phone) {
+        String day = LocalDate.now(CN_ZONE).toString();
+        redis.delete(KEY_LOGIN_FAIL_PREFIX + phone + ":" + day);
+        redis.delete(KEY_LOGIN_BAN_PREFIX + phone + ":" + day);
+    }
+
+    /**
+     * 当日已被风控禁止登录时的统一错误响应。
+     */
     private static ResponseVo<AppAuthDriverBrief> bannedToday() {
         return ResultUtil.error(429, "登录失败次数过多，请明天再试");
     }
 }
-

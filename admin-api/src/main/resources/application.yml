@@ -42,9 +42,10 @@ admin:
     key-prefix: ${ADMIN_SECURITY_CONTEXT_CACHE_KEY_PREFIX:adm:user:}
     ttl-seconds: ${ADMIN_SECURITY_CONTEXT_CACHE_TTL_SECONDS:1800}
   jwt:
-    # 生产环境务必通过环境变量 JWT_SECRET 覆盖（建议 ≥32 字节随机串）
-    secret: ${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}
+    # 与网关 gateway.jwt.secret-admin 保持一致（生产用 JWT_SECRET_ADMIN）
+    secret: ${JWT_SECRET_ADMIN:${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}}
     expiration-seconds: ${JWT_EXPIRATION_SECONDS:43200}
+    audience: admin-bff
 
 services:
   order:
