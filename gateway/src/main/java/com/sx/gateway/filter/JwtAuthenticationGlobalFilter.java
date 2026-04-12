@@ -48,12 +48,14 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
         if (HttpMethod.OPTIONS.equals(request.getMethod())) {
             return chain.filter(exchange);
         }
-        if (!jwtProps.isRequireAuth()) {
-            return chain.filter(exchange);
-        }
         String path = request.getURI().getPath();
         if (isPublic(path, request.getMethod())) {
             return chain.filter(exchange);
+        }
+
+        if (!jwtProps.isRequireAuth()) {
+            // 开发态关闭强制鉴权时仍要能从 Bearer 注入 X-User-Id，否则 BFF 只认 Header 会误判「未登录」
+            return forwardWithOptionalUserId(exchange, chain);
         }
 
         String raw = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
@@ -74,6 +76,31 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
             return unauthorized(exchange, "token 已过期");
         } catch (JwtException | IllegalStateException e) {
             return unauthorized(exchange, "token 无效");
+        }
+    }
+
+    /**
+     * 不强制要求 JWT 时：有合法 Bearer 则注入 {@code X-User-Id}；无 token 或校验失败则原样转发（由下游返回 401 等）。
+     */
+    private Mono<Void> forwardWithOptionalUserId(ServerWebExchange exchange, GatewayFilterChain chain) {
+        ServerHttpRequest request = exchange.getRequest();
+        String raw = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+        if (raw == null || raw.isBlank() || !raw.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
+            return chain.filter(exchange);
+        }
+        String token = raw.substring(BEARER_PREFIX.length()).trim();
+        if (token.isEmpty()) {
+            return chain.filter(exchange);
+        }
+        String path = request.getURI().getPath();
+        try {
+            String sub = verifier.verifyAndGetSubject(token, path);
+            ServerHttpRequest mutated = request.mutate()
+                    .header(StripSpoofedUserHeaderGlobalFilter.USER_ID_HEADER, sub)
+                    .build();
+            return chain.filter(exchange.mutate().request(mutated).build());
+        } catch (JwtException | IllegalStateException e) {
+            return chain.filter(exchange);
         }
     }
 

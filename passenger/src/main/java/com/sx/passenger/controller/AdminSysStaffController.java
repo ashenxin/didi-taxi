@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 省/市管理员 CRUD（对内）；调用方身份通过 {@code X-Caller-User-Id} 传递，服务内再校验数据范围。
+ * <p>统一前缀：{@code /api/v1/admin/sys/admin-users}。</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin/sys/admin-users")
@@ -33,6 +34,10 @@ public class AdminSysStaffController {
         this.adminSysStaffService = adminSysStaffService;
     }
 
+    /**
+     * 管理员账号分页。
+     * <p>{@code GET /api/v1/admin/sys/admin-users?pageNo=&pageSize=&provinceCode=&cityCode=&username=&roleCode=}</p>
+     */
     @GetMapping
     public ResponseEntity<ResponseVo<AdminStaffPageResponse>> page(
             @RequestHeader("X-Caller-User-Id") long callerUserId,
@@ -47,6 +52,10 @@ public class AdminSysStaffController {
         return ResponseEntity.ok(ResultUtil.success(data));
     }
 
+    /**
+     * 管理员账号详情。
+     * <p>{@code GET /api/v1/admin/sys/admin-users/{id}}</p>
+     */
     @GetMapping("/{id}")
     public ResponseEntity<ResponseVo<AdminStaffUserVO>> get(
             @RequestHeader("X-Caller-User-Id") long callerUserId,
@@ -55,6 +64,10 @@ public class AdminSysStaffController {
         return ResponseEntity.ok(ResultUtil.success(data));
     }
 
+    /**
+     * 新建管理员账号。
+     * <p>{@code POST /api/v1/admin/sys/admin-users}</p>
+     */
     @PostMapping
     public ResponseEntity<ResponseVo<AdminStaffUserVO>> create(
             @RequestHeader("X-Caller-User-Id") long callerUserId,
@@ -63,6 +76,10 @@ public class AdminSysStaffController {
         return ResponseEntity.ok(ResultUtil.success(data));
     }
 
+    /**
+     * 更新管理员账号。
+     * <p>{@code PUT /api/v1/admin/sys/admin-users/{id}}</p>
+     */
     @PutMapping("/{id}")
     public ResponseEntity<ResponseVo<AdminStaffUserVO>> update(
             @RequestHeader("X-Caller-User-Id") long callerUserId,
@@ -72,6 +89,10 @@ public class AdminSysStaffController {
         return ResponseEntity.ok(ResultUtil.success(data));
     }
 
+    /**
+     * 软删管理员账号。
+     * <p>{@code DELETE /api/v1/admin/sys/admin-users/{id}}</p>
+     */
     @DeleteMapping("/{id}")
     public ResponseEntity<ResponseVo<Void>> delete(
             @RequestHeader("X-Caller-User-Id") long callerUserId,

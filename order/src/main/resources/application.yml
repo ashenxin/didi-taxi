@@ -27,6 +27,9 @@ management:
   tracing:
     sampling:
       probability: 1.0
+    export:
+      zipkin:
+        enabled: false
   zipkin:
     tracing:
       endpoint: http://127.0.0.1:9411/api/v2/spans

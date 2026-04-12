@@ -24,17 +24,29 @@ public class PassengerAuthController {
         this.passengerAuthService = passengerAuthService;
     }
 
+    /**
+     * 发送短信验证码。
+     * <p>{@code POST /app/api/v1/auth/sms/send}</p>
+     */
     @PostMapping("/sms/send")
     public ResponseVo<Void> sendSms(@Valid @RequestBody com.sx.passengerapi.model.auth.SmsSendRequest body) {
         passengerAuthService.sendSms(body.getPhone());
         return ResultUtil.success(null);
     }
 
+    /**
+     * 短信验证码登录。
+     * <p>{@code POST /app/api/v1/auth/login-sms}</p>
+     */
     @PostMapping("/login-sms")
     public ResponseVo<CustomerLoginResponse> loginSms(@Valid @RequestBody com.sx.passengerapi.model.auth.SmsLoginRequest body) {
         return ResultUtil.success(passengerAuthService.loginSms(body.getPhone(), body.getCode()));
     }
 
+    /**
+     * 手机号密码登录。
+     * <p>{@code POST /app/api/v1/auth/login-password}</p>
+     */
     @PostMapping("/login-password")
     public ResponseVo<CustomerLoginResponse> loginPassword(@Valid @RequestBody com.sx.passengerapi.model.auth.PasswordLoginRequest body) {
         return ResultUtil.success(passengerAuthService.loginPassword(body.getPhone(), body.getPassword()));

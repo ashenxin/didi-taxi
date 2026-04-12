@@ -21,6 +21,7 @@ import java.util.List;
 
 /**
  * 后台管理 RBAC：对内接口，供 admin-api Feign。
+ * <p>统一前缀：{@code /api/v1/admin/sys}。</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin/sys")
@@ -34,6 +35,10 @@ public class AdminSysAuthController {
         this.adminSysMenuService = adminSysMenuService;
     }
 
+    /**
+     * 校验用户名密码，返回用户 ID 与 token 版本等（供 admin-api 登录编排）。
+     * <p>{@code POST /api/v1/admin/sys/auth/verify-credentials}</p>
+     */
     @PostMapping("/auth/verify-credentials")
     public ResponseEntity<ResponseVo<AdminVerifyCredentialsResponse>> verifyCredentials(
             @Valid @RequestBody AdminVerifyCredentialsRequest body) {
@@ -45,6 +50,10 @@ public class AdminSysAuthController {
         return ResponseEntity.ok(ResultUtil.success(data));
     }
 
+    /**
+     * 加载用户安全上下文（角色、省市域等）。
+     * <p>{@code GET /api/v1/admin/sys/users/{userId}/security-context}</p>
+     */
     @GetMapping("/users/{userId}/security-context")
     public ResponseEntity<ResponseVo<AdminSecurityContextResponse>> securityContext(@PathVariable("userId") long userId) {
         try {
@@ -58,6 +67,10 @@ public class AdminSysAuthController {
         }
     }
 
+    /**
+     * 用户菜单树（供签发 JWT 后拉取菜单）。
+     * <p>{@code GET /api/v1/admin/sys/users/{userId}/menus}</p>
+     */
     @GetMapping("/users/{userId}/menus")
     public ResponseEntity<ResponseVo<List<AdminMenuNodeResponse>>> userMenus(@PathVariable("userId") long userId) {
         try {

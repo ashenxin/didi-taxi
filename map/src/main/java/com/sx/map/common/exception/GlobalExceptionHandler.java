@@ -3,6 +3,7 @@ package com.sx.map.common.exception;
 import com.sx.map.common.enums.ExceptionCode;
 import com.sx.map.common.util.ResultUtil;
 import com.sx.map.common.vo.ResponseVo;
+import com.sx.map.exception.AmapApiException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.validation.BindException;
@@ -44,6 +45,11 @@ public class GlobalExceptionHandler {
                 .map(ConstraintViolation::getMessage)
                 .collect(joining(", "));
         return ResultUtil.requestError(errMsg);
+    }
+
+    @ExceptionHandler(AmapApiException.class)
+    public ResponseVo<?> amapApiExceptionHandler(AmapApiException e) {
+        return ResultUtil.requestError(e.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

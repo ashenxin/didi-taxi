@@ -62,6 +62,8 @@
             <version>0.12.6</version>
             <scope>runtime</scope>
         </dependency>
+        <!-- Zipkin / Brave：暂不接入时注释，避免无 Zipkin 进程时的上报异常；恢复接入时取消注释并启动 9411 -->
+        <!--
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing-bridge-brave</artifactId>
@@ -70,6 +72,7 @@
             <groupId>io.zipkin.reporter2</groupId>
             <artifactId>zipkin-reporter-brave</artifactId>
         </dependency>
+        -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

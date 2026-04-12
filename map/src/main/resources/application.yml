@@ -5,6 +5,12 @@ spring:
   application:
     name: map-service
 
+# 高德 Web 服务（驾车路径规划 demo）。请勿把真实 Key 提交仓库，使用环境变量 AMAP_KEY。
+map:
+  amap:
+    key: ${AMAP_KEY:}
+    base-url: https://restapi.amap.com
+
 logging:
   config: classpath:logback-spring.xml
   file:
@@ -14,6 +20,10 @@ management:
   tracing:
     sampling:
       probability: 1.0
+    export:
+      zipkin:
+        # 未启动 Zipkin 时保持 false，避免向 9411 上报失败刷 WARN；需链路分析时启动 Zipkin 并设为 true（或环境变量 MANAGEMENT_TRACING_EXPORT_ZIPKIN_ENABLED=true）
+        enabled: false
   zipkin:
     tracing:
       endpoint: http://127.0.0.1:9411/api/v2/spans

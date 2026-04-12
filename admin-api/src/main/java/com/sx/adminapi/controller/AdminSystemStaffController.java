@@ -32,6 +32,10 @@ public class AdminSystemStaffController {
         this.adminSystemStaffService = adminSystemStaffService;
     }
 
+    /**
+     * 省/市管理员账号分页列表。
+     * <p>{@code GET /admin/api/v1/system/admin-users?pageNo=&pageSize=&provinceCode=&cityCode=&username=&roleCode=}</p>
+     */
     @GetMapping
     public ResponseVo<AdminPageVO<AdminSystemStaffUserVO>> page(
             @RequestParam(defaultValue = "1") int pageNo,
@@ -43,21 +47,37 @@ public class AdminSystemStaffController {
         return ResultUtil.success(adminSystemStaffService.page(pageNo, pageSize, provinceCode, cityCode, username, roleCode));
     }
 
+    /**
+     * 管理员账号详情。
+     * <p>{@code GET /admin/api/v1/system/admin-users/{id}}</p>
+     */
     @GetMapping("/{id}")
     public ResponseVo<AdminSystemStaffUserVO> get(@PathVariable long id) {
         return ResultUtil.success(adminSystemStaffService.get(id));
     }
 
+    /**
+     * 新建省/市管理员账号（权限受调用者角色约束）。
+     * <p>{@code POST /admin/api/v1/system/admin-users}</p>
+     */
     @PostMapping
     public ResponseVo<AdminSystemStaffUserVO> create(@Valid @RequestBody AdminStaffCreateBody body) {
         return ResultUtil.success(adminSystemStaffService.create(body));
     }
 
+    /**
+     * 更新管理员账号信息。
+     * <p>{@code PUT /admin/api/v1/system/admin-users/{id}}</p>
+     */
     @PutMapping("/{id}")
     public ResponseVo<AdminSystemStaffUserVO> update(@PathVariable long id, @RequestBody AdminStaffUpdateBody body) {
         return ResultUtil.success(adminSystemStaffService.update(id, body));
     }
 
+    /**
+     * 逻辑删除管理员账号。
+     * <p>{@code DELETE /admin/api/v1/system/admin-users/{id}}</p>
+     */
     @DeleteMapping("/{id}")
     public ResponseVo<Void> delete(@PathVariable long id) {
         adminSystemStaffService.delete(id);

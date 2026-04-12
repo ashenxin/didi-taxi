@@ -1,5 +1,6 @@
 package com.sx.passengerapi.controller;
 
+import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.util.ResultUtil;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.order.CancelOrderRequest;
@@ -14,7 +15,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -41,22 +41,23 @@ public class PassengerOrderController {
             @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
             @RequestBody @Valid CreateAndAssignOrderBody body) {
         if (passengerId == null) {
-            throw new com.sx.passengerapi.common.exception.BizErrorException(401, "未授权，请重新登录");
+            throw new BizErrorException(401, "未授权，请重新登录");
         }
+        rejectPassengerIdBodyMismatch(passengerId, body.getPassengerId());
         body.setPassengerId(passengerId);
         return ResultUtil.success(passengerOrderService.createAndAssign(body));
     }
 
     /**
      * 订单详情（轮询）：校验 {@code passengerId} 与订单乘客一致。
-     * <p>{@code GET /app/api/v1/orders/{orderNo}?passengerId=}</p>
+     * <p>{@code GET /app/api/v1/orders/{orderNo}}，请求头 {@code X-User-Id}（经网关由 JWT 注入）。</p>
      */
     @GetMapping("/orders/{orderNo}")
     public ResponseVo<PassengerOrderDetailVO> orderDetail(
             @PathVariable String orderNo,
             @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId) {
         if (passengerId == null) {
-            throw new com.sx.passengerapi.common.exception.BizErrorException(401, "未授权，请重新登录");
+            throw new BizErrorException(401, "未授权，请重新登录");
         }
         return ResultUtil.success(passengerOrderService.getOrderDetail(orderNo, passengerId));
     }
@@ -70,11 +71,21 @@ public class PassengerOrderController {
                                         @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
                                         @RequestBody @Valid CancelOrderRequest body) {
         if (passengerId == null) {
-            throw new com.sx.passengerapi.common.exception.BizErrorException(401, "未授权，请重新登录");
+            throw new BizErrorException(401, "未授权，请重新登录");
         }
+        rejectPassengerIdBodyMismatch(passengerId, body.getPassengerId());
         body.setPassengerId(passengerId);
         passengerOrderService.cancelOrder(orderNo, body);
         return ResultUtil.success(null);
+    }
+
+    /**
+     * 请求体若携带 {@code passengerId}，必须与网关注入的 {@code X-User-Id} 一致，否则拒绝（防伪造、防混填）。
+     */
+    private static void rejectPassengerIdBodyMismatch(Long trustedPassengerId, Long bodyPassengerId) {
+        if (bodyPassengerId != null && !bodyPassengerId.equals(trustedPassengerId)) {
+            throw new BizErrorException(400, "请求体中的乘客信息与当前登录身份不一致，请勿填写 passengerId");
+        }
     }
 }
 

@@ -1,10 +1,12 @@
 package com.sx.passengerapi.model.order;
 
-import jakarta.validation.constraints.NotNull;
-
+/**
+ * 取消订单请求体。
+ * <p>{@code passengerId} 由 {@code X-User-Id} 注入，请求体可不传。</p>
+ */
 public class CancelOrderRequest {
 
-    @NotNull(message = "passengerId不能为空")
+    /** 乘客 ID；服务端从 {@code X-User-Id} 注入。 */
     private Long passengerId;
 
     private String cancelReason;

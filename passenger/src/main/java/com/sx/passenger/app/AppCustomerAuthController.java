@@ -25,16 +25,28 @@ public class AppCustomerAuthController {
         this.appCustomerAuthService = appCustomerAuthService;
     }
 
+    /**
+     * 密码登录（对内）。
+     * <p>{@code POST /api/v1/app/auth/login-password}</p>
+     */
     @PostMapping("/login-password")
     public ResponseVo<AppAuthCustomerBrief> loginPassword(@Valid @RequestBody AppLoginPasswordRequest body) {
         return appCustomerAuthService.loginPassword(body);
     }
 
+    /**
+     * 发送短信验证码（对内）。
+     * <p>{@code POST /api/v1/app/auth/sms/send}</p>
+     */
     @PostMapping("/sms/send")
     public ResponseVo<Void> sendSms(@Valid @RequestBody AppSmsSendRequest body) {
         return appCustomerAuthService.sendSmsCode(body.getPhone());
     }
 
+    /**
+     * 短信登录（对内）。
+     * <p>{@code POST /api/v1/app/auth/login-sms}</p>
+     */
     @PostMapping("/login-sms")
     public ResponseVo<AppAuthCustomerBrief> loginSms(@Valid @RequestBody AppSmsLoginRequest body) {
         return appCustomerAuthService.loginSms(body);

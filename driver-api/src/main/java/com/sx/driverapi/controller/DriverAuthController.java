@@ -29,27 +29,47 @@ public class DriverAuthController {
         this.driverAuthService = driverAuthService;
     }
 
+    /**
+     * 发送短信验证码（注册/登录前）。
+     * <p>{@code POST /driver/api/v1/auth/sms/send}</p>
+     */
     @PostMapping("/sms/send")
     public ResponseVo<Void> sendSms(@Valid @RequestBody SmsSendRequest body) {
         driverAuthService.sendSms(body.getPhone());
         return ResultUtil.success(null);
     }
 
+    /**
+     * 短信验证码注册并登录。
+     * <p>{@code POST /driver/api/v1/auth/register-sms}</p>
+     */
     @PostMapping("/register-sms")
     public ResponseVo<DriverLoginResponse> registerSms(@Valid @RequestBody SmsRegisterRequest body) {
         return ResultUtil.success(driverAuthService.registerSms(body.getPhone(), body.getCode()));
     }
 
+    /**
+     * 短信验证后设置密码完成注册并登录。
+     * <p>{@code POST /driver/api/v1/auth/register-password}</p>
+     */
     @PostMapping("/register-password")
     public ResponseVo<DriverLoginResponse> registerPassword(@Valid @RequestBody PasswordRegisterRequest body) {
         return ResultUtil.success(driverAuthService.registerPassword(body.getPhone(), body.getCode(), body.getPassword()));
     }
 
+    /**
+     * 短信验证码登录。
+     * <p>{@code POST /driver/api/v1/auth/login-sms}</p>
+     */
     @PostMapping("/login-sms")
     public ResponseVo<DriverLoginResponse> loginSms(@Valid @RequestBody SmsLoginRequest body) {
         return ResultUtil.success(driverAuthService.loginSms(body.getPhone(), body.getCode()));
     }
 
+    /**
+     * 手机号密码登录。
+     * <p>{@code POST /driver/api/v1/auth/login-password}</p>
+     */
     @PostMapping("/login-password")
     public ResponseVo<DriverLoginResponse> loginPassword(@Valid @RequestBody PasswordLoginRequest body) {
         return ResultUtil.success(driverAuthService.loginPassword(body.getPhone(), body.getPassword()));

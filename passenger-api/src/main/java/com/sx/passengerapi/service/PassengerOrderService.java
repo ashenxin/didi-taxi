@@ -8,6 +8,7 @@ import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.model.calculate.EstimateFareBody;
 import com.sx.passengerapi.model.calculate.EstimateFareResult;
 import com.sx.passengerapi.model.capacity.NearestDriverResult;
+import com.sx.passengerapi.model.map.GeocodeDemoResponse;
 import com.sx.passengerapi.model.map.Point;
 import com.sx.passengerapi.model.map.RouteRequest;
 import com.sx.passengerapi.model.map.RouteResponse;
@@ -26,11 +27,18 @@ import com.sx.passengerapi.model.ordercore.CreateOrderResult;
 import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 @Service
 public class PassengerOrderService {
+
+    /** cityCode → 高德 geocode 可选 city 参数（中文/全拼/adcode 等，见高德文档） */
+    private static final Map<String, String> CITY_CODE_TO_GEOCODE_CITY = Map.of(
+            "330100", "杭州"
+    );
 
     private final MapClient mapClient;
     private final CalculateClient calculateClient;
@@ -48,18 +56,68 @@ public class PassengerOrderService {
     }
 
     /**
-     * 调用地图服务进行路线预估（里程/时长）。
+     * 起终点缺经纬度时，调 map 地理编码补全；已带齐 lat/lng 则跳过（兼容地图 SDK 选点）。
+     * <p>顺序：geocode 起点 → geocode 终点 → 后续 {@link #route} 驾车规划。</p>
+     */
+    public void resolveCoordinatesByGeocodeIfNeeded(CreateAndAssignOrderBody body) {
+        String geocodeCity = CITY_CODE_TO_GEOCODE_CITY.get(body.getCityCode());
+        fillPlaceByGeocodeIfNeeded(body.getOrigin(), geocodeCity, "起点");
+        fillPlaceByGeocodeIfNeeded(body.getDest(), geocodeCity, "终点");
+    }
+
+    private void fillPlaceByGeocodeIfNeeded(com.sx.passengerapi.model.order.Place place, String geocodeCity, String label) {
+        if (place == null) {
+            throw new BizErrorException(400, label + "不能为空");
+        }
+        if (place.getLat() != null && place.getLng() != null) {
+            return;
+        }
+        String address = geocodeAddressLine(place);
+        if (!StringUtils.hasText(address)) {
+            throw new BizErrorException(400, label + "请提供 address 或 name 以供地理编码，或直接传 lat/lng");
+        }
+        GeocodeDemoResponse geo = geocodeOrThrow(address, geocodeCity, label);
+        place.setLng(geo.getLng());
+        place.setLat(geo.getLat());
+    }
+
+    private static String geocodeAddressLine(com.sx.passengerapi.model.order.Place place) {
+        if (StringUtils.hasText(place.getAddress())) {
+            return place.getAddress().trim();
+        }
+        if (StringUtils.hasText(place.getName())) {
+            return place.getName().trim();
+        }
+        return "";
+    }
+
+    private GeocodeDemoResponse geocodeOrThrow(String address, String city, String label) {
+        var resp = mapClient.geocode(address, StringUtils.hasText(city) ? city : null);
+        if (resp == null) {
+            throw new BizErrorException(502, "地图地理编码响应为空");
+        }
+        if (resp.getCode() == null || resp.getCode() != 200) {
+            throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(),
+                    label + "地理编码失败: " + resp.getMsg());
+        }
+        GeocodeDemoResponse data = resp.getData();
+        if (data == null || data.getLng() == null || data.getLat() == null) {
+            throw new BizErrorException(502, label + "地理编码未返回坐标");
+        }
+        return data;
+    }
+
+    /**
+     * 调用地图服务驾车路径规划（里程/时长）。
      *
-     * <p>调用：{@code map-service POST /api/v1/map/route}</p>
-     *
-     * <p>当前：map-service 为 stub，会返回固定假数据；后续接入第三方地图后这里无需改调用方。</p>
+     * <p>调用：{@code map-service POST /api/v1/map/demo/amap-driving}</p>
      */
     public RouteResponse route(CreateAndAssignOrderBody body) {
         RouteRequest req = new RouteRequest();
         req.setOrigin(toPoint(body.getOrigin()));
         req.setDest(toPoint(body.getDest()));
 
-        var resp = mapClient.route(req);
+        var resp = mapClient.drivingRoute(req);
         if (resp == null) {
             throw new BizErrorException(502, "地图服务响应为空");
         }
@@ -174,13 +232,14 @@ public class PassengerOrderService {
     /**
      * 对外“一步 createAndAssign”的同步编排实现（当前版本）。
      *
-     * <p>同步链路（便于联调）：route → estimate → order.create → nearestDriver → order.assign。</p>
+     * <p>同步链路（便于联调）：地理编码补坐标（如需）→ route → estimate → order.create → nearestDriver → order.assign。</p>
      *
      * <p>后续推荐演进为“对内两段式”：
      * 先落库创建订单 + 写 outbox/event，再由调度器异步执行找司机与指派，避免分布式事务与长耗时链路。</p>
      */
     public CreateAndAssignOrderResult createAndAssign(CreateAndAssignOrderBody body) {
-        RouteResponse route = route(body);//路线预估
+        resolveCoordinatesByGeocodeIfNeeded(body);
+        RouteResponse route = route(body);//路线预估（高德驾车）
         EstimateFareResult estimate = estimate(body, route);//费用预估
         CreateOrderResult created = createOrder(body, estimate);//创建订单
         String orderNo = created == null ? null : created.getOrderNo();

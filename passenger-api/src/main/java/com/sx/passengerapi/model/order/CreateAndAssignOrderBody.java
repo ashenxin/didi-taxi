@@ -4,25 +4,29 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
+/**
+ * 下单请求体。
+ * <p>{@code passengerId} 由网关解析 JWT 后写入 {@code X-User-Id}，Controller 再写入本对象；请求体可不传，勿与 body 内字段混填。</p>
+ */
 public class CreateAndAssignOrderBody {
 
-    @NotNull(message = "passengerId不能为空")
+    /** 乘客 ID；服务端从 {@code X-User-Id} 注入，客户端无需传。 */
     private Long passengerId;
 
-    @NotBlank(message = "provinceCode不能为空")
+    @NotBlank(message = "地区信息不完整，请稍后重试")
     private String provinceCode;
 
-    @NotBlank(message = "cityCode不能为空")
+    @NotBlank(message = "请选择城市")
     private String cityCode;
 
-    @NotBlank(message = "productCode不能为空")
+    @NotBlank(message = "请选择车型或服务类型")
     private String productCode;
 
-    @NotNull(message = "origin不能为空")
+    @NotNull(message = "请填写上车点")
     @Valid
     private Place origin;
 
-    @NotNull(message = "dest不能为空")
+    @NotNull(message = "请填写下车点")
     @Valid
     private Place dest;
 

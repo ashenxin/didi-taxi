@@ -30,9 +30,12 @@ management:
   tracing:
     sampling:
       probability: 1.0
+    export:
+      zipkin:
+        # 默认关闭；未启动 Zipkin 时避免 Connection refused。亦可使用 profile `local`（见 application-local.yml）
+        enabled: false
   zipkin:
     tracing:
-      # 未启动 Zipkin 时会出现 Connection refused WARN；本地可加 profile `local` 关闭上报，见 application-local.yml
       endpoint: http://127.0.0.1:9411/api/v2/spans
 
 admin:
