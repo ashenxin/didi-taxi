@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 运力车辆分页查询（核心服务直连，管理端/聚合层可调用）。
- * <p>统一前缀：{@code /api/v1/cars}。</p>
+ * 统一前缀：{@code /api/v1/cars}。
  */
 @RestController
 @RequestMapping("/api/v1/cars")
@@ -27,7 +27,7 @@ public class CarController {
 
     /**
      * 车辆分页列表。
-     * <p>{@code GET /api/v1/cars?pageNo=&pageSize=&driverId=&carNo=}</p>
+     * {@code GET /api/v1/cars?pageNo=&pageSize=&driverId=&carNo=}
      */
     @GetMapping
     public ResponseVo<PageVo<Car>> page(@RequestParam(defaultValue = "1") Integer pageNo,

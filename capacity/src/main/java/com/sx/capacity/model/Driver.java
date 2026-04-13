@@ -11,8 +11,8 @@ import java.util.Date;
 
 /**
  * 司机档案实体。
- * <p>对应 MySQL 库 {@code capacity}、表 {@code driver}（列名 snake_case，由 MyBatis-Plus 驼峰映射）。</p>
- * <p>运力公司见 {@link Company}（字段 {@code companyId}）；车辆见 {@link Car}（其 {@code driverId} 指向本司机）。</p>
+ * 对应 MySQL 库 {@code capacity}、表 {@code driver}（列名 snake_case，由 MyBatis-Plus 驼峰映射）。
+ * 运力公司见 {@link Company}（字段 {@code companyId}）；车辆见 {@link Car}（其 {@code driverId} 指向本司机）。
  */
 @Getter
 @Setter

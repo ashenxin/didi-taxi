@@ -11,8 +11,8 @@ import java.util.Date;
 
 /**
  * 司机更换所属运力公司（换队）申请单。
- * <p>对应 MySQL 库 {@code capacity}、表 {@code driver_team_change_request}。</p>
- * <p>状态取值与 {@link com.sx.capacity.model.enums.DriverTeamChangeStatus} 一致（如 PENDING/APPROVED/REJECTED）。</p>
+ * 对应 MySQL 库 {@code capacity}、表 {@code driver_team_change_request}。
+ * 状态取值与 {@link com.sx.capacity.model.enums.DriverTeamChangeStatus} 一致（如 PENDING/APPROVED/REJECTED）。
  */
 @Getter
 @Setter

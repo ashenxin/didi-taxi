@@ -89,7 +89,7 @@ public class DriverTeamChangeService {
 
     /**
      * 分页查询申请列表；默认状态为待审核（PENDING）。
-     * <p>若传 {@code provinceCode}/{@code cityCode}，先筛出匹配城市的司机 id 再过滤申请（与手机号筛选组合时为同一套司机条件）。</p>
+     * 若传 {@code provinceCode}/{@code cityCode}，先筛出匹配城市的司机 id 再过滤申请（与手机号筛选组合时为同一套司机条件）。
      */
     public PageVo<DriverTeamChangeRequestVO> page(Integer pageNo,
                                                   Integer pageSize,

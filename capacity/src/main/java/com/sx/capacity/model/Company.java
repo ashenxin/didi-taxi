@@ -12,7 +12,7 @@ import java.util.Date;
 
 /**
  * 运力公司（承运主体）实体。
- * <p>对应 MySQL 库 {@code capacity}、表 {@code company}。</p>
+ * 对应 MySQL 库 {@code capacity}、表 {@code company}。
  */
 @Getter
 @Setter

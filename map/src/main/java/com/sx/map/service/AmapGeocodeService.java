@@ -19,7 +19,7 @@ import java.util.UUID;
 /**
  * 高德地理编码 / 逆地理编码：{@code /v3/geocode/geo}、{@code /v3/geocode/regeo}。
  *
- * <p>文档：<a href="https://lbs.amap.com/api/webservice/guide/api/georegeo">地理/逆地理编码</a>。</p>
+ * 文档：<a href="https://lbs.amap.com/api/webservice/guide/api/georegeo">地理/逆地理编码</a>。
  */
 @Service
 @Slf4j

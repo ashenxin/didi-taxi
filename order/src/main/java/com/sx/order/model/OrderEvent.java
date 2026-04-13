@@ -11,8 +11,8 @@ import java.time.LocalDateTime;
 
 /**
  * 订单状态变更与业务事件流水（审计/补偿用）。
- * <p>对应 MySQL 库 {@code order}、表 {@code order_event}。</p>
- * <p>与 {@link TripOrder} 通过 {@code order_id} / {@code order_no} 关联。</p>
+ * 对应 MySQL 库 {@code order}、表 {@code order_event}。
+ * 与 {@link TripOrder} 通过 {@code order_id} / {@code order_no} 关联。
  */
 @Getter
 @Setter

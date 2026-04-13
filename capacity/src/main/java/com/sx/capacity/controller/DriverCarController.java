@@ -33,8 +33,8 @@ public class DriverCarController {
 
     /**
      * 某司机绑定车辆分页。
-     * <p>{@code GET /api/v1/drivers/{driverId}/cars?pageNo=&pageSize=}</p>
-     * <p>司机不存在或已删除时返回空列表。</p>
+     * {@code GET /api/v1/drivers/{driverId}/cars?pageNo=&pageSize=}
+     * 司机不存在或已删除时返回空列表。
      */
     @GetMapping("/{driverId}/cars")
     public ResponseVo<PageVo<Car>> pageByDriver(@PathVariable Long driverId,

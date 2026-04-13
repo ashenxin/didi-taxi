@@ -22,7 +22,7 @@ import java.util.Date;
 
 /**
  * 运力服务直连：司机换队申请列表、详情、审核（与 {@code admin-api} BFF 路径不同，功能对等）。
- * <p>统一前缀：{@code /api/v1/admin/driver-team-change-requests}。</p>
+ * 统一前缀：{@code /api/v1/admin/driver-team-change-requests}。
  */
 @Validated
 @RestController
@@ -37,8 +37,8 @@ public class AdminDriverTeamChangeController {
 
     /**
      * 换队申请分页列表（默认待审由服务层处理）。
-     * <p>{@code GET /api/v1/admin/driver-team-change-requests?...&provinceCode=&cityCode=}</p>
-     * <p>可选 {@code provinceCode}/{@code cityCode}：按司机档案城市缩小结果集，供 BFF 注入登录域；与其它筛选条件组合为 AND。</p>
+     * {@code GET /api/v1/admin/driver-team-change-requests?...&provinceCode=&cityCode=}
+     * 可选 {@code provinceCode}/{@code cityCode}：按司机档案城市缩小结果集，供 BFF 注入登录域；与其它筛选条件组合为 AND。
      */
     @GetMapping
     public ResponseVo<PageVo<DriverTeamChangeRequestVO>> page(
@@ -57,7 +57,7 @@ public class AdminDriverTeamChangeController {
 
     /**
      * 换队申请详情。
-     * <p>{@code GET /api/v1/admin/driver-team-change-requests/{id}}</p>
+     * {@code GET /api/v1/admin/driver-team-change-requests/{id}}
      */
     @GetMapping("/{id}")
     public ResponseVo<DriverTeamChangeRequestVO> detail(@PathVariable Long id) {
@@ -66,7 +66,7 @@ public class AdminDriverTeamChangeController {
 
     /**
      * 审核通过。
-     * <p>{@code POST /api/v1/admin/driver-team-change-requests/{id}/approve?reviewedBy=}</p>
+     * {@code POST /api/v1/admin/driver-team-change-requests/{id}/approve?reviewedBy=}
      *
      * @param reviewedBy 审核人标识（鉴权未接时可传占位，如 admin 登录名）
      */
@@ -81,7 +81,7 @@ public class AdminDriverTeamChangeController {
 
     /**
      * 审核拒绝（原因必填）。
-     * <p>{@code POST /api/v1/admin/driver-team-change-requests/{id}/reject?reviewedBy=}</p>
+     * {@code POST /api/v1/admin/driver-team-change-requests/{id}/reject?reviewedBy=}
      */
     @PostMapping("/{id}/reject")
     public ResponseVo<Void> reject(@PathVariable Long id,

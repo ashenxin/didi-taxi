@@ -52,6 +52,12 @@ public class GlobalExceptionHandler {
         return ResultUtil.requestError(errMsg);
     }
 
+    @ExceptionHandler(OrderConflictException.class)
+    public ResponseVo<?> orderConflictExceptionHandler(OrderConflictException e) {
+        log.warn("OrderConflict: {}", e.getMessage());
+        return ResultUtil.error(ExceptionCode.CONFLICT.getValue(), e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseVo<?> exceptionHandler(Exception e) {
         log.error("Unhandled exception type={} msg={}", e.getClass().getName(), e.getMessage(), e);

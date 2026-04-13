@@ -12,8 +12,8 @@ import java.time.LocalDateTime;
 
 /**
  * 网约车订单主表。
- * <p>对应 MySQL 库 {@code order}、表 {@code trip_order}。</p>
- * <p>状态机：{@code 0}CREATED → {@code 1}ASSIGNED →（可选 {@code 7}PENDING_DRIVER_CONFIRM）→ {@code 2}ACCEPTED → {@code 3}ARRIVED → {@code 4}STARTED → {@code 5}FINISHED；{@code 6}CANCELLED。</p>
+ * 对应 MySQL 库 {@code order}、表 {@code trip_order}。
+ * 状态机：{@code 0}CREATED → {@code 1}ASSIGNED →（可选 {@code 7}PENDING_DRIVER_CONFIRM）→ {@code 2}ACCEPTED → {@code 3}ARRIVED → {@code 4}STARTED → {@code 5}FINISHED；{@code 6}CANCELLED。
  */
 @Getter
 @Setter

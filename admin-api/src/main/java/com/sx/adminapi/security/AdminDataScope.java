@@ -8,7 +8,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 /**
  * 管理后台数据域：非 SUPER 按账号省/市裁剪查询与详情，防止纵向越权。
- * <p>接入方：订单、计价规则、运力（公司/司机/车辆）、换队申请等 BFF Service；403/404 语义见《后台管理系统_权限与接口文档》§4.7。</p>
+ * 接入方：订单、计价规则、运力（公司/司机/车辆）、换队申请等 BFF Service；403/404 语义见《后台管理系统_权限与接口文档》§4.7。
  */
 public final class AdminDataScope {
 

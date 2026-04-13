@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 司机端认证（对外），经 gateway 访问。
- * <p>统一前缀：{@code /driver/api/v1/auth}</p>
+ * 统一前缀：{@code /driver/api/v1/auth}
  */
 @RestController
 @RequestMapping("/driver/api/v1/auth")
@@ -34,7 +34,7 @@ public class DriverAuthController {
 
     /**
      * 发送短信验证码（注册/登录前）。
-     * <p>{@code POST /driver/api/v1/auth/sms/send}</p>
+     * {@code POST /driver/api/v1/auth/sms/send}
      */
     @PostMapping("/sms/send")
     public ResponseVo<Void> sendSms(@Valid @RequestBody SmsSendRequest body) {
@@ -44,7 +44,7 @@ public class DriverAuthController {
 
     /**
      * 短信验证码注册并登录。
-     * <p>{@code POST /driver/api/v1/auth/register-sms}</p>
+     * {@code POST /driver/api/v1/auth/register-sms}
      */
     @PostMapping("/register-sms")
     public ResponseVo<DriverLoginResponse> registerSms(@Valid @RequestBody SmsRegisterRequest body) {
@@ -53,7 +53,7 @@ public class DriverAuthController {
 
     /**
      * 短信验证后设置密码完成注册并登录。
-     * <p>{@code POST /driver/api/v1/auth/register-password}</p>
+     * {@code POST /driver/api/v1/auth/register-password}
      */
     @PostMapping("/register-password")
     public ResponseVo<DriverLoginResponse> registerPassword(@Valid @RequestBody PasswordRegisterRequest body) {
@@ -62,7 +62,7 @@ public class DriverAuthController {
 
     /**
      * 短信验证码登录。
-     * <p>{@code POST /driver/api/v1/auth/login-sms}</p>
+     * {@code POST /driver/api/v1/auth/login-sms}
      */
     @PostMapping("/login-sms")
     public ResponseVo<DriverLoginResponse> loginSms(@Valid @RequestBody SmsLoginRequest body) {
@@ -71,7 +71,7 @@ public class DriverAuthController {
 
     /**
      * 手机号密码登录。
-     * <p>{@code POST /driver/api/v1/auth/login-password}</p>
+     * {@code POST /driver/api/v1/auth/login-password}
      */
     @PostMapping("/login-password")
     public ResponseVo<DriverLoginResponse> loginPassword(@Valid @RequestBody PasswordLoginRequest body) {
@@ -80,7 +80,7 @@ public class DriverAuthController {
 
     /**
      * 登出：递增服务端 token 版本，使 JWT 失效。
-     * <p>{@code POST /driver/api/v1/auth/logout}</p>
+     * {@code POST /driver/api/v1/auth/logout}
      */
     @PostMapping("/logout")
     public ResponseVo<Void> logout(HttpServletRequest request) {
@@ -94,7 +94,7 @@ public class DriverAuthController {
 
     /**
      * 用 API token（audit=1）换取 WebSocket 握手 token（audit=2），{@code tv} 不变。
-     * <p>{@code POST /driver/api/v1/auth/ws-token}</p>
+     * {@code POST /driver/api/v1/auth/ws-token}
      */
     @PostMapping("/ws-token")
     public ResponseVo<DriverLoginResponse> wsToken(HttpServletRequest request) {

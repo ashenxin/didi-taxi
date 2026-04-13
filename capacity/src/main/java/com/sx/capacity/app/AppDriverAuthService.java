@@ -28,7 +28,13 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * 司机 App 侧：短信验证码发送、注册、登录（Redis 存 OTP + 频控 + 失败次数）。
- * <p>注意：本服务只处理“能否登录/注册”。“能否接单”由 audit_status + can_accept_order 等在业务接口处拦截。</p>
+ * 注意：本服务只处理“能否登录/注册”。“能否接单”由 audit_status + can_accept_order 等在业务接口处拦截。
+ * Redis key 前缀概览：
+ * <ul>
+ *   <li>{@code driver:sms:gap:} / {@code driver:sms:daily:}：短信频控（见各常量说明）</li>
+ *   <li>{@code driver:otp:}：短信验证码</li>
+ *   <li>{@code driver:login:}：登录失败与当日封禁</li>
+ * </ul>
  */
 @Service
 public class AppDriverAuthService {
@@ -39,14 +45,12 @@ public class AppDriverAuthService {
     private static final ZoneId CN_ZONE = ZoneId.of("Asia/Shanghai");
 
     /**
-     * Redis key 前缀约定（司机端认证）。
-     * <ul>
-     *   <li><b>{@code driver:sms:*}</b>：短信发送频控与日计数</li>
-     *   <li><b>{@code driver:otp:*}</b>：短信验证码（一次性口令）</li>
-     *   <li><b>{@code driver:login:*}</b>：登录失败次数统计与当日禁用标记（密码+验证码合并）</li>
-     * </ul>
+     * 短信「最短发送间隔」锁的 Redis 键前缀；完整键为本前缀与手机号拼接。
+     * 含义：同一手机号两次调用发码接口之间，至少间隔 {@link DriverAuthProperties#getMinIntervalSeconds()} 秒（默认 60）。
+     * 实现上用 {@code SET key "1" NX EX minIntervalSeconds}：仅当键不存在时才设置成功并开启倒计时；键仍存在表示处于冷却期，返回 429「发送过于频繁」。
+     * 与 {@code driver:sms:daily:*} 的配合顺序：先过间隔锁，再过自然日条数上限；若因日上限拒绝，会删除本间隔键，避免用户同时被「过于频繁」与「今日已达上限」两种提示叠加困扰。
      */
-    private static final String KEY_SMS_GAP_PREFIX = "driver:sms:gap:"; // 同手机号发送间隔锁（phone）
+    private static final String KEY_SMS_GAP_PREFIX = "driver:sms:gap:";
     private static final String KEY_SMS_DAILY_PREFIX = "driver:sms:daily:"; // 同手机号自然日发送次数（phone:yyyy-MM-dd）
     private static final String KEY_OTP_PREFIX = "driver:otp:"; // OTP 验证码（phone）
     private static final String KEY_LOGIN_FAIL_PREFIX = "driver:login:fail:"; // 登录失败次数（phone:yyyy-MM-dd）
@@ -55,7 +59,7 @@ public class AppDriverAuthService {
     /**
      * 原子校验并消费 OTP：避免并发下 “先 get 后 delete” 导致的重复消费。
      *
-     * <p>返回值约定：1=校验通过并已删除；0=验证码不匹配；-1=验证码不存在/已过期。</p>
+     * 返回值约定：1=校验通过并已删除；0=验证码不匹配；-1=验证码不存在/已过期。
      */
     private static final DefaultRedisScript<Long> OTP_VERIFY_AND_DELETE_SCRIPT = new DefaultRedisScript<>(
             """
@@ -97,6 +101,7 @@ public class AppDriverAuthService {
             return ResultUtil.error(400, "手机号不能为空");
         }
 
+        // 最短发送间隔：SET NX + TTL，见 KEY_SMS_GAP_PREFIX JavaDoc
         String gapKey = KEY_SMS_GAP_PREFIX + p;
         Boolean firstGap = redis.opsForValue().setIfAbsent(gapKey, "1", Duration.ofSeconds(props.getMinIntervalSeconds()));
         if (Boolean.FALSE.equals(firstGap)) {

@@ -1,5 +1,6 @@
 package com.sx.order.service;
 
+import com.sx.order.common.exception.OrderConflictException;
 import com.sx.order.common.util.OrderNoUtil;
 import com.sx.order.dao.OrderEventEntityMapper;
 import com.sx.order.dao.TripOrderEntityMapper;
@@ -14,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -37,6 +40,8 @@ public class TripOrderWriteService {
     private static final int OPERATOR_DRIVER = 2;
     private static final int OPERATOR_SYSTEM = 0;
     private static final int CANCEL_BY_PASSENGER = 1;
+    /** 与表注释一致：系统取消（如司机已接其他单） */
+    private static final int CANCEL_BY_SYSTEM = 3;
 
     private final TripOrderEntityMapper tripOrderEntityMapper;
     private final OrderEventEntityMapper orderEventEntityMapper;
@@ -48,9 +53,12 @@ public class TripOrderWriteService {
 
     /**
      * 创建订单：落库 trip_order(status=CREATED) + 写 order_event(ORDER_CREATED)。
+     * 同一乘客若存在未删除且状态非「已完单 / 已取消」的订单，则拒绝创建（{@link OrderConflictException}）。
      */
     @Transactional
     public String create(CreateOrderBody body) {
+        assertNoActiveOrderForPassenger(body.getPassengerId());
+
         LocalDateTime now = LocalDateTime.now();
         String orderNo = OrderNoUtil.nextOrderNo();
 
@@ -96,7 +104,24 @@ public class TripOrderWriteService {
     }
 
     /**
+     * 进行中：除 {@link #STATUS_FINISHED}、{@link #STATUS_CANCELLED} 外均视为进行中（含 CREATED、派单、行程中等）。
+     */
+    private void assertNoActiveOrderForPassenger(Long passengerId) {
+        if (passengerId == null) {
+            throw new IllegalArgumentException("passengerId不能为空");
+        }
+        Long cnt = tripOrderEntityMapper.selectCount(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getPassengerId, passengerId)
+                .eq(TripOrder::getIsDeleted, 0)
+                .notIn(TripOrder::getStatus, STATUS_FINISHED, STATUS_CANCELLED));
+        if (cnt != null && cnt > 0) {
+            throw new OrderConflictException("您已有进行中的订单，请先完成或取消后再下单");
+        }
+    }
+
+    /**
      * 指派司机：CAS 更新 CREATED -> ASSIGNED + 写事件 ORDER_ASSIGNED。
+     * 若司机已有行程中订单（{@link #STATUS_ACCEPTED}～{@link #STATUS_STARTED}），则拒绝再派单。
      */
     @Transactional(propagation = Propagation.REQUIRED)
     public void assign(String orderNo, AssignOrderBody body) {
@@ -114,6 +139,8 @@ public class TripOrderWriteService {
         if (!Objects.equals(existing.getStatus(), STATUS_CREATED)) {
             throw new IllegalArgumentException("订单当前状态不允许指派");
         }
+
+        assertDriverNotInServiceTrip(body.getDriverId());
 
         LocalDateTime now = LocalDateTime.now();
         int updated = tripOrderEntityMapper.update(null,
@@ -154,6 +181,22 @@ public class TripOrderWriteService {
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
         log.info("order assigned orderNo={} driverId={}", orderNo, body.getDriverId());
+    }
+
+    /**
+     * 司机是否处于「服务中」：已接单～行程中（含到达），此期间不可再被派新单。
+     */
+    private void assertDriverNotInServiceTrip(Long driverId) {
+        if (driverId == null) {
+            throw new IllegalArgumentException("driverId不能为空");
+        }
+        Long cnt = tripOrderEntityMapper.selectCount(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getDriverId, driverId)
+                .eq(TripOrder::getIsDeleted, 0)
+                .in(TripOrder::getStatus, STATUS_ACCEPTED, STATUS_ARRIVED, STATUS_STARTED));
+        if (cnt != null && cnt > 0) {
+            throw new OrderConflictException("司机正在服务中，无法指派新订单");
+        }
     }
 
     /**
@@ -225,6 +268,7 @@ public class TripOrderWriteService {
 
     /**
      * 指派给司机且仍为「待确认」的订单（派单轮询列表）：{@code ASSIGNED} 或 {@code PENDING_DRIVER_CONFIRM}。
+     * 已完单（{@link #STATUS_FINISHED}）、已取消（{@link #STATUS_CANCELLED}）及行程中状态均不在此列表。
      */
     public List<TripOrder> listAssignedToDriver(Long driverId) {
         if (driverId == null) {
@@ -426,7 +470,65 @@ public class TripOrderWriteService {
         }
 
         insertDriverEvent(orderNo, driverId, "ORDER_ACCEPTED", fromStatus, STATUS_ACCEPTED, now);
+        cancelOtherPendingAssignsForDriver(driverId, orderNo, now);
         log.info("order accepted orderNo={} driverId={}", orderNo, driverId);
+    }
+
+    /**
+     * 司机确认接其中一单后，将其余 {@link #STATUS_ASSIGNED} / {@link #STATUS_PENDING_DRIVER_CONFIRM} 单系统取消（多笔待确认互斥）。
+     */
+    private void cancelOtherPendingAssignsForDriver(Long driverId, String acceptedOrderNo, LocalDateTime now) {
+        List<TripOrder> others = tripOrderEntityMapper.selectList(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getDriverId, driverId)
+                .eq(TripOrder::getIsDeleted, 0)
+                .ne(TripOrder::getOrderNo, acceptedOrderNo)
+                .in(TripOrder::getStatus, STATUS_ASSIGNED, STATUS_PENDING_DRIVER_CONFIRM));
+        if (others == null || others.isEmpty()) {
+            return;
+        }
+        for (TripOrder o : others) {
+            cancelOrderSystem(o.getOrderNo(), o.getStatus(), now, "司机已接其他订单");
+        }
+    }
+
+    private void cancelOrderSystem(String orderNo, Integer fromStatus, LocalDateTime now, String reason) {
+        int updated = tripOrderEntityMapper.update(null,
+                Wrappers.<TripOrder>lambdaUpdate()
+                        .set(TripOrder::getStatus, STATUS_CANCELLED)
+                        .set(TripOrder::getCancelBy, CANCEL_BY_SYSTEM)
+                        .set(TripOrder::getCancelReason, reason)
+                        .set(TripOrder::getCancelledAt, now)
+                        .set(TripOrder::getUpdatedAt, now)
+                        .set(TripOrder::getOfferExpiresAt, null)
+                        .eq(TripOrder::getOrderNo, orderNo)
+                        .eq(TripOrder::getIsDeleted, 0)
+                        .in(TripOrder::getStatus, STATUS_ASSIGNED, STATUS_PENDING_DRIVER_CONFIRM));
+        if (updated != 1) {
+            log.warn("system cancel skipped orderNo={} (concurrent state change?)", orderNo);
+            return;
+        }
+        TripOrder after = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getOrderNo, orderNo)
+                .eq(TripOrder::getIsDeleted, 0)
+                .last("LIMIT 1"));
+        if (after == null) {
+            return;
+        }
+        OrderEvent event = new OrderEvent()
+                .setOrderId(after.getId())
+                .setOrderNo(orderNo)
+                .setEventType("ORDER_CANCELLED")
+                .setFromStatus(fromStatus)
+                .setToStatus(STATUS_CANCELLED)
+                .setOperatorType(OPERATOR_SYSTEM)
+                .setOperatorId(null)
+                .setReasonCode("DRIVER_ACCEPTED_OTHER")
+                .setReasonDesc(reason)
+                .setEventPayload("{}")
+                .setOccurredAt(now)
+                .setCreatedAt(now);
+        orderEventEntityMapper.insert(event);
+        log.info("order cancelled by system orderNo={} reason={}", orderNo, reason);
     }
 
     /**

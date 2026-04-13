@@ -15,8 +15,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 管理后台运力视图 BFF：公司 / 司机 / 车辆分页（聚合 capacity-service）。
- * <p>统一前缀：{@code /admin/api/v1/capacity}。</p>
- * <p>非 SUPER 账号的省、市筛选由 {@link com.sx.adminapi.security.AdminDataScope} 与请求参数合并；越界 403，跨域查看 404。</p>
+ * 统一前缀：{@code /admin/api/v1/capacity}。
+ * 非 SUPER 账号的省、市筛选由 {@link com.sx.adminapi.security.AdminDataScope} 与请求参数合并；越界 403，跨域查看 404。
  */
 @RestController
 @RequestMapping("/admin/api/v1/capacity")
@@ -30,7 +30,7 @@ public class AdminCapacityController {
 
     /**
      * 运力公司分页；{@code provinceCode}/{@code cityCode} 与当前登录用户数据域合并后下发 capacity。
-     * <p>{@code GET /admin/api/v1/capacity/companies?pageNo=&pageSize=&provinceCode=&cityCode=&companyNo=&companyName=}</p>
+     * {@code GET /admin/api/v1/capacity/companies?pageNo=&pageSize=&provinceCode=&cityCode=&companyNo=&companyName=}
      */
     @GetMapping("/companies")
     public ResponseVo<AdminPageVO<AdminCompanyVO>> companyPage(@RequestParam(defaultValue = "1") Integer pageNo,
@@ -44,7 +44,7 @@ public class AdminCapacityController {
 
     /**
      * 司机分页；可选 {@code provinceCode}/{@code cityCode} 与登录域合并（省管/市管不可扩大查询范围）。
-     * <p>{@code GET /admin/api/v1/capacity/drivers?pageNo=&pageSize=&companyId=&name=&phone=&online=&provinceCode=&cityCode=}</p>
+     * {@code GET /admin/api/v1/capacity/drivers?pageNo=&pageSize=&companyId=&name=&phone=&online=&provinceCode=&cityCode=}
      */
     @GetMapping("/drivers")
     public ResponseVo<AdminPageVO<AdminDriverVO>> driverPage(@RequestParam(defaultValue = "1") Integer pageNo,
@@ -61,7 +61,7 @@ public class AdminCapacityController {
 
     /**
      * 某司机名下车辆分页；BFF 先校验该司机 {@code cityCode} 落在当前用户数据域内，再调 capacity。
-     * <p>{@code GET /admin/api/v1/capacity/drivers/{driverId}/cars?pageNo=&pageSize=}</p>
+     * {@code GET /admin/api/v1/capacity/drivers/{driverId}/cars?pageNo=&pageSize=}
      */
     @GetMapping("/drivers/{driverId}/cars")
     public ResponseVo<AdminPageVO<AdminCarVO>> carsByDriver(@PathVariable Long driverId,

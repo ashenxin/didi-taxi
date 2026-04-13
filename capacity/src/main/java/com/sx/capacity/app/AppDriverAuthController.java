@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 司机端认证（供 driver-api Feign 调用）。
- * <p>前缀 {@code /api/v1/driver/app/auth}，不经网关暴露给浏览器时由 BFF 聚合。</p>
+ * 前缀 {@code /api/v1/driver/app/auth}，不经网关暴露给浏览器时由 BFF 聚合。
  */
 @RestController
 @RequestMapping("/api/v1/driver/app/auth")
@@ -29,7 +29,7 @@ public class AppDriverAuthController {
 
     /**
      * 发送短信验证码（对内）。
-     * <p>{@code POST /api/v1/driver/app/auth/sms/send}</p>
+     * {@code POST /api/v1/driver/app/auth/sms/send}
      */
     @PostMapping("/sms/send")
     public ResponseVo<Void> sendSms(@Valid @RequestBody AppSmsSendRequest body) {
@@ -38,7 +38,7 @@ public class AppDriverAuthController {
 
     /**
      * 短信注册（对内）。
-     * <p>{@code POST /api/v1/driver/app/auth/register-sms}</p>
+     * {@code POST /api/v1/driver/app/auth/register-sms}
      */
     @PostMapping("/register-sms")
     public ResponseVo<AppAuthDriverBrief> registerSms(@Valid @RequestBody AppSmsRegisterRequest body) {
@@ -47,7 +47,7 @@ public class AppDriverAuthController {
 
     /**
      * 短信验证后设密注册（对内）。
-     * <p>{@code POST /api/v1/driver/app/auth/register-password}</p>
+     * {@code POST /api/v1/driver/app/auth/register-password}
      */
     @PostMapping("/register-password")
     public ResponseVo<AppAuthDriverBrief> registerPassword(@Valid @RequestBody AppPasswordRegisterRequest body) {
@@ -56,7 +56,7 @@ public class AppDriverAuthController {
 
     /**
      * 短信登录（对内）。
-     * <p>{@code POST /api/v1/driver/app/auth/login-sms}</p>
+     * {@code POST /api/v1/driver/app/auth/login-sms}
      */
     @PostMapping("/login-sms")
     public ResponseVo<AppAuthDriverBrief> loginSms(@Valid @RequestBody AppSmsLoginRequest body) {
@@ -65,7 +65,7 @@ public class AppDriverAuthController {
 
     /**
      * 密码登录（对内）。
-     * <p>{@code POST /api/v1/driver/app/auth/login-password}</p>
+     * {@code POST /api/v1/driver/app/auth/login-password}
      */
     @PostMapping("/login-password")
     public ResponseVo<AppAuthDriverBrief> loginPassword(@Valid @RequestBody AppPasswordLoginRequest body) {

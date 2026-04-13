@@ -65,7 +65,7 @@ public class PassengerOrderService {
 
     /**
      * 起终点缺经纬度时，调 map 地理编码补全；已带齐 lat/lng 则跳过（兼容地图 SDK 选点）。
-     * <p>顺序：geocode 起点 → geocode 终点 → 后续 {@link #route} 驾车规划。</p>
+     * 顺序：geocode 起点 → geocode 终点 → 后续 {@link #route} 驾车规划。
      */
     public void resolveCoordinatesByGeocodeIfNeeded(CreateAndAssignOrderBody body) {
         String geocodeCity = CITY_CODE_TO_GEOCODE_CITY.get(body.getCityCode());
@@ -118,7 +118,7 @@ public class PassengerOrderService {
     /**
      * 调用地图服务驾车路径规划（里程/时长）。
      *
-     * <p>调用：{@code map-service POST /api/v1/map/demo/amap-driving}</p>
+     * 调用：{@code map-service POST /api/v1/map/demo/amap-driving}
      */
     public RouteResponse route(CreateAndAssignOrderBody body) {
         RouteRequest req = new RouteRequest();
@@ -138,9 +138,9 @@ public class PassengerOrderService {
     /**
      * 调用计费服务进行费用预估。
      *
-     * <p>调用：{@code calculate-service POST /api/v1/calculate/estimate}</p>
+     * 调用：{@code calculate-service POST /api/v1/calculate/estimate}
      *
-     * <p>入参依赖 route 的 distance/duration；MVP 先按 fare_rule 规则计算。</p>
+     * 入参依赖 route 的 distance/duration；MVP 先按 fare_rule 规则计算。
      */
     public EstimateFareResult estimate(CreateAndAssignOrderBody body, RouteResponse route) {
         EstimateFareBody req = new EstimateFareBody();
@@ -163,10 +163,10 @@ public class PassengerOrderService {
     /**
      * 创建订单主表（status=CREATED）并写入创建事件。
      *
-     * <p>调用：{@code order-service POST /api/v1/orders}</p>
+     * 调用：{@code order-service POST /api/v1/orders}
      *
-     * <p>当前实现会把 estimate 的 {@code estimatedAmount/ruleId} 透传给 order-service，
-     * 便于订单侧留痕与后续对账。</p>
+     * 当前实现会把 estimate 的 {@code estimatedAmount/ruleId} 透传给 order-service，
+     * 便于订单侧留痕与后续对账。
      */
     public CreateOrderResult createOrder(CreateAndAssignOrderBody body, EstimateFareResult estimate) {
         CreateOrderBody req = new CreateOrderBody();
@@ -185,7 +185,11 @@ public class PassengerOrderService {
             throw new BizErrorException(502, "订单服务响应为空");
         }
         if (resp.getCode() == null || resp.getCode() != 200) {
-            throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(), "订单服务调用失败: " + resp.getMsg());
+            int code = resp.getCode() == null ? 502 : resp.getCode();
+            String msg = (resp.getMsg() != null && !resp.getMsg().isBlank())
+                    ? resp.getMsg()
+                    : "订单创建失败";
+            throw new BizErrorException(code, msg);
         }
         return resp.getData();
     }
@@ -193,9 +197,9 @@ public class PassengerOrderService {
     /**
      * 查询派单候选（最近司机）。
      *
-     * <p>调用：{@code capacity-service GET /api/v1/dispatch/nearest-driver}</p>
+     * 调用：{@code capacity-service GET /api/v1/dispatch/nearest-driver}
      *
-     * <p>MVP 约定：查不到司机时返回 {@code null}（capacity 用 404 表示“无可用司机”）。</p>
+     * MVP 约定：查不到司机时返回 {@code null}（capacity 用 404 表示“无可用司机”）。
      */
     public NearestDriverResult searchNearestDriver(CreateAndAssignOrderBody body) {
         var resp = capacityDispatchClient.nearestDriver(body.getCityCode(), body.getProductCode());
@@ -214,9 +218,9 @@ public class PassengerOrderService {
     /**
      * 指派司机到订单（CREATED -> ASSIGNED）。
      *
-     * <p>调用：{@code order-service POST /api/v1/orders/{orderNo}/assign}</p>
+     * 调用：{@code order-service POST /api/v1/orders/{orderNo}/assign}
      *
-     * <p>MVP：ETA 先用 route.duration 作为占位；后续接入 map.matrix 后再替换为“司机到上车点 ETA”。</p>
+     * MVP：ETA 先用 route.duration 作为占位；后续接入 map.matrix 后再替换为“司机到上车点 ETA”。
      */
     public void assignOrder(String orderNo, NearestDriverResult driver, Long etaSeconds) {
         if (driver == null) {
@@ -233,7 +237,9 @@ public class PassengerOrderService {
             throw new BizErrorException(502, "订单服务响应为空");
         }
         if (resp.getCode() == null || resp.getCode() != 200) {
-            throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(), "订单指派失败: " + resp.getMsg());
+            int code = resp.getCode() == null ? 502 : resp.getCode();
+            String msg = (resp.getMsg() != null && !resp.getMsg().isBlank()) ? resp.getMsg() : "订单指派失败";
+            throw new BizErrorException(code, msg);
         }
     }
 
@@ -256,10 +262,10 @@ public class PassengerOrderService {
     /**
      * 对外“一步 createAndAssign”的同步编排实现（当前版本）。
      *
-     * <p>同步链路（便于联调）：地理编码补坐标（如需）→ route → estimate → order.create → nearestDriver → order.assign。</p>
+     * 同步链路（便于联调）：地理编码补坐标（如需）→ route → estimate → order.create → nearestDriver → order.assign。
      *
-     * <p>后续推荐演进为“对内两段式”：
-     * 先落库创建订单 + 写 outbox/event，再由调度器异步执行找司机与指派，避免分布式事务与长耗时链路。</p>
+     * 后续推荐演进为“对内两段式”：
+     * 先落库创建订单 + 写 outbox/event，再由调度器异步执行找司机与指派，避免分布式事务与长耗时链路。
      */
     public CreateAndAssignOrderResult createAndAssign(CreateAndAssignOrderBody body) {
         resolveCoordinatesByGeocodeIfNeeded(body);//缺经纬度调map补齐

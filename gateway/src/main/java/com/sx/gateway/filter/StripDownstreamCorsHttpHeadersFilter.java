@@ -11,7 +11,7 @@ import java.util.List;
 /**
  * 去掉 BFF 返回的 CORS 响应头，避免与 {@code spring.cloud.gateway.globalcors} 叠成
  * {@code Access-Control-Allow-Origin: http://localhost:5173, *}（浏览器拒收）。
- * <p>设计上 CORS 仅由网关下发；下游若仍因旧部署 / 误配带了 {@code *}，在此剥离。</p>
+ * 设计上 CORS 仅由网关下发；下游若仍因旧部署 / 误配带了 {@code *}，在此剥离。
  */
 @Component
 @Order(0)

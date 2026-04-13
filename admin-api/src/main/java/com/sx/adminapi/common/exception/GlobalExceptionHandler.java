@@ -27,7 +27,7 @@ import static java.util.stream.Collectors.joining;
 /**
  * 全局异常捕获，返回统一json格式。
  *
- * <p>约定：{@link ResponseVo#getCode()} 与 HTTP 状态码一致（200/400/404/500/502/504 等），便于网关、监控与前端统一处理。</p>
+ * 约定：{@link ResponseVo#getCode()} 与 HTTP 状态码一致（200/400/404/500/502/504 等），便于网关、监控与前端统一处理。
  */
 @Validated
 @RestControllerAdvice

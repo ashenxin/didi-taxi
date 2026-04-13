@@ -8,11 +8,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 司机 token 版本：登录/登出时递增，JWT {@code tv} 须与当前值一致。
- * <p>无 Redis（如本地 test 排除自动配置）时退化为进程内 Map。</p>
+ * Redis 键为 {@link #KEY_PREFIX} 与 driverId 拼接，表示服务端认定的当前 token 版本；在不维护 JWT 黑名单的前提下，
+ * 登出、顶号登录都会使旧 token 立刻失效。
+ * 无 Redis（如本地 test 排除自动配置）时退化为进程内 Map。
  */
 @Component
 public class DriverTokenVersionStore {
 
+    /** Redis 键前缀；与 driverId 拼接为完整键（见类注释）。 */
     private static final String KEY_PREFIX = "driver:tv:";
 
     private final StringRedisTemplate redis;

@@ -16,7 +16,7 @@ import java.util.List;
 
 /**
  * 乘客主数据查询（passenger-service 核心接口）。
- * <p>统一前缀：{@code /api/v1/customers}。</p>
+ * 统一前缀：{@code /api/v1/customers}。
  */
 @RestController
 @RequestMapping("/api/v1/customers")
@@ -30,7 +30,7 @@ public class CustomerController {
 
     /**
      * 乘客列表（MVP 全量，无分页）。
-     * <p>{@code GET /api/v1/customers}</p>
+     * {@code GET /api/v1/customers}
      */
     @GetMapping
     public ResponseVo<List<Customer>> list() {
@@ -39,7 +39,7 @@ public class CustomerController {
 
     /**
      * 按乘客 ID 查询详情。
-     * <p>{@code GET /api/v1/customers/{id}}，不存在时 HTTP 404。</p>
+     * {@code GET /api/v1/customers/{id}}，不存在时 HTTP 404。
      */
     @GetMapping("/{id}")
     public ResponseEntity<ResponseVo<Customer>> getById(@PathVariable Long id) {
@@ -49,7 +49,7 @@ public class CustomerController {
 
     /**
      * 按手机号查询乘客（未逻辑删除）。
-     * <p>{@code GET /api/v1/customers/by-phone?phone=}，不存在时 HTTP 404。</p>
+     * {@code GET /api/v1/customers/by-phone?phone=}，不存在时 HTTP 404。
      */
     @GetMapping("/by-phone")
     public ResponseEntity<ResponseVo<Customer>> getByPhone(@RequestParam String phone) {

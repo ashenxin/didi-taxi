@@ -19,8 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 管理后台：计价规则 BFF，转发 {@code calculate-service} 的 fare_rule CRUD。
- * <p>统一前缀：{@code /admin/api/v1/pricing/fare-rules}。</p>
- * <p>列表筛选与写操作的省、市受 {@link com.sx.adminapi.security.AdminDataScope} 约束（越界 403，跨域读写 404）。</p>
+ * 统一前缀：{@code /admin/api/v1/pricing/fare-rules}。
+ * 列表筛选与写操作的省、市受 {@link com.sx.adminapi.security.AdminDataScope} 约束（越界 403，跨域读写 404）。
  */
 @RestController
 @RequestMapping("/admin/api/v1/pricing/fare-rules")
@@ -34,7 +34,7 @@ public class AdminPricingController {
 
     /**
      * 计价规则分页列表；{@code provinceCode}/{@code cityCode} 与登录域合并。
-     * <p>{@code GET /admin/api/v1/pricing/fare-rules?pageNo=&pageSize=&provinceCode=&cityCode=&productCode=&ruleName=&active=}</p>
+     * {@code GET /admin/api/v1/pricing/fare-rules?pageNo=&pageSize=&provinceCode=&cityCode=&productCode=&ruleName=&active=}
      */
     @GetMapping
     public ResponseVo<AdminPageVO<AdminFareRuleVO>> page(@RequestParam(defaultValue = "1") Integer pageNo,
@@ -49,7 +49,7 @@ public class AdminPricingController {
 
     /**
      * 计价规则详情；规则不在当前用户数据域内时 404。
-     * <p>{@code GET /admin/api/v1/pricing/fare-rules/{id}}</p>
+     * {@code GET /admin/api/v1/pricing/fare-rules/{id}}
      */
     @GetMapping("/{id}")
     public ResponseVo<AdminFareRuleVO> detail(@PathVariable Long id) {
@@ -58,7 +58,7 @@ public class AdminPricingController {
 
     /**
      * 新建计价规则；body 中省、市会被裁剪到当前账号可写范围。
-     * <p>{@code POST /admin/api/v1/pricing/fare-rules}</p>
+     * {@code POST /admin/api/v1/pricing/fare-rules}
      */
     @PostMapping
     public ResponseVo<Long> create(@Valid @RequestBody FareRuleUpsertBody body) {
@@ -67,7 +67,7 @@ public class AdminPricingController {
 
     /**
      * 更新计价规则；先校验原规则可读域，再对 body 做省、市锁定。
-     * <p>{@code PUT /admin/api/v1/pricing/fare-rules/{id}}</p>
+     * {@code PUT /admin/api/v1/pricing/fare-rules/{id}}
      */
     @PutMapping("/{id}")
     public ResponseVo<Void> update(@PathVariable Long id, @Valid @RequestBody FareRuleUpsertBody body) {
@@ -77,7 +77,7 @@ public class AdminPricingController {
 
     /**
      * 逻辑删除计价规则；仅允许删除当前数据域内规则。
-     * <p>{@code DELETE /admin/api/v1/pricing/fare-rules/{id}}</p>
+     * {@code DELETE /admin/api/v1/pricing/fare-rules/{id}}
      */
     @DeleteMapping("/{id}")
     public ResponseVo<Void> delete(@PathVariable Long id) {

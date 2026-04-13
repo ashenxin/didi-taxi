@@ -15,7 +15,7 @@ public class TestController {
 
     /**
      * 打日志并返回固定文案（链路/日志验证）。
-     * <p>{@code GET /test/sleuth}</p>
+     * {@code GET /test/sleuth}
      */
     @GetMapping("/test/sleuth")
     public ResponseVo<String> testSleuth() {

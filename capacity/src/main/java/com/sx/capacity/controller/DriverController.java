@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 运力侧司机相关接口：听单状态、接单资格校验、管理端分页查询。
- * <p>统一前缀：{@code /api/v1/drivers}；供 {@code driver-api}、管理端、派单模块等调用。</p>
+ * 统一前缀：{@code /api/v1/drivers}；供 {@code driver-api}、管理端、派单模块等调用。
  */
 @RestController
 @RequestMapping("/api/v1/drivers")
@@ -41,8 +41,8 @@ public class DriverController {
 
     /**
      * 司机上线/下线（听单开关）。
-     * <p>{@code POST /api/v1/drivers/{driverId}/online}，JSON：{@code online: boolean}。</p>
-     * <p>上线要求 {@code can_accept_order=1}；更新 {@code monitor_status}（0 未听单 / 1 听单中）。</p>
+     * {@code POST /api/v1/drivers/{driverId}/online}，JSON：{@code online: boolean}。
+     * 上线要求 {@code can_accept_order=1}；更新 {@code monitor_status}（0 未听单 / 1 听单中）。
      */
     @PostMapping("/{driverId}/online")
     public ResponseVo<Void> online(@PathVariable Long driverId, @RequestBody @Valid DriverOnlineBody body) {
@@ -56,7 +56,7 @@ public class DriverController {
 
     /**
      * 接单前资格校验：司机存在、{@code can_accept_order=1}、{@code monitor_status=1}（已上线听单）。
-     * <p>{@code GET /api/v1/drivers/{driverId}/accept-readiness}</p>
+     * {@code GET /api/v1/drivers/{driverId}/accept-readiness}
      */
     @GetMapping("/{driverId}/accept-readiness")
     public ResponseVo<Void> acceptReadiness(@PathVariable Long driverId) {
@@ -70,7 +70,7 @@ public class DriverController {
 
     /**
      * 司机主键详情（管理端 / BFF 在查车辆列表前拉取 {@code cityCode} 做数据域校验）。
-     * <p>{@code GET /api/v1/drivers/{driverId}}</p>
+     * {@code GET /api/v1/drivers/{driverId}}
      */
     @GetMapping("/{driverId}")
     public ResponseVo<Driver> getById(@PathVariable Long driverId) {
@@ -83,9 +83,9 @@ public class DriverController {
 
     /**
      * 分页查询司机列表。
-     * <p>{@code GET /api/v1/drivers?pageNo=&pageSize=&companyId=&name=&phone=&online=&provinceCode=&cityCode=}</p>
-     * <p>{@code cityCode}：精确匹配司机城市；仅传 {@code provinceCode} 且长度≥2 时按「省码前两位」匹配市码前缀（与 admin {@code AdminDataScope#cityBelongsToProvince} 一致）。</p>
-     * <p>{@code online}：{@code 1} 听单中或服务中（{@code monitor_status} 为 1/2），{@code 0} 未听单或空。</p>
+     * {@code GET /api/v1/drivers?pageNo=&pageSize=&companyId=&name=&phone=&online=&provinceCode=&cityCode=}
+     * {@code cityCode}：精确匹配司机城市；仅传 {@code provinceCode} 且长度≥2 时按「省码前两位」匹配市码前缀（与 admin {@code AdminDataScope#cityBelongsToProvince} 一致）。
+     * {@code online}：{@code 1} 听单中或服务中（{@code monitor_status} 为 1/2），{@code 0} 未听单或空。
      */
     @GetMapping
     public ResponseVo<PageVo<Driver>> page(@RequestParam(defaultValue = "1") Integer pageNo,

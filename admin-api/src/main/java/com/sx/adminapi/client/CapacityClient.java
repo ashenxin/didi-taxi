@@ -11,7 +11,7 @@ import java.util.Map;
 
 /**
  * 调用 {@code capacity-service} 的 Feign 客户端（运力公司 / 司机 / 车辆 / 换队审核）。
- * <p>管理端实际鉴权与省、市数据域在 {@code admin-api} BFF 中处理；本客户端仅转发参数与结果 JSON（{@code ResponseVo} 包装）。</p>
+ * 管理端实际鉴权与省、市数据域在 {@code admin-api} BFF 中处理；本客户端仅转发参数与结果 JSON（{@code ResponseVo} 包装）。
  */
 @FeignClient(name = "capacity", url = "${services.capacity.base-url:http://127.0.0.1:8090}")
 public interface CapacityClient {

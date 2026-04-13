@@ -25,7 +25,7 @@ import java.util.List;
 
 /**
  * 计价规则 CRUD（核心服务直连，管理端亦可经 {@code admin-api} 转发）。
- * <p>统一前缀：{@code /api/v1/fare-rules}。</p>
+ * 统一前缀：{@code /api/v1/fare-rules}。
  */
 @RestController
 @RequestMapping("/api/v1/fare-rules")
@@ -40,7 +40,7 @@ public class FareRuleController {
 
     /**
      * 计价规则分页列表。
-     * <p>{@code GET /api/v1/fare-rules?pageNo=&pageSize=&provinceCode=&cityCode=&productCode=&ruleName=&active=}</p>
+     * {@code GET /api/v1/fare-rules?pageNo=&pageSize=&provinceCode=&cityCode=&productCode=&ruleName=&active=}
      */
     @GetMapping
     public ResponseVo<PageVo<FareRule>> page(@RequestParam(defaultValue = "1") Integer pageNo,
@@ -84,7 +84,7 @@ public class FareRuleController {
 
     /**
      * 计价规则详情。
-     * <p>{@code GET /api/v1/fare-rules/{id}}</p>
+     * {@code GET /api/v1/fare-rules/{id}}
      */
     @GetMapping("/{id}")
     public ResponseVo<FareRule> detail(@PathVariable Long id) {
@@ -102,7 +102,7 @@ public class FareRuleController {
 
     /**
      * 新建计价规则。
-     * <p>{@code POST /api/v1/fare-rules}</p>
+     * {@code POST /api/v1/fare-rules}
      */
     @PostMapping
     public ResponseVo<Long> create(@Valid @RequestBody FareRuleUpsertBody body) {
@@ -132,7 +132,7 @@ public class FareRuleController {
 
     /**
      * 更新计价规则。
-     * <p>{@code PUT /api/v1/fare-rules/{id}}</p>
+     * {@code PUT /api/v1/fare-rules/{id}}
      */
     @PutMapping("/{id}")
     public ResponseVo<Void> update(@PathVariable Long id, @Valid @RequestBody FareRuleUpsertBody body) {
@@ -169,7 +169,7 @@ public class FareRuleController {
 
     /**
      * 逻辑删除计价规则。
-     * <p>{@code DELETE /api/v1/fare-rules/{id}}</p>
+     * {@code DELETE /api/v1/fare-rules/{id}}
      */
     @DeleteMapping("/{id}")
     public ResponseVo<Void> delete(@PathVariable Long id) {

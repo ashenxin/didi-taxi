@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 省/市管理员 CRUD（对内）；调用方身份通过 {@code X-Caller-User-Id} 传递，服务内再校验数据范围。
- * <p>统一前缀：{@code /api/v1/admin/sys/admin-users}。</p>
+ * 统一前缀：{@code /api/v1/admin/sys/admin-users}。
  */
 @RestController
 @RequestMapping("/api/v1/admin/sys/admin-users")
@@ -36,7 +36,7 @@ public class AdminSysStaffController {
 
     /**
      * 管理员账号分页。
-     * <p>{@code GET /api/v1/admin/sys/admin-users?pageNo=&pageSize=&provinceCode=&cityCode=&username=&roleCode=}</p>
+     * {@code GET /api/v1/admin/sys/admin-users?pageNo=&pageSize=&provinceCode=&cityCode=&username=&roleCode=}
      */
     @GetMapping
     public ResponseEntity<ResponseVo<AdminStaffPageResponse>> page(
@@ -54,7 +54,7 @@ public class AdminSysStaffController {
 
     /**
      * 管理员账号详情。
-     * <p>{@code GET /api/v1/admin/sys/admin-users/{id}}</p>
+     * {@code GET /api/v1/admin/sys/admin-users/{id}}
      */
     @GetMapping("/{id}")
     public ResponseEntity<ResponseVo<AdminStaffUserVO>> get(
@@ -66,7 +66,7 @@ public class AdminSysStaffController {
 
     /**
      * 新建管理员账号。
-     * <p>{@code POST /api/v1/admin/sys/admin-users}</p>
+     * {@code POST /api/v1/admin/sys/admin-users}
      */
     @PostMapping
     public ResponseEntity<ResponseVo<AdminStaffUserVO>> create(
@@ -78,7 +78,7 @@ public class AdminSysStaffController {
 
     /**
      * 更新管理员账号。
-     * <p>{@code PUT /api/v1/admin/sys/admin-users/{id}}</p>
+     * {@code PUT /api/v1/admin/sys/admin-users/{id}}
      */
     @PutMapping("/{id}")
     public ResponseEntity<ResponseVo<AdminStaffUserVO>> update(
@@ -91,7 +91,7 @@ public class AdminSysStaffController {
 
     /**
      * 软删管理员账号。
-     * <p>{@code DELETE /api/v1/admin/sys/admin-users/{id}}</p>
+     * {@code DELETE /api/v1/admin/sys/admin-users/{id}}
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<ResponseVo<Void>> delete(

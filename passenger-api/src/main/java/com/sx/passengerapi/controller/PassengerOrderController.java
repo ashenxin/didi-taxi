@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 乘客端聚合接口（BFF），供乘客 H5 / App 调用。
- * <p>统一前缀：{@code /app/api/v1}；编排 map 路线预估、calculate 计费、order 建单/指派、capacity 派单等。</p>
+ * 统一前缀：{@code /app/api/v1}；编排 map 路线预估、calculate 计费、order 建单/指派、capacity 派单等。
  */
 @RestController
 @RequestMapping("/app/api/v1")
@@ -34,7 +34,7 @@ public class PassengerOrderController {
 
     /**
      * 下单（同步链路）：路线预估 → 费用预估 → 创建订单 → 最近司机派单（若有）。
-     * <p>{@code POST /app/api/v1/orders}</p>
+     * {@code POST /app/api/v1/orders}
      */
     @PostMapping("/orders")
     public ResponseVo<CreateAndAssignOrderResult> createAndAssign(
@@ -50,7 +50,7 @@ public class PassengerOrderController {
 
     /**
      * 订单详情（轮询）：校验 {@code passengerId} 与订单乘客一致。
-     * <p>{@code GET /app/api/v1/orders/{orderNo}}，请求头 {@code X-User-Id}（经网关由 JWT 注入）。</p>
+     * {@code GET /app/api/v1/orders/{orderNo}}，请求头 {@code X-User-Id}（经网关由 JWT 注入）。
      */
     @GetMapping("/orders/{orderNo}")
     public ResponseVo<PassengerOrderDetailVO> orderDetail(
@@ -64,7 +64,7 @@ public class PassengerOrderController {
 
     /**
      * 乘客取消订单：透传 order-service。
-     * <p>{@code POST /app/api/v1/orders/{orderNo}/cancel}</p>
+     * {@code POST /app/api/v1/orders/{orderNo}/cancel}
      */
     @PostMapping("/orders/{orderNo}/cancel")
     public ResponseVo<Void> cancelOrder(@PathVariable String orderNo,

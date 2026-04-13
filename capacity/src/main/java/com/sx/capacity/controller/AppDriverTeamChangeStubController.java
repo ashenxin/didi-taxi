@@ -9,8 +9,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 司机端 App 换队申请占位接口（未实现）。
- * <p>正式接入后在此路径开放 {@code POST}，并调用 {@link DriverTeamChangeService#submit(Long, Long, String, String)}。</p>
- * <p>当前 {@code POST /api/v1/app/driver-team-change-requests} 返回业务码 501。</p>
+ * 正式接入后在此路径开放 {@code POST}，并调用 {@link DriverTeamChangeService#submit(Long, Long, String, String)}。
+ * 当前 {@code POST /api/v1/app/driver-team-change-requests} 返回业务码 501。
  */
 @RestController
 @RequestMapping("/api/v1/app/driver-team-change-requests")
@@ -18,7 +18,7 @@ public class AppDriverTeamChangeStubController {
 
     /**
      * 占位：换队申请未开放。
-     * <p>{@code POST /api/v1/app/driver-team-change-requests}</p>
+     * {@code POST /api/v1/app/driver-team-change-requests}
      */
     @PostMapping
     public ResponseVo<Void> submitNotImplementedYet() {

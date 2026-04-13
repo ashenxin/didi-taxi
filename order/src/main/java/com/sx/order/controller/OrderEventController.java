@@ -14,7 +14,7 @@ import java.util.List;
 
 /**
  * 订单事件流水查询（与 {@link TripOrderController} 同前缀，由 Spring 合并映射）。
- * <p>统一前缀：{@code /api/v1/orders}。</p>
+ * 统一前缀：{@code /api/v1/orders}。
  */
 @RestController
 @RequestMapping("/api/v1/orders")
@@ -28,7 +28,7 @@ public class OrderEventController {
 
     /**
      * 按订单号查询事件时间线（按发生时间升序）。
-     * <p>{@code GET /api/v1/orders/{orderNo}/events}</p>
+     * {@code GET /api/v1/orders/{orderNo}/events}
      */
     @GetMapping("/{orderNo}/events")
     public ResponseVo<List<OrderEvent>> listByOrderNo(@PathVariable String orderNo) {

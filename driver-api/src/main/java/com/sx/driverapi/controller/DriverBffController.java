@@ -22,8 +22,8 @@ import java.util.List;
 
 /**
  * 司机端聚合接口（BFF），供司机 H5 / App 调用。
- * <p>统一前缀：{@code /driver/api/v1}。对内通过 Feign 调用 {@code capacity}（上线、接单资格）、{@code order}（指派单、状态推进）。</p>
- * <p>统一响应：{@link ResponseVo}，业务码见 {@code code} 字段（200 成功；400/403/404/409/502 等见全局异常与下游透传）。</p>
+ * 统一前缀：{@code /driver/api/v1}。对内通过 Feign 调用 {@code capacity}（上线、接单资格）、{@code order}（指派单、状态推进）。
+ * 统一响应：{@link ResponseVo}，业务码见 {@code code} 字段（200 成功；400/403/404/409/502 等见全局异常与下游透传）。
  */
 @RestController
 @RequestMapping("/driver/api/v1")
@@ -39,8 +39,8 @@ public class DriverBffController {
 
     /**
      * 司机上线/下线（听单开关）。
-     * <p>{@code POST /driver/api/v1/drivers/{driverId}/online}</p>
-     * <p>请求体：{@code { "online": true|false }}，透传运力服务更新 {@code monitor_status}。</p>
+     * {@code POST /driver/api/v1/drivers/{driverId}/online}
+     * 请求体：{@code { "online": true|false }}，透传运力服务更新 {@code monitor_status}。
      */
     @PostMapping("/drivers/{driverId}/online")
     public ResponseVo<Void> online(@PathVariable Long driverId,
@@ -54,7 +54,7 @@ public class DriverBffController {
 
     /**
      * 拉取「已指派给当前司机、待确认接单」的订单列表（派单模式轮询）。
-     * <p>{@code GET /driver/api/v1/orders/assigned?driverId=}</p>
+     * {@code GET /driver/api/v1/orders/assigned?driverId=}
      */
     @GetMapping("/orders/assigned")
     public ResponseVo<List<AssignedOrderItemVO>> assigned(@RequestParam(required = false) Long driverId,
@@ -68,7 +68,7 @@ public class DriverBffController {
 
     /**
      * 订单详情（接单后轮询）：仅当 {@code trip_order.driver_id} 为当前司机时可查。
-     * <p>{@code GET /driver/api/v1/orders/{orderNo}}</p>
+     * {@code GET /driver/api/v1/orders/{orderNo}}
      */
     @GetMapping("/orders/{orderNo}")
     public ResponseVo<TripOrderRow> orderDetail(@PathVariable String orderNo,
@@ -79,8 +79,8 @@ public class DriverBffController {
 
     /**
      * 接单（确认指派）：先校验运力侧「可接单且已上线」，再调用订单 {@code ASSIGNED → ACCEPTED}。
-     * <p>{@code POST /driver/api/v1/orders/{orderNo}/accept}</p>
-     * <p>请求体：{@code { "driverId": 80001 }}，须与订单指派司机一致。</p>
+     * {@code POST /driver/api/v1/orders/{orderNo}/accept}
+     * 请求体：{@code { "driverId": 80001 }}，须与订单指派司机一致。
      */
     @PostMapping("/orders/{orderNo}/accept")
     public ResponseVo<Void> accept(@PathVariable String orderNo,
@@ -94,7 +94,7 @@ public class DriverBffController {
 
     /**
      * 到达上车点：{@code ACCEPTED → ARRIVED}。
-     * <p>{@code POST /driver/api/v1/orders/{orderNo}/arrive}</p>
+     * {@code POST /driver/api/v1/orders/{orderNo}/arrive}
      */
     @PostMapping("/orders/{orderNo}/arrive")
     public ResponseVo<Void> arrive(@PathVariable String orderNo,
@@ -108,7 +108,7 @@ public class DriverBffController {
 
     /**
      * 开始行程：{@code ARRIVED → STARTED}。
-     * <p>{@code POST /driver/api/v1/orders/{orderNo}/start}</p>
+     * {@code POST /driver/api/v1/orders/{orderNo}/start}
      */
     @PostMapping("/orders/{orderNo}/start")
     public ResponseVo<Void> start(@PathVariable String orderNo,
@@ -122,7 +122,7 @@ public class DriverBffController {
 
     /**
      * 完单：{@code STARTED → FINISHED}；可选上报里程/时长/实付金额（未传实付时由订单服务按预估兜底）。
-     * <p>{@code POST /driver/api/v1/orders/{orderNo}/finish}</p>
+     * {@code POST /driver/api/v1/orders/{orderNo}/finish}
      */
     @PostMapping("/orders/{orderNo}/finish")
     public ResponseVo<Void> finish(@PathVariable String orderNo,

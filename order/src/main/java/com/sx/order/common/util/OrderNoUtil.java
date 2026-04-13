@@ -7,7 +7,7 @@ import java.time.format.DateTimeFormatter;
 /**
  * 订单号生成工具（MVP）。
  *
- * <p>后续可替换为雪花算法/号段服务等。</p>
+ * 后续可替换为雪花算法/号段服务等。
  */
 public class OrderNoUtil {
     private static final SecureRandom RND = new SecureRandom();

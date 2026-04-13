@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonFormat;
 /**
  * 订单状态（与 order-service.trip_order.status 对齐）。
  *
- * <p>通过 {@link JsonFormat.Shape#OBJECT} 让前端拿到 code/en/zh，便于联调与展示。</p>
+ * 通过 {@link JsonFormat.Shape#OBJECT} 让前端拿到 code/en/zh，便于联调与展示。
  */
 @JsonFormat(shape = JsonFormat.Shape.OBJECT)
 public enum OrderStatus {

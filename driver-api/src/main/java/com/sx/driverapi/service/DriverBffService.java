@@ -23,6 +23,8 @@ public class DriverBffService {
 
     private static final int STATUS_ASSIGNED = 1;
     private static final int STATUS_PENDING_DRIVER_CONFIRM = 7;
+    private static final int STATUS_FINISHED = 5;
+    private static final int STATUS_CANCELLED = 6;
 
     private final CapacityDriverClient capacityDriverClient;
     private final OrderClient orderClient;
@@ -48,6 +50,15 @@ public class DriverBffService {
         }
         List<AssignedOrderItemVO> out = new ArrayList<>(rows.size());
         for (TripOrderRow row : rows) {
+            Integer st = row.getStatus();
+            if (st == null || (st != STATUS_ASSIGNED && st != STATUS_PENDING_DRIVER_CONFIRM)) {
+                if (st != null && (st == STATUS_FINISHED || st == STATUS_CANCELLED)) {
+                    log.debug("skip terminal order in assigned list orderNo={} status={}", row.getOrderNo(), st);
+                } else if (st != null) {
+                    log.warn("skip unexpected status in assigned list orderNo={} status={}", row.getOrderNo(), st);
+                }
+                continue;
+            }
             AssignedOrderItemVO vo = new AssignedOrderItemVO();
             vo.setOrderNo(row.getOrderNo());
             vo.setStatus(statusToName(row.getStatus()));

@@ -6,7 +6,7 @@ import jakarta.validation.constraints.NotNull;
 
 /**
  * 下单请求体。
- * <p>{@code passengerId} 由网关解析 JWT 后写入 {@code X-User-Id}，Controller 再写入本对象；请求体可不传，勿与 body 内字段混填。</p>
+ * {@code passengerId} 由网关解析 JWT 后写入 {@code X-User-Id}，Controller 再写入本对象；请求体可不传，勿与 body 内字段混填。
  */
 public class CreateAndAssignOrderBody {
 

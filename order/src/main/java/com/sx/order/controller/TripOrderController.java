@@ -33,8 +33,8 @@ import java.util.Map;
 
 /**
  * 订单核心接口：创建、指派、乘客取消、司机状态推进、分页与详情查询。
- * <p>统一前缀：{@code /api/v1/orders}；供各 BFF 与内部调度调用。</p>
- * <p>司机相关写接口错误语义：{@code 403} 非指派司机；{@code 404} 订单不存在；{@code 409} 状态冲突或 CAS 失败。</p>
+ * 统一前缀：{@code /api/v1/orders}；供各 BFF 与内部调度调用。
+ * 司机相关写接口错误语义：{@code 403} 非指派司机；{@code 404} 订单不存在；{@code 409} 状态冲突或 CAS 失败。
  */
 @RestController
 @RequestMapping("/api/v1/orders")
@@ -52,7 +52,8 @@ public class TripOrderController {
 
     /**
      * 创建订单：落库 {@code trip_order(status=CREATED)} 并写 {@code order_event(ORDER_CREATED)}。
-     * <p>{@code POST /api/v1/orders}</p>
+     * 同一乘客若已有进行中订单（状态非 FINISHED/CANCELLED），返回 {@code code=409}。
+     * {@code POST /api/v1/orders}
      */
     @PostMapping
     public ResponseVo<CreateOrderResult> create(@RequestBody @Valid CreateOrderBody body) {
@@ -62,7 +63,8 @@ public class TripOrderController {
 
     /**
      * 指派司机：状态机 {@code CREATED → ASSIGNED}，写入司机/车辆/公司及时戳，并记 {@code ORDER_ASSIGNED}。
-     * <p>{@code POST /api/v1/orders/{orderNo}/assign}</p>
+     * 若目标司机已有 {@code ACCEPTED}～{@code STARTED} 订单，返回 {@code code=409}（司机正在服务中）。
+     * {@code POST /api/v1/orders/{orderNo}/assign}
      */
     @PostMapping("/{orderNo}/assign")
     public ResponseVo<Void> assign(@PathVariable String orderNo, @RequestBody @Valid AssignOrderBody body) {
@@ -77,7 +79,7 @@ public class TripOrderController {
 
     /**
      * 打开司机确认窗口：{@code ASSIGNED → PENDING_DRIVER_CONFIRM}，写入 {@code offer_expires_at}。
-     * <p>{@code POST /api/v1/orders/{orderNo}/offer/open}</p>
+     * {@code POST /api/v1/orders/{orderNo}/offer/open}
      */
     @PostMapping("/{orderNo}/offer/open")
     public ResponseVo<Void> openDriverOffer(@PathVariable String orderNo,
@@ -92,7 +94,7 @@ public class TripOrderController {
 
     /**
      * 乘客取消：仅允许 {@code CREATED/ASSIGNED/PENDING_DRIVER_CONFIRM/ACCEPTED → CANCELLED}，且校验 {@code passengerId} 归属。
-     * <p>{@code POST /api/v1/orders/{orderNo}/cancel}</p>
+     * {@code POST /api/v1/orders/{orderNo}/cancel}
      */
     @PostMapping("/{orderNo}/cancel")
     public ResponseVo<Void> cancel(@PathVariable String orderNo, @RequestBody @Valid CancelOrderBody body) {
@@ -110,8 +112,8 @@ public class TripOrderController {
 
     /**
      * 司机名下「待确认指派」订单列表（{@code ASSIGNED} 或 {@code PENDING_DRIVER_CONFIRM}）。
-     * <p>{@code GET /api/v1/orders/assigned}</p>
-     * <p>身份从 {@code X-User-Id} 获取；为兼容旧调用方，可选传 {@code driverId}，但必须与登录身份一致。</p>
+     * {@code GET /api/v1/orders/assigned}
+     * 身份从 {@code X-User-Id} 获取；为兼容旧调用方，可选传 {@code driverId}，但必须与登录身份一致。
      */
     @GetMapping("/assigned")
     public ResponseVo<List<TripOrder>> listAssigned(@RequestParam(required = false) Long driverId,
@@ -134,7 +136,7 @@ public class TripOrderController {
 
     /**
      * 司机接单：{@code ASSIGNED} 或 {@code PENDING_DRIVER_CONFIRM → ACCEPTED}（幂等：已为 ACCEPTED 则成功）。
-     * <p>{@code POST /api/v1/orders/{orderNo}/accept}</p>
+     * {@code POST /api/v1/orders/{orderNo}/accept}
      */
     @PostMapping("/{orderNo}/accept")
     public ResponseVo<Void> accept(@PathVariable String orderNo,
@@ -149,7 +151,7 @@ public class TripOrderController {
 
     /**
      * 到达上车点：{@code ACCEPTED → ARRIVED}。
-     * <p>{@code POST /api/v1/orders/{orderNo}/arrive}</p>
+     * {@code POST /api/v1/orders/{orderNo}/arrive}
      */
     @PostMapping("/{orderNo}/arrive")
     public ResponseVo<Void> arrive(@PathVariable String orderNo,
@@ -164,7 +166,7 @@ public class TripOrderController {
 
     /**
      * 开始行程：{@code ARRIVED → STARTED}。
-     * <p>{@code POST /api/v1/orders/{orderNo}/start}</p>
+     * {@code POST /api/v1/orders/{orderNo}/start}
      */
     @PostMapping("/{orderNo}/start")
     public ResponseVo<Void> start(@PathVariable String orderNo,
@@ -179,7 +181,7 @@ public class TripOrderController {
 
     /**
      * 完单：{@code STARTED → FINISHED}，写入 {@code final_amount}（未传则回退 {@code estimated_amount}）。
-     * <p>{@code POST /api/v1/orders/{orderNo}/finish}</p>
+     * {@code POST /api/v1/orders/{orderNo}/finish}
      */
     @PostMapping("/{orderNo}/finish")
     public ResponseVo<Void> finish(@PathVariable String orderNo,
@@ -245,7 +247,7 @@ public class TripOrderController {
 
     /**
      * 分页查询订单列表（内存分页，MVP）。
-     * <p>{@code GET /api/v1/orders?orderNo=&passengerId=&provinceCode=&cityCode=&status=&createdAtStart=&createdAtEnd=&pageNo=&pageSize=}</p>
+     * {@code GET /api/v1/orders?orderNo=&passengerId=&provinceCode=&cityCode=&status=&createdAtStart=&createdAtEnd=&pageNo=&pageSize=}
      */
     @GetMapping
     public ResponseVo<Map<String, Object>> page(String orderNo,
@@ -286,7 +288,7 @@ public class TripOrderController {
 
     /**
      * 按订单号查询详情（兼容路径）。
-     * <p>{@code GET /api/v1/orders/by-no/{orderNo}}，不存在时 HTTP 404。</p>
+     * {@code GET /api/v1/orders/by-no/{orderNo}}，不存在时 HTTP 404。
      */
     @GetMapping("/by-no/{orderNo}")
     public ResponseEntity<ResponseVo<TripOrder>> getByOrderNo(@PathVariable String orderNo) {
@@ -300,8 +302,8 @@ public class TripOrderController {
 
     /**
      * 按订单号查询详情（主路径）。
-     * <p>{@code GET /api/v1/orders/{orderNo}}，不存在时 HTTP 404。</p>
-     * <p>注意：静态路径 {@code /assigned} 优先匹配，不会被本方法当成订单号。</p>
+     * {@code GET /api/v1/orders/{orderNo}}，不存在时 HTTP 404。
+     * 注意：静态路径 {@code /assigned} 优先匹配，不会被本方法当成订单号。
      */
     @GetMapping("/{orderNo}")
     public ResponseEntity<ResponseVo<TripOrder>> getByOrderNoV2(@PathVariable String orderNo) {

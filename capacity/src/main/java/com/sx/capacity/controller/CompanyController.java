@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 运力公司分页查询。
- * <p>统一前缀：{@code /api/v1/companies}。</p>
+ * 统一前缀：{@code /api/v1/companies}。
  */
 @RestController
 @RequestMapping("/api/v1/companies")
@@ -27,7 +27,7 @@ public class CompanyController {
 
     /**
      * 公司分页列表。
-     * <p>{@code GET /api/v1/companies?pageNo=&pageSize=&provinceCode=&cityCode=&companyNo=&companyName=}</p>
+     * {@code GET /api/v1/companies?pageNo=&pageSize=&provinceCode=&cityCode=&companyNo=&companyName=}
      */
     @GetMapping
     public ResponseVo<PageVo<Company>> page(@RequestParam(defaultValue = "1") Integer pageNo,

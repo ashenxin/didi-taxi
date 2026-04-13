@@ -21,7 +21,7 @@ import java.util.List;
 
 /**
  * 管理后台认证与会话：登录签发 JWT、菜单树、当前登录用户概要。
- * <p>统一前缀：{@code /admin/api/v1/auth}；需登录的接口依赖 Spring Security 上下文中的 {@link AdminLoginUser}。</p>
+ * 统一前缀：{@code /admin/api/v1/auth}；需登录的接口依赖 Spring Security 上下文中的 {@link AdminLoginUser}。
  */
 @Validated
 @RestController
@@ -36,7 +36,7 @@ public class AdminAuthController {
 
     /**
      * 用户名密码登录，返回访问令牌及基础账号信息。
-     * <p>{@code POST /admin/api/v1/auth/login}</p>
+     * {@code POST /admin/api/v1/auth/login}
      */
     @PostMapping("/login")
     public ResponseVo<AdminLoginResponse> login(@Valid @RequestBody AdminLoginRequest body) {
@@ -45,7 +45,7 @@ public class AdminAuthController {
 
     /**
      * 当前登录用户可见的后台菜单树（按角色过滤）。
-     * <p>{@code GET /admin/api/v1/auth/menus}</p>
+     * {@code GET /admin/api/v1/auth/menus}
      */
     @GetMapping("/menus")
     public ResponseVo<List<AdminMenuNodeVO>> menus() {
@@ -55,7 +55,7 @@ public class AdminAuthController {
 
     /**
      * 当前登录用户资料（用户名、展示名、角色、省市数据域、token 版本等）。
-     * <p>{@code GET /admin/api/v1/auth/me}</p>
+     * {@code GET /admin/api/v1/auth/me}
      */
     @GetMapping("/me")
     public ResponseVo<AdminUserVO> me() {

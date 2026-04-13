@@ -18,8 +18,8 @@ import java.util.UUID;
 /**
  * 高德「驾车路径规划」Web 服务：{@code /v3/direction/driving}。
  *
- * <p>文档：<a href="https://lbs.amap.com/api/webservice/guide/api/direction">路径规划 2.0</a>
- * （v3 为经典接口，参数为 origin/destination 经纬度字符串）。</p>
+ * 文档：<a href="https://lbs.amap.com/api/webservice/guide/api/direction">路径规划 2.0</a>
+ * （v3 为经典接口，参数为 origin/destination 经纬度字符串）。
  */
 @Service
 @Slf4j

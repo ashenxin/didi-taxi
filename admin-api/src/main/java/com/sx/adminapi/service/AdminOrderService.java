@@ -40,10 +40,10 @@ public class AdminOrderService {
     /**
      * 后台管理端分页查询订单列表（仅补充状态中文等轻量字段）。
      *
-     * <p>列表不返回乘客 ID/手机号（避免 N+1 调 passenger），详情页再聚合手机号。</p>
+     * 列表不返回乘客 ID/手机号（避免 N+1 调 passenger），详情页再聚合手机号。
      *
-     * <p>过滤条件：订单号、乘客手机号、地区、状态、下单时间区间。省、市查询参数与当前登录用户数据域合并（{@link AdminDataScope#mergeRegionForQuery}）。
-     * 若仅传手机号（未传订单号），会先到乘客服务 {@code by-phone} 换取 passengerId 再查订单；乘客不存在则空页。</p>
+     * 过滤条件：订单号、乘客手机号、地区、状态、下单时间区间。省、市查询参数与当前登录用户数据域合并（{@link AdminDataScope#mergeRegionForQuery}）。
+     * 若仅传手机号（未传订单号），会先到乘客服务 {@code by-phone} 换取 passengerId 再查订单；乘客不存在则空页。
      *
      * @param orderNo         订单号（可选）
      * @param phone           乘客手机号（可选）
@@ -119,7 +119,7 @@ public class AdminOrderService {
     /**
      * 按订单号查询订单详情与事件时间线（用于后台订单详情页）。
      *
-     * <p>当下游订单服务返回 404 时会转换为业务异常“订单不存在”。拉齐主单后按订单省市做 {@link AdminDataScope#assertOrderReadable}。</p>
+     * 当下游订单服务返回 404 时会转换为业务异常“订单不存在”。拉齐主单后按订单省市做 {@link AdminDataScope#assertOrderReadable}。
      *
      * @param orderNo 订单号
      * @return 订单详情（订单主体 + 事件列表）
@@ -168,7 +168,7 @@ public class AdminOrderService {
     /**
      * 通过手机号查询乘客ID。
      *
-     * <p>用于后台订单列表按手机号过滤：先解析出 passengerId 再去订单服务筛选。</p>
+     * 用于后台订单列表按手机号过滤：先解析出 passengerId 再去订单服务筛选。
      *
      * @param phone 手机号
      * @return 乘客ID，不存在则返回 null
@@ -190,7 +190,7 @@ public class AdminOrderService {
     /**
      * 通过乘客ID查询手机号。
      *
-     * <p>仅用于订单详情页补全展示手机号；列表不再调用。</p>
+     * 仅用于订单详情页补全展示手机号；列表不再调用。
      *
      * @param passengerId 乘客ID
      * @return 手机号，不存在则返回 null

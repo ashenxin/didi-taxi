@@ -14,8 +14,8 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * 缓存 {@code passenger} 的 security-context，减少每次请求 Feign。
- * <p>键与 passenger 侧删除逻辑共用前缀 {@code admin.security-context-cache.key-prefix}。</p>
- * <p>缓存项须与 JWT 内 {@code tv} 一致才可能命中；否则回源 Feign。Redis 不可用时静默降级为仅 Feign。</p>
+ * 键与 passenger 侧删除逻辑共用前缀 {@code admin.security-context-cache.key-prefix}。
+ * 缓存项须与 JWT 内 {@code tv} 一致才可能命中；否则回源 Feign。Redis 不可用时静默降级为仅 Feign。
  */
 @Slf4j
 @Component

@@ -19,8 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 管理后台：司机换队申请 BFF，转发 {@code capacity-service}。
- * <p>统一前缀：{@code /admin/api/v1/capacity/team-change-requests}。</p>
- * <p>列表与待审数仅包含「司机城市」落在当前用户省/市域内的申请；详情与审核前做同域校验（跨域 404）。</p>
+ * 统一前缀：{@code /admin/api/v1/capacity/team-change-requests}。
+ * 列表与待审数仅包含「司机城市」落在当前用户省/市域内的申请；详情与审核前做同域校验（跨域 404）。
  */
 @Validated
 @RestController
@@ -35,7 +35,7 @@ public class AdminTeamChangeController {
 
     /**
      * 待审核换队申请数量（菜单角标）；统计范围受当前用户省/市数据域约束。
-     * <p>{@code GET /admin/api/v1/capacity/team-change-requests/pending-count}</p>
+     * {@code GET /admin/api/v1/capacity/team-change-requests/pending-count}
      */
     @GetMapping("/pending-count")
     public ResponseVo<Long> pendingCount() {
@@ -44,7 +44,7 @@ public class AdminTeamChangeController {
 
     /**
      * 换队申请分页列表；省/市过滤由 BFF 按登录域注入下游，前端无需传 {@code provinceCode}/{@code cityCode}。
-     * <p>{@code GET /admin/api/v1/capacity/team-change-requests?pageNo=&pageSize=&status=&driverId=&driverPhone=&startTime=&endTime=}</p>
+     * {@code GET /admin/api/v1/capacity/team-change-requests?pageNo=&pageSize=&status=&driverId=&driverPhone=&startTime=&endTime=}
      */
     @GetMapping
     public ResponseVo<AdminPageVO<AdminDriverTeamChangeRequestVO>> page(
@@ -61,7 +61,7 @@ public class AdminTeamChangeController {
 
     /**
      * 换队申请详情；申请关联司机不在当前用户域内时 404。
-     * <p>{@code GET /admin/api/v1/capacity/team-change-requests/{id}}</p>
+     * {@code GET /admin/api/v1/capacity/team-change-requests/{id}}
      */
     @GetMapping("/{id}")
     public ResponseVo<AdminDriverTeamChangeRequestVO> detail(@PathVariable Long id) {
@@ -70,7 +70,7 @@ public class AdminTeamChangeController {
 
     /**
      * 审核通过；先校验申请对应司机城市在数据域内，再调用 capacity。
-     * <p>{@code POST /admin/api/v1/capacity/team-change-requests/{id}/approve?reviewedBy=}</p>
+     * {@code POST /admin/api/v1/capacity/team-change-requests/{id}/approve?reviewedBy=}
      */
     @PostMapping("/{id}/approve")
     public ResponseVo<Void> approve(@PathVariable Long id,
@@ -83,7 +83,7 @@ public class AdminTeamChangeController {
 
     /**
      * 审核拒绝（原因必填）；数据域校验同 {@link #approve}。
-     * <p>{@code POST /admin/api/v1/capacity/team-change-requests/{id}/reject?reviewedBy=}</p>
+     * {@code POST /admin/api/v1/capacity/team-change-requests/{id}/reject?reviewedBy=}
      */
     @PostMapping("/{id}/reject")
     public ResponseVo<Void> reject(@PathVariable Long id,

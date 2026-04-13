@@ -12,8 +12,8 @@ import java.util.Date;
 
 /**
  * 车辆档案实体。
- * <p>对应 MySQL 库 {@code capacity}、表 {@code car}；列名 snake_case，由 MyBatis-Plus 驼峰映射。</p>
- * <p>与司机多对一：{@code driver_id} 关联 {@link Driver}{@code .id}（业务上常约束 1 车 1 司机）。</p>
+ * 对应 MySQL 库 {@code capacity}、表 {@code car}；列名 snake_case，由 MyBatis-Plus 驼峰映射。
+ * 与司机多对一：{@code driver_id} 关联 {@link Driver}{@code .id}（业务上常约束 1 车 1 司机）。
  */
 @Getter
 @Setter

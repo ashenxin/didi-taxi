@@ -17,7 +17,7 @@ import java.util.UUID;
 /**
  * 高德「IP 定位」Web 服务：{@code /v3/ip}。
  *
- * <p>文档：<a href="https://lbs.amap.com/api/webservice/guide/api/ipconfig">IP 定位</a>。</p>
+ * 文档：<a href="https://lbs.amap.com/api/webservice/guide/api/ipconfig">IP 定位</a>。
  */
 @Service
 @Slf4j

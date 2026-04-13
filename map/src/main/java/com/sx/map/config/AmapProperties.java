@@ -4,7 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * 高德开放平台 Web 服务 Key（驾车路径规划等）。
- * <p>配置项：{@code map.amap.key}；可用环境变量 {@code AMAP_KEY} 或 {@code MAP_AMAP_KEY}，避免提交到仓库。</p>
+ * 配置项：{@code map.amap.key}；可用环境变量 {@code AMAP_KEY} 或 {@code MAP_AMAP_KEY}，避免提交到仓库。
  */
 @ConfigurationProperties(prefix = "map.amap")
 public class AmapProperties {

@@ -13,7 +13,7 @@ public class TestController {
 
     /**
      * 存活探测。
-     * <p>{@code GET /test/ping}</p>
+     * {@code GET /test/ping}
      */
     @GetMapping("/test/ping")
     public String ping() {

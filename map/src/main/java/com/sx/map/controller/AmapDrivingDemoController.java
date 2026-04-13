@@ -20,8 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 高德 Web 服务 Demo：驾车路径规划、IP 定位、地理编码、逆地理编码。
- * <p>驾车结果与 {@link RouteController} 的 {@link RouteResponse} 对齐，便于替换 stub。</p>
- * <p>路径：{@code amap-driving}、{@code amap-ip}、{@code amap-geocode}、{@code amap-regeo}（均位于 {@code /api/v1/map/demo} 下）。</p>
+ * 驾车结果与 {@link RouteController} 的 {@link RouteResponse} 对齐，便于替换 stub。
+ * 路径：{@code amap-driving}、{@code amap-ip}、{@code amap-geocode}、{@code amap-regeo}（均位于 {@code /api/v1/map/demo} 下）。
  */
 @RestController
 @RequestMapping("/api/v1/map/demo")
@@ -42,7 +42,7 @@ public class AmapDrivingDemoController {
 
     /**
      * 驾车路径规划（高德），返回里程与时长。
-     * <p>{@code POST /api/v1/map/demo/amap-driving}</p>
+     * {@code POST /api/v1/map/demo/amap-driving}
      */
     @PostMapping("/amap-driving")
     public ResponseVo<RouteResponse> amapDriving(@RequestBody @Valid RouteRequest body) {
@@ -59,7 +59,7 @@ public class AmapDrivingDemoController {
 
     /**
      * 地理编码：结构化地址 → 经纬度（取高德首条结果）。
-     * <p>{@code GET /api/v1/map/demo/amap-geocode?address=&city=}</p>
+     * {@code GET /api/v1/map/demo/amap-geocode?address=&city=}
      */
     @GetMapping("/amap-geocode")
     public ResponseVo<GeocodeDemoResponse> amapGeocode(
@@ -70,7 +70,7 @@ public class AmapDrivingDemoController {
 
     /**
      * 逆地理编码：经纬度 → 地址（{@code extensions} 默认 {@code base}，可传 {@code all} 以返回周边 POI 等，响应体仍为摘要字段）。
-     * <p>{@code GET /api/v1/map/demo/amap-regeo?lng=&lat=&radius=&extensions=}</p>
+     * {@code GET /api/v1/map/demo/amap-regeo?lng=&lat=&radius=&extensions=}
      */
     @GetMapping("/amap-regeo")
     public ResponseVo<RegeoDemoResponse> amapRegeo(

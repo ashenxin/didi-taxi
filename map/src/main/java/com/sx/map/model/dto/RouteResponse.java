@@ -7,28 +7,28 @@ public class RouteResponse {
     /**
      * 预估路线里程（单位：米）。
      *
-     * <p>来源：第三方地图 route 接口的 distance，或你们自研路网计算结果。</p>
+     * 来源：第三方地图 route 接口的 distance，或你们自研路网计算结果。
      */
     private Long distanceMeters;
 
     /**
      * 预估行驶时长（单位：秒）。
      *
-     * <p>来源：第三方地图 route 接口的 duration，或你们自研 ETA 结果。</p>
+     * 来源：第三方地图 route 接口的 duration，或你们自研 ETA 结果。
      */
     private Long durationSeconds;
 
     /**
      * 数据提供方标识。
      *
-     * <p>例如：{@code gaode}/{@code baidu}/{@code stub}。</p>
+     * 例如：{@code gaode}/{@code baidu}/{@code stub}。
      */
     private String provider;
 
     /**
      * 本次地图计算的追踪 ID（用于排障/定位第三方请求）。
      *
-     * <p>MVP 先用时间戳/UUID；后续接入第三方时可写入其 requestId 或你方生成的 requestId。</p>
+     * MVP 先用时间戳/UUID；后续接入第三方时可写入其 requestId 或你方生成的 requestId。
      */
     private String traceId;
 

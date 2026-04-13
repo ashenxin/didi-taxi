@@ -14,7 +14,7 @@ import java.time.Instant;
 
 /**
  * 地图服务：路线与里程/时长预估（MVP 为 stub，后续接第三方地图）。
- * <p>统一前缀：{@code /api/v1/map}。</p>
+ * 统一前缀：{@code /api/v1/map}。
  */
 @RestController
 @RequestMapping("/api/v1/map")
@@ -22,7 +22,7 @@ public class RouteController {
 
     /**
      * 路线规划（当前返回固定 stub 里程/秒数，供计费与下单联调）。
-     * <p>{@code POST /api/v1/map/route}</p>
+     * {@code POST /api/v1/map/route}
      */
     @PostMapping("/route")
     public ResponseVo<RouteResponse> route(@RequestBody @Valid RouteRequest body) {

@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
 
 /**
  * 派单相关接口（MVP：按城市/车型筛选可接单在线司机，返回首个候选）。
- * <p>统一前缀：{@code /api/v1/dispatch}；通常由 {@code passenger-api} 下单链路调用。</p>
+ * 统一前缀：{@code /api/v1/dispatch}；通常由 {@code passenger-api} 下单链路调用。
  */
 @RestController
 @RequestMapping("/api/v1/dispatch")
@@ -39,9 +39,9 @@ public class DispatchController {
 
     /**
      * 查询「可派单」司机（MVP：非真实距离最近，取满足条件的首条）。
-     * <p>{@code GET /api/v1/dispatch/nearest-driver?cityCode=&productCode=}</p>
-     * <p>筛选：车辆在城市内、司机在线(1/2)、{@code can_accept_order=1}；{@code productCode} 非空时匹配车辆 {@code ride_type_id}。</p>
-     * <p>无可用候选时业务码 {@code 404}。</p>
+     * {@code GET /api/v1/dispatch/nearest-driver?cityCode=&productCode=}
+     * 筛选：车辆在城市内、司机在线(1/2)、{@code can_accept_order=1}；{@code productCode} 非空时匹配车辆 {@code ride_type_id}。
+     * 无可用候选时业务码 {@code 404}。
      */
     @GetMapping("/nearest-driver")
     public ResponseVo<NearestDriverResult> searchNearestDriver(@RequestParam String cityCode,

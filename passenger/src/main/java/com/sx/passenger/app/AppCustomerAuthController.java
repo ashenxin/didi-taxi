@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 乘客端认证（供 passenger-api Feign 调用）。
- * <p>前缀 {@code /api/v1/app/auth}，不经网关暴露给浏览器时由 BFF 聚合。</p>
+ * 前缀 {@code /api/v1/app/auth}，不经网关暴露给浏览器时由 BFF 聚合。
  */
 @RestController
 @RequestMapping("/api/v1/app/auth")
@@ -27,7 +27,7 @@ public class AppCustomerAuthController {
 
     /**
      * 密码登录（对内）。
-     * <p>{@code POST /api/v1/app/auth/login-password}</p>
+     * {@code POST /api/v1/app/auth/login-password}
      */
     @PostMapping("/login-password")
     public ResponseVo<AppAuthCustomerBrief> loginPassword(@Valid @RequestBody AppLoginPasswordRequest body) {
@@ -36,7 +36,7 @@ public class AppCustomerAuthController {
 
     /**
      * 发送短信验证码（对内）。
-     * <p>{@code POST /api/v1/app/auth/sms/send}</p>
+     * {@code POST /api/v1/app/auth/sms/send}
      */
     @PostMapping("/sms/send")
     public ResponseVo<Void> sendSms(@Valid @RequestBody AppSmsSendRequest body) {
@@ -45,7 +45,7 @@ public class AppCustomerAuthController {
 
     /**
      * 短信登录（对内）。
-     * <p>{@code POST /api/v1/app/auth/login-sms}</p>
+     * {@code POST /api/v1/app/auth/login-sms}
      */
     @PostMapping("/login-sms")
     public ResponseVo<AppAuthCustomerBrief> loginSms(@Valid @RequestBody AppSmsLoginRequest body) {

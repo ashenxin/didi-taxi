@@ -14,8 +14,8 @@ import java.time.LocalDateTime;
 
 /**
  * 计价规则实体（按省/市/产品线维度配置，支持生效区间）。
- * <p>对应 MySQL 库 {@code calculate}、表 {@code fare_rule}。</p>
- * <p>计费公式概要：起步价 + 超包含里程×单价 + 超包含时长×单价，再应用可选 {@code minimum_fare}/{@code maximum_fare}。</p>
+ * 对应 MySQL 库 {@code calculate}、表 {@code fare_rule}。
+ * 计费公式概要：起步价 + 超包含里程×单价 + 超包含时长×单价，再应用可选 {@code minimum_fare}/{@code maximum_fare}。
  */
 @Getter
 @Setter

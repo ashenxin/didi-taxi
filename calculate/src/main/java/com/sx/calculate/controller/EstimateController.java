@@ -20,7 +20,7 @@ import java.time.LocalDateTime;
 
 /**
  * 计费服务：费用预估（按 fare_rule 与里程/时长计算）。
- * <p>统一前缀：{@code /api/v1/calculate}；通常由 {@code passenger-api} 下单链路调用。</p>
+ * 统一前缀：{@code /api/v1/calculate}；通常由 {@code passenger-api} 下单链路调用。
  */
 @RestController
 @RequestMapping("/api/v1/calculate")
@@ -35,8 +35,8 @@ public class EstimateController {
 
     /**
      * 预估费用：按省/市/产品线匹配当前有效 {@code fare_rule}，起步价 + 超里程 + 超时长，再应用最低/封顶。
-     * <p>{@code POST /api/v1/calculate/estimate}</p>
-     * <p>无匹配规则时业务码 {@code 404}。</p>
+     * {@code POST /api/v1/calculate/estimate}
+     * 无匹配规则时业务码 {@code 404}。
      */
     @PostMapping("/estimate")
     public ResponseVo<EstimateFareResult> estimate(@Valid @RequestBody EstimateFareBody body) {

@@ -3,7 +3,7 @@ package com.sx.capacity.model.dto;
 /**
  * 最小派单候选（最近司机）返回数据。
  *
- * <p>MVP：先返回一个“可接单且在线”的司机 + 其绑定车辆信息，后续再接入地图矩阵计算“最近”。</p>
+ * MVP：先返回一个“可接单且在线”的司机 + 其绑定车辆信息，后续再接入地图矩阵计算“最近”。
  */
 public class NearestDriverResult {
     private Long driverId;

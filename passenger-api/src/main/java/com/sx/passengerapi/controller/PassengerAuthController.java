@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 乘客端认证（对外），经 gateway 访问。
- * <p>统一前缀：{@code /app/api/v1/auth}</p>
+ * 统一前缀：{@code /app/api/v1/auth}
  */
 @RestController
 @RequestMapping("/app/api/v1/auth")
@@ -26,7 +26,7 @@ public class PassengerAuthController {
 
     /**
      * 发送短信验证码。
-     * <p>{@code POST /app/api/v1/auth/sms/send}</p>
+     * {@code POST /app/api/v1/auth/sms/send}
      */
     @PostMapping("/sms/send")
     public ResponseVo<Void> sendSms(@Valid @RequestBody com.sx.passengerapi.model.auth.SmsSendRequest body) {
@@ -36,7 +36,7 @@ public class PassengerAuthController {
 
     /**
      * 短信验证码登录。
-     * <p>{@code POST /app/api/v1/auth/login-sms}</p>
+     * {@code POST /app/api/v1/auth/login-sms}
      */
     @PostMapping("/login-sms")
     public ResponseVo<CustomerLoginResponse> loginSms(@Valid @RequestBody com.sx.passengerapi.model.auth.SmsLoginRequest body) {
@@ -45,7 +45,7 @@ public class PassengerAuthController {
 
     /**
      * 手机号密码登录。
-     * <p>{@code POST /app/api/v1/auth/login-password}</p>
+     * {@code POST /app/api/v1/auth/login-password}
      */
     @PostMapping("/login-password")
     public ResponseVo<CustomerLoginResponse> loginPassword(@Valid @RequestBody com.sx.passengerapi.model.auth.PasswordLoginRequest body) {

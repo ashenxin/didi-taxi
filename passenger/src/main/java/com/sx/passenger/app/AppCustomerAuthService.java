@@ -36,7 +36,7 @@ public class AppCustomerAuthService {
 
     /**
      * Redis key 前缀约定（App 端认证）。
-     * <p>命名空间说明：</p>
+     * 命名空间说明：
      * <ul>
      *   <li><b>{@code app:sms:*}</b>：短信发送频控与日计数</li>
      *   <li><b>{@code app:otp:*}</b>：短信验证码（一次性口令）</li>

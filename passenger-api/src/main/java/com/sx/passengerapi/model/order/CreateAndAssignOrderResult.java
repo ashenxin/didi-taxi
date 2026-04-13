@@ -6,8 +6,8 @@ import com.sx.passengerapi.model.map.RouteResponse;
 /**
  * 下单（createAndAssign）接口返回数据。
  *
- * <p>MVP 阶段该对象会逐步扩展：当前先回传路线预估与计费预估，
- * 后续再补 {@code orderNo/status/assignedDriver} 等字段。</p>
+ * MVP 阶段该对象会逐步扩展：当前先回传路线预估与计费预估，
+ * 后续再补 {@code orderNo/status/assignedDriver} 等字段。
  */
 public class CreateAndAssignOrderResult {
 
@@ -19,7 +19,7 @@ public class CreateAndAssignOrderResult {
     /**
      * 订单状态（MVP：`CREATED` / `ASSIGNED`）。
      *
-     * <p>与 order-service.trip_order.status 对齐，返回包含 code/en/zh 的枚举对象，便于前端展示与联调。</p>
+     * 与 order-service.trip_order.status 对齐，返回包含 code/en/zh 的枚举对象，便于前端展示与联调。
      */
     private OrderStatus status;
 
@@ -31,14 +31,14 @@ public class CreateAndAssignOrderResult {
     /**
      * 路线规划结果（来自 map-service 的 route）。
      *
-     * <p>包含预估里程/时长等，用于后续计费预估与展示。</p>
+     * 包含预估里程/时长等，用于后续计费预估与展示。
      */
     private RouteResponse route;
 
     /**
      * 预估费用结果（来自 calculate-service 的 estimate）。
      *
-     * <p>包含命中的计价规则与预估金额。</p>
+     * 包含命中的计价规则与预估金额。
      */
     private EstimateFareResult estimate;
 

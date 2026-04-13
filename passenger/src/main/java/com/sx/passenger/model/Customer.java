@@ -13,8 +13,8 @@ import java.time.LocalDateTime;
 
 /**
  * 乘客账号实体。
- * <p>对应 MySQL 库 {@code passenger}、表 {@code customer}。</p>
- * <p>库端若存在生成列 {@code phone_active}（用于唯一约束），勿在本实体映射，避免 INSERT/UPDATE 冲突。</p>
+ * 对应 MySQL 库 {@code passenger}、表 {@code customer}。
+ * 库端若存在生成列 {@code phone_active}（用于唯一约束），勿在本实体映射，避免 INSERT/UPDATE 冲突。
  */
 @Getter
 @Setter
