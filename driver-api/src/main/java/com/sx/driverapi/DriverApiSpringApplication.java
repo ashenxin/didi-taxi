@@ -12,4 +12,3 @@ public class DriverApiSpringApplication {
         SpringApplication.run(DriverApiSpringApplication.class, args);
     }
 }
-

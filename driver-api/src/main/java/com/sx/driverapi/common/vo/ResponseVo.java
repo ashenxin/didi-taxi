@@ -52,4 +52,3 @@ public class ResponseVo<T> implements Serializable {
         this.data = data;
     }
 }
-
