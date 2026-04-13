@@ -8,6 +8,7 @@ import com.sx.calculate.model.FareRule;
 import com.sx.calculate.model.dto.EstimateFareBody;
 import com.sx.calculate.model.dto.EstimateFareResult;
 import jakarta.validation.Valid;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -23,6 +24,7 @@ import java.time.LocalDateTime;
  */
 @RestController
 @RequestMapping("/api/v1/calculate")
+@Slf4j
 public class EstimateController {
 
     private final FareRuleEntityMapper fareRuleEntityMapper;
@@ -57,6 +59,8 @@ public class EstimateController {
                 .orderByDesc(FareRule::getId)
                 .last("LIMIT 1"));
         if (rule == null) {
+            log.warn("estimate: no fare rule province={} city={} product={}",
+                    body.getProvinceCode(), body.getCityCode(), body.getProductCode());
             return ResultUtil.error(404, "未找到可用计价规则");
         }
 
@@ -66,6 +70,8 @@ public class EstimateController {
         resp.setEstimatedAmount(amount);
         resp.setDistanceMeters(body.getDistanceMeters());
         resp.setDurationSeconds(body.getDurationSeconds());
+        log.info("estimate: ruleId={} amount={} distanceM={} durationS={}",
+                rule.getId(), amount, body.getDistanceMeters(), body.getDurationSeconds());
         return ResultUtil.success(resp);
     }
 

@@ -6,6 +6,7 @@ import com.sx.driverapi.model.capacity.DriverOnlineBody;
 import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
+import com.sx.driverapi.model.ordercore.TripOrderRow;
 import com.sx.driverapi.service.DriverBffService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -63,6 +64,17 @@ public class DriverBffController {
             assertSameDriver(driverId, authedDriverId);
         }
         return ResultUtil.success(driverBffService.listAssigned(authedDriverId));
+    }
+
+    /**
+     * 订单详情（接单后轮询）：仅当 {@code trip_order.driver_id} 为当前司机时可查。
+     * <p>{@code GET /driver/api/v1/orders/{orderNo}}</p>
+     */
+    @GetMapping("/orders/{orderNo}")
+    public ResponseVo<TripOrderRow> orderDetail(@PathVariable String orderNo,
+                                                @RequestHeader(value = USER_ID_HEADER, required = false) String userId) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        return ResultUtil.success(driverBffService.getOrderForDriver(orderNo, authedDriverId));
     }
 
     /**

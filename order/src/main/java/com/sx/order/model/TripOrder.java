@@ -13,7 +13,7 @@ import java.time.LocalDateTime;
 /**
  * 网约车订单主表。
  * <p>对应 MySQL 库 {@code order}、表 {@code trip_order}。</p>
- * <p>状态机：{@code 0}CREATED → {@code 1}ASSIGNED → {@code 2}ACCEPTED → {@code 3}ARRIVED → {@code 4}STARTED → {@code 5}FINISHED；{@code 6}CANCELLED。</p>
+ * <p>状态机：{@code 0}CREATED → {@code 1}ASSIGNED →（可选 {@code 7}PENDING_DRIVER_CONFIRM）→ {@code 2}ACCEPTED → {@code 3}ARRIVED → {@code 4}STARTED → {@code 5}FINISHED；{@code 6}CANCELLED。</p>
  */
 @Getter
 @Setter
@@ -59,7 +59,7 @@ public class TripOrder {
     private BigDecimal destLng;
 
     /**
-     * 订单状态：0 已创建，1 已分配，2 已接单，3 司机已到达，4 行程中，5 已完成，6 已取消。
+     * 订单状态：0 已创建，1 已分配，2 已接单，3 司机已到达，4 行程中，5 已完成，6 已取消，7 待司机确认（派单确认窗口）。
      */
     private Integer status;
 
@@ -81,6 +81,12 @@ public class TripOrder {
     private LocalDateTime createdAt;
     /** 系统指派司机时间 */
     private LocalDateTime assignedAt;
+    /** 当前司机确认窗口截止时间（status=7 时有效） */
+    private LocalDateTime offerExpiresAt;
+    /** 派单/确认轮次 */
+    private Integer offerRound;
+    /** 最近一次发起确认的时间 */
+    private LocalDateTime lastOfferAt;
     /** 司机确认接单时间 */
     private LocalDateTime acceptedAt;
     /** 司机到达上车点时间 */

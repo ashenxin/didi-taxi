@@ -9,6 +9,7 @@ import com.sx.passenger.dao.SysUserRoleEntityMapper;
 import com.sx.passenger.model.SysRole;
 import com.sx.passenger.model.SysUser;
 import com.sx.passenger.model.SysUserRole;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class AdminSysAuthService {
 
     private static final BCryptPasswordEncoder BCRYPT = new BCryptPasswordEncoder();
@@ -40,8 +42,10 @@ public class AdminSysAuthService {
                         .eq(SysUser::getIsDeleted, 0)
                         .last("LIMIT 1"));
         if (user == null || user.getPasswordHash() == null || !BCRYPT.matches(password, user.getPasswordHash())) {
+            log.warn("admin login failed username={}", username);
             return null;
         }
+        log.info("admin login verify ok userId={} username={}", user.getId(), user.getUsername());
         return new AdminVerifyCredentialsResponse(user.getId(), user.getTokenVersion(), user.getStatus());
     }
 

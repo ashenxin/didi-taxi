@@ -24,8 +24,11 @@ import com.sx.passengerapi.model.ordercore.AssignOrderBody;
 import com.sx.passengerapi.model.ordercore.CancelOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderResult;
+import com.sx.passengerapi.model.ordercore.OpenDriverOfferBody;
 import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -33,6 +36,7 @@ import java.math.BigDecimal;
 import java.util.Map;
 
 @Service
+@Slf4j
 public class PassengerOrderService {
 
     /** cityCode → 高德 geocode 可选 city 参数（中文/全拼/adcode 等，见高德文档） */
@@ -45,14 +49,18 @@ public class PassengerOrderService {
     private final OrderClient orderClient;
     private final CapacityDispatchClient capacityDispatchClient;
 
+    private final int driverOfferSeconds;
+
     public PassengerOrderService(MapClient mapClient,
                                  CalculateClient calculateClient,
                                  OrderClient orderClient,
-                                 CapacityDispatchClient capacityDispatchClient) {
+                                 CapacityDispatchClient capacityDispatchClient,
+                                 @Value("${app.order.driver-offer-seconds:10}") int driverOfferSeconds) {
         this.mapClient = mapClient;
         this.calculateClient = calculateClient;
         this.orderClient = orderClient;
         this.capacityDispatchClient = capacityDispatchClient;
+        this.driverOfferSeconds = driverOfferSeconds;
     }
 
     /**
@@ -230,6 +238,22 @@ public class PassengerOrderService {
     }
 
     /**
+     * 打开司机确认窗口（ASSIGNED → PENDING_DRIVER_CONFIRM）。
+     */
+    public void openDriverOffer(String orderNo) {
+        OpenDriverOfferBody body = new OpenDriverOfferBody();
+        body.setOfferSeconds(driverOfferSeconds);
+        var resp = orderClient.openDriverOffer(orderNo, body);
+        if (resp == null) {
+            throw new BizErrorException(502, "订单服务响应为空");
+        }
+        if (resp.getCode() == null || resp.getCode() != 200) {
+            throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(),
+                    "打开待司机确认失败: " + resp.getMsg());
+        }
+    }
+
+    /**
      * 对外“一步 createAndAssign”的同步编排实现（当前版本）。
      *
      * <p>同步链路（便于联调）：地理编码补坐标（如需）→ route → estimate → order.create → nearestDriver → order.assign。</p>
@@ -238,7 +262,7 @@ public class PassengerOrderService {
      * 先落库创建订单 + 写 outbox/event，再由调度器异步执行找司机与指派，避免分布式事务与长耗时链路。</p>
      */
     public CreateAndAssignOrderResult createAndAssign(CreateAndAssignOrderBody body) {
-        resolveCoordinatesByGeocodeIfNeeded(body);
+        resolveCoordinatesByGeocodeIfNeeded(body);//缺经纬度调map补齐
         RouteResponse route = route(body);//路线预估（高德驾车）
         EstimateFareResult estimate = estimate(body, route);//费用预估
         CreateOrderResult created = createOrder(body, estimate);//创建订单
@@ -252,6 +276,7 @@ public class PassengerOrderService {
         Long etaSeconds = route == null ? null : route.getDurationSeconds();
         if (nearest != null) {
             assignOrder(orderNo, nearest, etaSeconds);//指派司机
+            openDriverOffer(orderNo);
         }
 
         CreateAndAssignOrderResult out = new CreateAndAssignOrderResult();
@@ -263,7 +288,12 @@ public class PassengerOrderService {
             out.setStatus(OrderStatus.CREATED);
             out.setAssignedDriver(null);
         } else {
-            out.setStatus(OrderStatus.ASSIGNED);
+            var detail = orderClient.getByOrderNo(orderNo);
+            if (detail == null || detail.getCode() == null || detail.getCode() != 200 || detail.getData() == null) {
+                throw new BizErrorException(502, "订单状态刷新失败");
+            }
+            TripOrderRow row = detail.getData();
+            out.setStatus(OrderStatus.fromCode(row.getStatus()));
             AssignedDriver ad = new AssignedDriver();
             ad.setDriverId(nearest.getDriverId());
             ad.setCarId(nearest.getCarId());
@@ -272,6 +302,8 @@ public class PassengerOrderService {
             ad.setEtaSeconds(etaSeconds);
             out.setAssignedDriver(ad);
         }
+        log.info("createAndAssign done orderNo={} passengerId={} assigned={}",
+                orderNo, body.getPassengerId(), nearest != null);
         return out;
     }
 
@@ -314,6 +346,7 @@ public class PassengerOrderService {
             throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(),
                     resp.getMsg() == null ? "取消订单失败" : resp.getMsg());
         }
+        log.info("passenger cancel order orderNo={} passengerId={}", orderNo, req.getPassengerId());
     }
 
     private static PassengerOrderDetailVO toDetailVO(TripOrderRow row) {

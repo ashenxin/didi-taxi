@@ -9,15 +9,20 @@ import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
+import feign.FeignException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 @Service
+@Slf4j
 public class DriverBffService {
 
     private static final int STATUS_ASSIGNED = 1;
+    private static final int STATUS_PENDING_DRIVER_CONFIRM = 7;
 
     private final CapacityDriverClient capacityDriverClient;
     private final OrderClient orderClient;
@@ -31,6 +36,7 @@ public class DriverBffService {
         DriverOnlineBody body = new DriverOnlineBody();
         body.setOnline(online);
         unwrap(capacityDriverClient.setOnline(driverId, body), "运力上线状态");
+        log.info("driver online updated driverId={} online={}", driverId, online);
     }
 
     public List<AssignedOrderItemVO> listAssigned(Long driverId) {
@@ -49,6 +55,7 @@ public class DriverBffService {
             p.setName(row.getOriginAddress());
             vo.setPickup(p);
             vo.setEtaSeconds(null);
+            vo.setOfferExpiresAt(row.getOfferExpiresAt());
             out.add(vo);
         }
         return out;
@@ -59,22 +66,50 @@ public class DriverBffService {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.accept(orderNo, body), "确认接单");
+        log.info("driver accept order orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void arrive(String orderNo, Long driverId) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.arrive(orderNo, body), "到达上报");
+        log.info("driver arrive orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void start(String orderNo, Long driverId) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.start(orderNo, body), "开始行程");
+        log.info("driver start trip orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void finish(String orderNo, FinishOrderBody body) {
         unwrap(orderClient.finish(orderNo, body), "完单");
+        log.info("driver finish order orderNo={} driverId={}", orderNo, body != null ? body.getDriverId() : null);
+    }
+
+    /**
+     * 当前司机名下订单详情（用于接单后行程推进；校验 {@code driver_id} 归属）。
+     */
+    public TripOrderRow getOrderForDriver(String orderNo, Long driverId) {
+        CoreResponseVo<TripOrderRow> resp;
+        try {
+            resp = orderClient.getByOrderNo(orderNo);
+        } catch (FeignException e) {
+            if (e.status() == 404) {
+                throw new BizErrorException(404, "订单不存在");
+            }
+            throw new BizErrorException(e.status() > 0 ? e.status() : 502, "订单服务调用失败");
+        }
+        unwrap(resp, "订单详情");
+        TripOrderRow row = resp.getData();
+        if (row == null) {
+            throw new BizErrorException(404, "订单不存在");
+        }
+        if (row.getDriverId() == null || !Objects.equals(row.getDriverId(), driverId)) {
+            throw new BizErrorException(403, "非本单司机");
+        }
+        return row;
     }
 
     private static String statusToName(Integer code) {
@@ -83,6 +118,9 @@ public class DriverBffService {
         }
         if (code == STATUS_ASSIGNED) {
             return "ASSIGNED";
+        }
+        if (code == STATUS_PENDING_DRIVER_CONFIRM) {
+            return "PENDING_DRIVER_CONFIRM";
         }
         return "STATUS_" + code;
     }

@@ -7,6 +7,7 @@ import com.sx.map.exception.AmapApiException;
 import com.sx.map.model.dto.Point;
 import com.sx.map.model.dto.RouteRequest;
 import com.sx.map.model.dto.RouteResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -21,6 +22,7 @@ import java.util.UUID;
  * （v3 为经典接口，参数为 origin/destination 经纬度字符串）。</p>
  */
 @Service
+@Slf4j
 public class AmapDrivingRouteService {
 
     private static final String DRIVING_PATH = "/v3/direction/driving";
@@ -81,10 +83,12 @@ public class AmapDrivingRouteService {
             resp.setDurationSeconds(durationSeconds);
             resp.setProvider("gaode");
             resp.setTraceId(UUID.randomUUID().toString());
+            log.info("amap driving route ok distanceM={} durationS={}", distanceMeters, durationSeconds);
             return resp;
         } catch (AmapApiException e) {
             throw e;
         } catch (Exception e) {
+            log.error("amap driving route parse failed", e);
             throw new AmapApiException("解析高德响应失败: " + e.getMessage());
         }
     }

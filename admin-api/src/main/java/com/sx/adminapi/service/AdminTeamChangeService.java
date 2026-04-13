@@ -8,6 +8,7 @@ import com.sx.adminapi.security.AdminDataScope;
 import com.sx.adminapi.security.AdminLoginUser;
 import com.sx.adminapi.model.capacity.AdminDriverTeamChangeRequestVO;
 import com.sx.adminapi.model.capacity.AdminPageVO;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -19,6 +20,7 @@ import java.util.Map;
  * 换队申请 BFF：列表/待审数携带登录省、市至 capacity；详情与审核依据 VO 的 {@code driverCityCode} 做数据域断言。
  */
 @Service
+@Slf4j
 public class AdminTeamChangeService {
 
     private final CapacityClient capacityClient;
@@ -105,6 +107,7 @@ public class AdminTeamChangeService {
         }
         Map<String, Object> wrapper = capacityClient.approveDriverTeamChange(id, body, reviewedBy);
         assertSuccess(wrapper);
+        log.info("admin team change approved id={} by={}", id, reviewedBy);
     }
 
     /** 审核拒绝；域校验同 {@link #approve}。 */
@@ -114,6 +117,7 @@ public class AdminTeamChangeService {
         body.put("reviewReason", reviewReason);
         Map<String, Object> wrapper = capacityClient.rejectDriverTeamChange(id, body, reviewedBy);
         assertSuccess(wrapper);
+        log.info("admin team change rejected id={} by={}", id, reviewedBy);
     }
 
     /** 拉详情（不做可读断言）后校验司机城市是否在域内。 */

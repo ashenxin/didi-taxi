@@ -8,6 +8,7 @@ import com.sx.calculate.common.vo.ResponseVo;
 import com.sx.calculate.model.FareRule;
 import com.sx.calculate.model.dto.FareRuleUpsertBody;
 import jakarta.validation.Valid;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,6 +29,7 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/api/v1/fare-rules")
+@Slf4j
 public class FareRuleController {
 
     private final FareRuleEntityMapper fareRuleEntityMapper;
@@ -124,6 +126,7 @@ public class FareRuleController {
                 .setMaximumFare(body.getMaximumFare())
                 .setIsDeleted(0);
         fareRuleEntityMapper.insert(row);
+        log.info("fare rule created id={} city={} product={}", row.getId(), body.getCityCode(), body.getProductCode());
         return ResultUtil.success(row.getId());
     }
 
@@ -160,6 +163,7 @@ public class FareRuleController {
         existing.setMinimumFare(body.getMinimumFare());
         existing.setMaximumFare(body.getMaximumFare());
         fareRuleEntityMapper.updateById(existing);
+        log.info("fare rule updated id={}", id);
         return ResultUtil.success(null);
     }
 
@@ -180,6 +184,7 @@ public class FareRuleController {
         }
         existing.setIsDeleted(1);
         fareRuleEntityMapper.updateById(existing);
+        log.info("fare rule deleted id={}", id);
         return ResultUtil.success(null);
     }
 

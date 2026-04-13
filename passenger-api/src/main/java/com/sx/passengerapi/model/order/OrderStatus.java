@@ -15,7 +15,9 @@ public enum OrderStatus {
     ARRIVED(3, "ARRIVED", "司机已到达"),
     STARTED(4, "STARTED", "行程中"),
     FINISHED(5, "FINISHED", "已完成"),
-    CANCELLED(6, "CANCELLED", "已取消");
+    CANCELLED(6, "CANCELLED", "已取消"),
+    /** 待司机在派单确认窗口内确认 */
+    PENDING_DRIVER_CONFIRM(7, "PENDING_DRIVER_CONFIRM", "待司机确认");
 
     private final int code;
     private final String en;

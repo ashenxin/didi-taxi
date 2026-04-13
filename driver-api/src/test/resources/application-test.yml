@@ -1,0 +1,6 @@
+# 单测不依赖本机 Redis：排除自动配置后由 DriverTokenVersionStore 使用进程内版本表
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration

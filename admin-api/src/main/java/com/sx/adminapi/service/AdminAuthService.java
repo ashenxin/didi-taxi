@@ -13,12 +13,14 @@ import com.sx.adminapi.model.auth.AdminLoginResponse;
 import com.sx.adminapi.model.auth.AdminMenuNodeVO;
 import com.sx.adminapi.model.auth.AdminUserVO;
 import feign.FeignException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
 
 @Service
+@Slf4j
 public class AdminAuthService {
 
     private final PassengerAdminSysClient passengerAdminSysClient;
@@ -36,6 +38,7 @@ public class AdminAuthService {
         } catch (FeignException.Unauthorized e) {
             throw new BizErrorException(ExceptionCode.UNAUTHORIZED.getValue(), "用户名或密码错误");
         } catch (FeignException e) {
+            log.error("admin login verifyCredentials feign status={}", e.status(), e);
             throw new BizErrorException(ExceptionCode.BAD_GATEWAY.getValue(), "服务暂时不可用，请稍后重试");
         }
 
@@ -55,6 +58,7 @@ public class AdminAuthService {
         } catch (FeignException.Forbidden e) {
             throw new BizErrorException(ExceptionCode.FORBIDDEN.getValue(), "账号数据不一致，请联系管理员");
         } catch (FeignException e) {
+            log.error("admin login securityContext feign status={}", e.status(), e);
             throw new BizErrorException(ExceptionCode.BAD_GATEWAY.getValue(), "服务暂时不可用，请稍后重试");
         }
 
@@ -68,6 +72,7 @@ public class AdminAuthService {
 
         String accessToken = jwtService.createToken(cred.getUserId(), cred.getTokenVersion(), ctx.getUsername());
         AdminUserVO user = toUserVo(ctx);
+        log.info("admin bff login success userId={} username={}", cred.getUserId(), ctx.getUsername());
         return new AdminLoginResponse(accessToken, "Bearer", jwtService.getExpirationSeconds(), user);
     }
 
@@ -80,6 +85,7 @@ public class AdminAuthService {
         } catch (FeignException.Forbidden e) {
             throw new BizErrorException(ExceptionCode.FORBIDDEN.getValue(), "账号数据不一致，请联系管理员");
         } catch (FeignException e) {
+            log.error("admin menus feign userId={} status={}", userId, e.status(), e);
             throw new BizErrorException(ExceptionCode.BAD_GATEWAY.getValue(), "服务暂时不可用，请稍后重试");
         }
         if (vo.getCode() == null || vo.getCode() != 200 || vo.getData() == null) {

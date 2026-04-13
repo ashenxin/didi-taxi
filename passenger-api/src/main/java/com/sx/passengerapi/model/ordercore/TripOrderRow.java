@@ -31,6 +31,9 @@ public class TripOrderRow {
     private String cancelReason;
     private LocalDateTime createdAt;
     private LocalDateTime assignedAt;
+    private LocalDateTime offerExpiresAt;
+    private Integer offerRound;
+    private LocalDateTime lastOfferAt;
     private LocalDateTime acceptedAt;
     private LocalDateTime arrivedAt;
     private LocalDateTime startedAt;
@@ -229,6 +232,30 @@ public class TripOrderRow {
 
     public void setAssignedAt(LocalDateTime assignedAt) {
         this.assignedAt = assignedAt;
+    }
+
+    public LocalDateTime getOfferExpiresAt() {
+        return offerExpiresAt;
+    }
+
+    public void setOfferExpiresAt(LocalDateTime offerExpiresAt) {
+        this.offerExpiresAt = offerExpiresAt;
+    }
+
+    public Integer getOfferRound() {
+        return offerRound;
+    }
+
+    public void setOfferRound(Integer offerRound) {
+        this.offerRound = offerRound;
+    }
+
+    public LocalDateTime getLastOfferAt() {
+        return lastOfferAt;
+    }
+
+    public void setLastOfferAt(LocalDateTime lastOfferAt) {
+        this.lastOfferAt = lastOfferAt;
     }
 
     public LocalDateTime getAcceptedAt() {

@@ -12,6 +12,7 @@ import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.CreateOrderResult;
 import com.sx.order.model.dto.DriverIdBody;
 import com.sx.order.model.dto.FinishOrderBody;
+import com.sx.order.model.dto.OpenDriverOfferBody;
 import com.sx.order.service.TripOrderWriteService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -75,7 +76,22 @@ public class TripOrderController {
     }
 
     /**
-     * 乘客取消：仅允许 {@code CREATED/ASSIGNED/ACCEPTED → CANCELLED}，且校验 {@code passengerId} 归属。
+     * 打开司机确认窗口：{@code ASSIGNED → PENDING_DRIVER_CONFIRM}，写入 {@code offer_expires_at}。
+     * <p>{@code POST /api/v1/orders/{orderNo}/offer/open}</p>
+     */
+    @PostMapping("/{orderNo}/offer/open")
+    public ResponseVo<Void> openDriverOffer(@PathVariable String orderNo,
+                                            @RequestBody(required = false) OpenDriverOfferBody body) {
+        try {
+            tripOrderWriteService.openDriverOffer(orderNo, body != null ? body : new OpenDriverOfferBody());
+            return ResultUtil.success(null);
+        } catch (IllegalArgumentException ex) {
+            return ResultUtil.requestError(ex.getMessage());
+        }
+    }
+
+    /**
+     * 乘客取消：仅允许 {@code CREATED/ASSIGNED/PENDING_DRIVER_CONFIRM/ACCEPTED → CANCELLED}，且校验 {@code passengerId} 归属。
      * <p>{@code POST /api/v1/orders/{orderNo}/cancel}</p>
      */
     @PostMapping("/{orderNo}/cancel")
@@ -93,7 +109,7 @@ public class TripOrderController {
     }
 
     /**
-     * 司机名下「待确认指派」订单列表（{@code status=ASSIGNED}）。
+     * 司机名下「待确认指派」订单列表（{@code ASSIGNED} 或 {@code PENDING_DRIVER_CONFIRM}）。
      * <p>{@code GET /api/v1/orders/assigned}</p>
      * <p>身份从 {@code X-User-Id} 获取；为兼容旧调用方，可选传 {@code driverId}，但必须与登录身份一致。</p>
      */
@@ -117,7 +133,7 @@ public class TripOrderController {
     }
 
     /**
-     * 司机接单：{@code ASSIGNED → ACCEPTED}（幂等：已为 ACCEPTED 则成功）；校验 {@code driverId} 与订单指派一致。
+     * 司机接单：{@code ASSIGNED} 或 {@code PENDING_DRIVER_CONFIRM → ACCEPTED}（幂等：已为 ACCEPTED 则成功）。
      * <p>{@code POST /api/v1/orders/{orderNo}/accept}</p>
      */
     @PostMapping("/{orderNo}/accept")

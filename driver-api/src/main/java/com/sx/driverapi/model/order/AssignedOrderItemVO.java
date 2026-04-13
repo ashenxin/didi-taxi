@@ -1,6 +1,7 @@
 package com.sx.driverapi.model.order;
 
 import java.io.Serializable;
+import java.time.LocalDateTime;
 
 public class AssignedOrderItemVO implements Serializable {
     private String orderNo;
@@ -9,6 +10,8 @@ public class AssignedOrderItemVO implements Serializable {
     private Pickup pickup;
     /** 预计到达上车点秒数；MVP 暂无精确 ETA 时可为 null */
     private Integer etaSeconds;
+    /** 当前派单确认窗口截止时间（status=PENDING_DRIVER_CONFIRM 时有效） */
+    private LocalDateTime offerExpiresAt;
 
     public String getOrderNo() {
         return orderNo;
@@ -40,6 +43,14 @@ public class AssignedOrderItemVO implements Serializable {
 
     public void setEtaSeconds(Integer etaSeconds) {
         this.etaSeconds = etaSeconds;
+    }
+
+    public LocalDateTime getOfferExpiresAt() {
+        return offerExpiresAt;
+    }
+
+    public void setOfferExpiresAt(LocalDateTime offerExpiresAt) {
+        this.offerExpiresAt = offerExpiresAt;
     }
 
     public static class Pickup implements Serializable {

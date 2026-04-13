@@ -3,6 +3,7 @@ package com.sx.capacity.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.capacity.dao.DriverEntityMapper;
 import com.sx.capacity.model.Driver;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -10,6 +11,7 @@ import java.util.Date;
 import java.util.Objects;
 
 @Service
+@Slf4j
 public class DriverStatusService {
 
     private final DriverEntityMapper driverEntityMapper;
@@ -42,6 +44,7 @@ public class DriverStatusService {
                 .set(Driver::getUpdatedAt, new Date())
                 .eq(Driver::getId, driverId)
                 .eq(Driver::getIsDeleted, 0));
+        log.info("driver monitor updated driverId={} online={} monitorStatus={}", driverId, online, monitor);
     }
 
     /**

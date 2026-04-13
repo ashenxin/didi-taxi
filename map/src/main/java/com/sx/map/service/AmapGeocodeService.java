@@ -6,6 +6,7 @@ import com.sx.map.config.AmapProperties;
 import com.sx.map.exception.AmapApiException;
 import com.sx.map.model.dto.GeocodeDemoResponse;
 import com.sx.map.model.dto.RegeoDemoResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
@@ -21,6 +22,7 @@ import java.util.UUID;
  * <p>文档：<a href="https://lbs.amap.com/api/webservice/guide/api/georegeo">地理/逆地理编码</a>。</p>
  */
 @Service
+@Slf4j
 public class AmapGeocodeService {
 
     private static final String GEO_PATH = "/v3/geocode/geo";
@@ -87,6 +89,7 @@ public class AmapGeocodeService {
         resp.setLevel(text(first, "level"));
         resp.setProvider("gaode");
         resp.setTraceId(UUID.randomUUID().toString());
+        log.info("amap geocode ok address={} lng={} lat={}", address.trim(), lngLat[0], lngLat[1]);
         return resp;
     }
 
@@ -138,6 +141,7 @@ public class AmapGeocodeService {
         resp.setAdcode(text(ac, "adcode"));
         resp.setProvider("gaode");
         resp.setTraceId(UUID.randomUUID().toString());
+        log.info("amap regeo ok lng={} lat={}", lng, lat);
         return resp;
     }
 
@@ -149,6 +153,7 @@ public class AmapGeocodeService {
         try {
             return objectMapper.readTree(raw);
         } catch (Exception e) {
+            log.error("amap json parse failed uri={}", uri, e);
             throw new AmapApiException("解析高德响应失败: " + e.getMessage());
         }
     }

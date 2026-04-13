@@ -12,6 +12,7 @@ import com.sx.adminapi.model.order.AdminOrderEventVO;
 import com.sx.adminapi.model.order.AdminOrderPageVO;
 import com.sx.adminapi.model.order.AdminOrderVO;
 import feign.FeignException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -23,6 +24,7 @@ import java.util.Map;
 import java.util.Objects;
 
 @Service
+@Slf4j
 public class AdminOrderService {
 
     private final OrderClient orderClient;
@@ -159,6 +161,7 @@ public class AdminOrderService {
         AdminOrderDetailVO resp = new AdminOrderDetailVO();
         resp.setOrder(order);
         resp.setEvents(events);
+        log.info("admin order detail loaded orderNo={} events={}", orderNo, events.size());
         return resp;
     }
 

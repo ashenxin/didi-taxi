@@ -1,9 +1,14 @@
 package com.sx.driverapi.model.ordercore;
 
+import lombok.Getter;
+import lombok.Setter;
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /** 与 order-service {@code TripOrder} JSON 对齐。 */
+@Getter
+@Setter
 public class TripOrderRow {
     private Long id;
     private String orderNo;
@@ -29,6 +34,9 @@ public class TripOrderRow {
     private String cancelReason;
     private LocalDateTime createdAt;
     private LocalDateTime assignedAt;
+    private LocalDateTime offerExpiresAt;
+    private Integer offerRound;
+    private LocalDateTime lastOfferAt;
     private LocalDateTime acceptedAt;
     private LocalDateTime arrivedAt;
     private LocalDateTime startedAt;
@@ -36,28 +44,4 @@ public class TripOrderRow {
     private LocalDateTime cancelledAt;
     private LocalDateTime updatedAt;
     private Integer isDeleted;
-
-    public String getOrderNo() {
-        return orderNo;
-    }
-
-    public void setOrderNo(String orderNo) {
-        this.orderNo = orderNo;
-    }
-
-    public String getOriginAddress() {
-        return originAddress;
-    }
-
-    public void setOriginAddress(String originAddress) {
-        this.originAddress = originAddress;
-    }
-
-    public Integer getStatus() {
-        return status;
-    }
-
-    public void setStatus(Integer status) {
-        this.status = status;
-    }
 }

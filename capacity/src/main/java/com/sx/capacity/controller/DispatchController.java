@@ -8,6 +8,7 @@ import com.sx.capacity.dao.DriverEntityMapper;
 import com.sx.capacity.model.Car;
 import com.sx.capacity.model.Driver;
 import com.sx.capacity.model.dto.NearestDriverResult;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -25,6 +26,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/v1/dispatch")
+@Slf4j
 public class DispatchController {
 
     private final DriverEntityMapper driverEntityMapper;
@@ -59,6 +61,7 @@ public class DispatchController {
         }
         List<Car> cars = carEntityMapper.selectList(carQw.last("LIMIT 200"));
         if (cars == null || cars.isEmpty()) {
+            log.warn("nearest-driver: no cars cityCode={} productCode={}", cityCode, productCode);
             return ResultUtil.error(404, "无可用车辆/司机");
         }
 
@@ -94,9 +97,11 @@ public class DispatchController {
             resp.setCarNo(car.getCarNo());
             resp.setCityCode(cityCode);
             resp.setProductCode(productCode);
+            log.info("nearest-driver: hit driverId={} carId={} cityCode={}", d.getId(), car.getId(), cityCode);
             return ResultUtil.success(resp);
         }
 
+        log.warn("nearest-driver: no eligible driver cityCode={} productCode={}", cityCode, productCode);
         return ResultUtil.error(404, "无可接单在线司机");
     }
 }

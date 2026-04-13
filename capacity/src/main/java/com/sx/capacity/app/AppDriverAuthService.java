@@ -165,6 +165,7 @@ public class AppDriverAuthService {
             return ResultUtil.error(409, "该手机号已注册，请直接登录");
         }
         clearLoginFailToday(phone);
+        log.info("driver registerSms success driverId={} phone={}", d.getId(), maskPhone(phone));
         return ResultUtil.success(toBrief(d));
     }
 
@@ -208,7 +209,9 @@ public class AppDriverAuthService {
                 .eq(Driver::getIsDeleted, 0));
         Driver refreshed = driverMapper.selectById(d.getId());
         clearLoginFailToday(phone);
-        return ResultUtil.success(toBrief(refreshed == null ? d : refreshed));
+        Driver out = refreshed == null ? d : refreshed;
+        log.info("driver registerPassword success driverId={} phone={}", out.getId(), maskPhone(phone));
+        return ResultUtil.success(toBrief(out));
     }
 
     /**
@@ -233,6 +236,7 @@ public class AppDriverAuthService {
             return ResultUtil.error(otpOk.getCode(), otpOk.getMsg());
         }
         clearLoginFailToday(phone);
+        log.info("driver loginSms success driverId={} phone={}", d.getId(), maskPhone(phone));
         return ResultUtil.success(toBrief(d));
     }
 
@@ -261,7 +265,15 @@ public class AppDriverAuthService {
             return ResultUtil.error(401, "手机号或密码错误");
         }
         clearLoginFailToday(phone);
+        log.info("driver loginPassword success driverId={} phone={}", d.getId(), maskPhone(phone));
         return ResultUtil.success(toBrief(d));
+    }
+
+    private static String maskPhone(String phone) {
+        if (phone == null || phone.length() < 4) {
+            return "****";
+        }
+        return "****" + phone.substring(phone.length() - 4);
     }
 
     /**

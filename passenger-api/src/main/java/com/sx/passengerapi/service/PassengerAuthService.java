@@ -10,9 +10,11 @@ import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
 import com.sx.passengerapi.model.auth.CustomerProfileVO;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 @Service
+@Slf4j
 public class PassengerAuthService {
 
     private final PassengerCoreAuthClient passengerCoreAuthClient;
@@ -31,6 +33,7 @@ public class PassengerAuthService {
         if (body.getCode() != 200) {
             throw new BizErrorException(body.getCode(), body.getMsg());
         }
+        log.info("passenger sms send requested phone={}", maskPhone(phone));
     }
 
     public CustomerLoginResponse loginSms(String phone, String code) {
@@ -72,7 +75,15 @@ public class PassengerAuthService {
         resp.setTokenType("Bearer");
         resp.setExpiresIn(jwtService.getExpirationSeconds());
         resp.setCustomer(profile);
+        log.info("passenger login success customerId={} phone={}", brief.getId(), maskPhone(brief.getPhone()));
         return resp;
+    }
+
+    private static String maskPhone(String phone) {
+        if (phone == null || phone.length() < 4) {
+            return "****";
+        }
+        return "****" + phone.substring(phone.length() - 4);
     }
 }
 

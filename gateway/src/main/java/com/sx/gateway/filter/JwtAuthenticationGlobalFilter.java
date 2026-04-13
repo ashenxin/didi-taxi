@@ -17,6 +17,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
@@ -26,6 +28,8 @@ import java.util.Map;
  */
 @Component
 public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationGlobalFilter.class);
 
     private static final String BEARER_PREFIX = "Bearer ";
 
@@ -60,10 +64,12 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
 
         String raw = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
         if (raw == null || raw.isBlank() || !raw.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
+            log.warn("JWT missing or not bearer path={}", path);
             return unauthorized(exchange, "缺少或非法的 Authorization");
         }
         String token = raw.substring(BEARER_PREFIX.length()).trim();
         if (token.isEmpty()) {
+            log.warn("JWT empty token path={}", path);
             return unauthorized(exchange, "缺少或非法的 Authorization");
         }
         try {
@@ -73,8 +79,10 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
                     .build();
             return chain.filter(exchange.mutate().request(mutated).build());
         } catch (ExpiredJwtException e) {
+            log.warn("JWT expired path={} msg={}", path, e.getMessage());
             return unauthorized(exchange, "token 已过期");
         } catch (JwtException | IllegalStateException e) {
+            log.warn("JWT invalid path={} msg={}", path, e.getMessage());
             return unauthorized(exchange, "token 无效");
         }
     }
@@ -105,6 +113,10 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
     }
 
     private boolean isPublic(String path, HttpMethod method) {
+        // WebSocket 握手常无法带 Authorization，由 driver-api 从 query token 校验
+        if (HttpMethod.GET.equals(method) && path.startsWith("/driver/ws/")) {
+            return true;
+        }
         if (path.equals("/actuator/health") || path.startsWith("/actuator/health/")) {
             return true;
         }
@@ -147,6 +159,7 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
         try {
             body = objectMapper.writeValueAsBytes(Map.of("code", 401, "msg", msg));
         } catch (JsonProcessingException e) {
+            log.error("Failed to serialize 401 JSON body", e);
             body = "{\"code\":401,\"msg\":\"Unauthorized\"}".getBytes();
         }
         DataBuffer buffer = exchange.getResponse().bufferFactory().wrap(body);

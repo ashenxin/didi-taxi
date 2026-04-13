@@ -13,6 +13,7 @@ import com.sx.capacity.model.Driver;
 import com.sx.capacity.model.DriverTeamChangeRequest;
 import com.sx.capacity.model.dto.DriverTeamChangeRequestVO;
 import com.sx.capacity.model.enums.DriverTeamChangeStatus;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -27,6 +28,7 @@ import java.util.stream.Collectors;
  * 司机换运力主体（换队）申请：提交、分页、详情、审核。
  */
 @Service
+@Slf4j
 public class DriverTeamChangeService {
 
     private final DriverTeamChangeRequestMapper requestMapper;
@@ -81,6 +83,7 @@ public class DriverTeamChangeService {
         driver.setUpdatedAt(now);
         driverMapper.updateById(driver);
 
+        log.info("team change submitted requestId={} driverId={} toTeamId={}", row.getId(), driverId, toTeamId);
         return row.getId();
     }
 
@@ -188,6 +191,7 @@ public class DriverTeamChangeService {
         driver.setCanAcceptOrder(1);
         driver.setUpdatedAt(now);
         driverMapper.updateById(driver);
+        log.info("team change approved requestId={} driverId={}", id, fresh.getDriverId());
     }
 
     /**
@@ -209,6 +213,7 @@ public class DriverTeamChangeService {
         if (n == 0) {
             throw new CapacityBizException("申请不存在或已审核");
         }
+        log.info("team change rejected requestId={}", id);
     }
 
     private DriverTeamChangeRequestVO toVo(DriverTeamChangeRequest r) {

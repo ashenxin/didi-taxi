@@ -9,6 +9,7 @@ import com.sx.adminapi.model.pricing.AdminFareRuleVO;
 import com.sx.adminapi.model.pricing.FareRuleUpsertBody;
 import com.sx.adminapi.security.AdminDataScope;
 import com.sx.adminapi.security.AdminLoginUser;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -20,6 +21,7 @@ import java.util.Map;
  * 计价规则 BFF：分页/详情/增删改均经 {@link AdminDataScope} 裁剪查询条件或写 body 中的省、市。
  */
 @Service
+@Slf4j
 public class AdminPricingService {
 
     private final CalculateClient calculateClient;
@@ -96,7 +98,9 @@ public class AdminPricingService {
         if (data == null) {
             return null;
         }
-        return Long.valueOf(String.valueOf(data));
+        Long id = Long.valueOf(String.valueOf(data));
+        log.info("admin fare rule created id={} city={}", id, scoped.getCityCode());
+        return id;
     }
 
     /** 更新；先 {@link #detailForMutation} 做域校验，再锁定 body 省、市。 */
@@ -107,6 +111,7 @@ public class AdminPricingService {
         AdminDataScope.scopeFareRuleWrite(AdminDataScope.requireUser(), scoped);
         Map<String, Object> wrapper = calculateClient.update(id, objectMapper.convertValue(scoped, Map.class));
         unwrapData(wrapper);
+        log.info("admin fare rule updated id={}", id);
     }
 
     /** 删除；域校验同 {@link #update}。 */
@@ -115,6 +120,7 @@ public class AdminPricingService {
         AdminDataScope.assertFareRuleReadable(AdminDataScope.requireUser(), existing.getProvinceCode(), existing.getCityCode());
         Map<String, Object> wrapper = calculateClient.delete(id);
         unwrapData(wrapper);
+        log.info("admin fare rule deleted id={}", id);
     }
 
     /** 写操作前拉取规则；不经过 {@link #detail(Long)}，避免重复做可读性断言。 */

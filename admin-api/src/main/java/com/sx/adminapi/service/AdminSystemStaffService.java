@@ -14,6 +14,7 @@ import com.sx.adminapi.model.system.AdminStaffUpdateBody;
 import com.sx.adminapi.model.system.AdminSystemStaffUserVO;
 import com.sx.adminapi.security.AdminLoginUser;
 import feign.FeignException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Service
+@Slf4j
 public class AdminSystemStaffService {
 
     private final PassengerAdminSysClient passengerAdminSysClient;
@@ -67,7 +69,9 @@ public class AdminSystemStaffService {
                 body.getCityCode());
         ResponseVo<PassengerStaffUserVO> vo = callPassengerResponse(
                 () -> passengerAdminSysClient.staffCreate(caller.userId(), req));
-        return map(requireOk(vo, null));
+        AdminSystemStaffUserVO out = map(requireOk(vo, null));
+        log.info("admin staff created id={} username={}", out != null ? out.getId() : null, body.getUsername());
+        return out;
     }
 
     public AdminSystemStaffUserVO update(long id, AdminStaffUpdateBody body) {
@@ -80,13 +84,16 @@ public class AdminSystemStaffService {
         req.setCityCode(body.getCityCode());
         ResponseVo<PassengerStaffUserVO> vo = callPassengerResponse(
                 () -> passengerAdminSysClient.staffUpdate(caller.userId(), id, req));
-        return map(requireOk(vo, null));
+        AdminSystemStaffUserVO out = map(requireOk(vo, null));
+        log.info("admin staff updated id={}", id);
+        return out;
     }
 
     public void delete(long id) {
         AdminLoginUser caller = requireStaffManager();
         ResponseVo<Void> vo = callPassengerResponse(() -> passengerAdminSysClient.staffDelete(caller.userId(), id));
         requireOk(vo, null);
+        log.info("admin staff deleted id={}", id);
     }
 
     private static AdminLoginUser requireStaffManager() {

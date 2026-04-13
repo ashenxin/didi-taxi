@@ -5,6 +5,7 @@ import com.sx.passengerapi.model.ordercore.AssignOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderResult;
 import com.sx.passengerapi.model.ordercore.CancelOrderBody;
+import com.sx.passengerapi.model.ordercore.OpenDriverOfferBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,6 +21,9 @@ public interface OrderClient {
 
     @PostMapping("/api/v1/orders/{orderNo}/assign")
     ResponseVo<Void> assign(@PathVariable("orderNo") String orderNo, @RequestBody AssignOrderBody body);
+
+    @PostMapping("/api/v1/orders/{orderNo}/offer/open")
+    ResponseVo<Void> openDriverOffer(@PathVariable("orderNo") String orderNo, @RequestBody OpenDriverOfferBody body);
 
     @GetMapping("/api/v1/orders/{orderNo}")
     ResponseVo<TripOrderRow> getByOrderNo(@PathVariable("orderNo") String orderNo);

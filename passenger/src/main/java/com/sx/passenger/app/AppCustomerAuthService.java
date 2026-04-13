@@ -82,6 +82,7 @@ public class AppCustomerAuthService {
             recordLoginFail(req.getPhone());
             return unauthorized();
         }
+        log.info("passenger core loginPassword ok customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
         return ResultUtil.success(toBrief(c));
     }
 
@@ -149,7 +150,15 @@ public class AppCustomerAuthService {
         if (c.getStatus() != null && c.getStatus() != 0) {
             return ResultUtil.forbidden("账号已冻结，请联系客服");
         }
+        log.info("passenger core loginSms ok customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
         return ResultUtil.success(toBrief(c));
+    }
+
+    private static String maskPhone(String phone) {
+        if (phone == null || phone.length() < 4) {
+            return "****";
+        }
+        return "****" + phone.substring(phone.length() - 4);
     }
 
     private Customer findActiveByPhone(String phone) {

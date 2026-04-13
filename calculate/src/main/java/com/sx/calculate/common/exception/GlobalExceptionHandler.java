@@ -5,6 +5,7 @@ import com.sx.calculate.common.util.ResultUtil;
 import com.sx.calculate.common.vo.ResponseVo;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.annotation.Validated;
@@ -17,11 +18,13 @@ import static java.util.stream.Collectors.joining;
 
 @Validated
 @RestControllerAdvice
+@Slf4j
 public class GlobalExceptionHandler {
     @ExceptionHandler(BindException.class)
     public ResponseVo<?> bindExceptionHandler(BindException e) {
         final String errMsg = e.getBindingResult().getFieldErrors().stream()
                 .map(FieldError::getDefaultMessage).collect(joining(", "));
+        log.warn("BindException: {}", errMsg);
         return ResultUtil.requestError(errMsg);
     }
 
@@ -29,11 +32,13 @@ public class GlobalExceptionHandler {
     public ResponseVo<?> methodArgumentNotValidException(MethodArgumentNotValidException e) {
         final String errMsg = e.getBindingResult().getFieldErrors().stream()
                 .map(FieldError::getDefaultMessage).collect(joining(", "));
+        log.warn("MethodArgumentNotValid: {}", errMsg);
         return ResultUtil.requestError(errMsg);
     }
 
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ResponseVo<?> missingServletRequestParameterExceptionHandler(MissingServletRequestParameterException e) {
+        log.warn("MissingServletRequestParameter: {}", e.getParameterName());
         return ResultUtil.requestError(String.format("参数[%s]不能为空", e.getParameterName()));
     }
 
@@ -42,11 +47,13 @@ public class GlobalExceptionHandler {
         final String errMsg = e.getConstraintViolations().stream()
                 .map(ConstraintViolation::getMessage)
                 .collect(joining(", "));
+        log.warn("ConstraintViolation: {}", errMsg);
         return ResultUtil.requestError(errMsg);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseVo<?> exceptionHandler(Exception e) {
-        return ResultUtil.error(ExceptionCode.SERVER_ERROR.getValue(), "抛出的异常:" + e.getClass().getSimpleName());
+        log.error("Unhandled exception type={} msg={}", e.getClass().getName(), e.getMessage(), e);
+        return ResultUtil.error(ExceptionCode.SERVER_ERROR.getValue(), "服务器繁忙，请稍后重试");
     }
 }
