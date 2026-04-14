@@ -4,6 +4,8 @@ import com.sx.driverapi.client.CapacityDriverClient;
 import com.sx.driverapi.client.CoreResponseVo;
 import com.sx.driverapi.client.OrderClient;
 import com.sx.driverapi.common.exception.BizErrorException;
+import com.sx.driverapi.model.capacity.CapacityDriverSnapshot;
+import com.sx.driverapi.model.capacity.DriverListeningStatusVO;
 import com.sx.driverapi.model.capacity.DriverOnlineBody;
 import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
@@ -34,11 +36,25 @@ public class DriverBffService {
         this.orderClient = orderClient;
     }
 
-    public void setOnline(Long driverId, boolean online) {
+    public void setOnline(Long driverId, boolean online, Double lat, Double lng) {
         DriverOnlineBody body = new DriverOnlineBody();
         body.setOnline(online);
+        body.setLat(lat);
+        body.setLng(lng);
         unwrap(capacityDriverClient.setOnline(driverId, body), "运力上线状态");
         log.info("driver online updated driverId={} online={}", driverId, online);
+    }
+
+    /**
+     * 当前司机听单状态（与运力 {@code monitor_status} 一致），供前端禁用重复上线/下线。
+     */
+    public DriverListeningStatusVO getListeningStatus(Long driverId) {
+        CoreResponseVo<CapacityDriverSnapshot> resp = capacityDriverClient.getDriver(driverId);
+        unwrap(resp, "拉取司机听单状态");
+        CapacityDriverSnapshot snap = resp.getData();
+        DriverListeningStatusVO vo = new DriverListeningStatusVO();
+        vo.setMonitorStatus(snap != null ? snap.getMonitorStatus() : null);
+        return vo;
     }
 
     public List<AssignedOrderItemVO> listAssigned(Long driverId) {

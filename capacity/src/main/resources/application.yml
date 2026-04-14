@@ -36,7 +36,21 @@ mybatis-plus:
       id-type: auto
   mapper-locations: classpath*:mapper/**/*.xml
 
+services:
+  order:
+    base-url: ${ORDER_SERVICE_BASE_URL:http://127.0.0.1:8093}
+
 capacity:
+  dispatch:
+    # 司机与上车点直线距离上限（米），与《乘客司机端_Redis与听单下线策略》一致
+    match-radius-meters: 3000
+    driver-geo-ttl-seconds: 600
+    driver-offer-seconds: 10
+    # 自测：指定司机上线时强制写入 GEO 的坐标（与 passenger-demo 东站起点一致，避免本机定位超 3km / 非最近邻）；生产请删除或置空
+    geo-pin:
+      80004:
+        lat: 30.2525
+        lng: 120.2156
   app:
     driver-auth:
       code-ttl-seconds: 300
@@ -44,3 +58,25 @@ capacity:
       daily-sms-limit-per-phone: 5
       daily-login-fail-limit-per-phone: 5
       mock-send-enabled: true
+
+---
+# 非生产：打印 MyBatis SQL（--spring.profiles.active=dev）
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+logging:
+  level:
+    com.sx.capacity.dao: DEBUG
+
+---
+# 非生产：与 dev 相同（IDE 常用 --spring.profiles.active=local）
+spring:
+  config:
+    activate:
+      on-profile: local
+
+logging:
+  level:
+    com.sx.capacity.dao: DEBUG

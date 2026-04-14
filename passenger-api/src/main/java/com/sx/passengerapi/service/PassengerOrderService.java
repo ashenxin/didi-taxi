@@ -26,6 +26,7 @@ import com.sx.passengerapi.model.ordercore.CreateOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderResult;
 import com.sx.passengerapi.model.ordercore.OpenDriverOfferBody;
 import com.sx.passengerapi.model.ordercore.Place;
+import com.sx.passengerapi.model.capacity.PendingOrderIndexBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -202,7 +203,9 @@ public class PassengerOrderService {
      * MVP 约定：查不到司机时返回 {@code null}（capacity 用 404 表示“无可用司机”）。
      */
     public NearestDriverResult searchNearestDriver(CreateAndAssignOrderBody body) {
-        var resp = capacityDispatchClient.nearestDriver(body.getCityCode(), body.getProductCode());
+        Double olat = body.getOrigin() == null ? null : body.getOrigin().getLat();
+        Double olng = body.getOrigin() == null ? null : body.getOrigin().getLng();
+        var resp = capacityDispatchClient.nearestDriver(body.getCityCode(), body.getProductCode(), olat, olng);
         if (resp == null) {
             throw new BizErrorException(502, "运力服务响应为空");
         }
@@ -283,6 +286,7 @@ public class PassengerOrderService {
         if (nearest != null) {
             assignOrder(orderNo, nearest, etaSeconds);//指派司机
             openDriverOffer(orderNo);
+            registerPendingOrderIndex(nearest.getDriverId(), orderNo);
         }
 
         CreateAndAssignOrderResult out = new CreateAndAssignOrderResult();
@@ -364,6 +368,8 @@ public class PassengerOrderService {
         vo.setOriginAddress(row.getOriginAddress());
         vo.setDestAddress(row.getDestAddress());
         vo.setStatus(OrderStatus.fromCode(row.getStatus()));
+        vo.setCancelBy(row.getCancelBy());
+        vo.setCancelReason(row.getCancelReason());
         vo.setEstimatedAmount(row.getEstimatedAmount());
         vo.setFinalAmount(row.getFinalAmount());
         if (row.getDriverId() != null) {
@@ -405,6 +411,26 @@ public class PassengerOrderService {
         }
         p.setAddress(addr);
         return p;
+    }
+
+    /**
+     * 指派成功后写入运力侧订单池索引（派生缓存）；失败不影响主链路。
+     */
+    private void registerPendingOrderIndex(Long driverId, String orderNo) {
+        if (driverId == null || orderNo == null || orderNo.isBlank()) {
+            return;
+        }
+        try {
+            PendingOrderIndexBody idx = new PendingOrderIndexBody();
+            idx.setDriverId(driverId);
+            idx.setOrderNo(orderNo);
+            var resp = capacityDispatchClient.addPendingOrderIndex(idx);
+            if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+                log.warn("pending-order-index failed orderNo={} driverId={}", orderNo, driverId);
+            }
+        } catch (Exception e) {
+            log.warn("pending-order-index error orderNo={} driverId={}: {}", orderNo, driverId, e.toString());
+        }
     }
 }
 

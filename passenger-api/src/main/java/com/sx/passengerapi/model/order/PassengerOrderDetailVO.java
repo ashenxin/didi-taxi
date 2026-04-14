@@ -20,6 +20,13 @@ public class PassengerOrderDetailVO {
     private PassengerOrderDriverVO driver;
     private PassengerOrderTimestamps timestamps;
 
+    /**
+     * 取消方：1 乘客、3 系统等，与 trip_order.cancel_by 一致；未取消为 null。
+     */
+    private Integer cancelBy;
+    /** 取消原因（系统取消待派单超时时为固定文案） */
+    private String cancelReason;
+
     public String getOrderNo() {
         return orderNo;
     }
@@ -106,5 +113,21 @@ public class PassengerOrderDetailVO {
 
     public void setTimestamps(PassengerOrderTimestamps timestamps) {
         this.timestamps = timestamps;
+    }
+
+    public Integer getCancelBy() {
+        return cancelBy;
+    }
+
+    public void setCancelBy(Integer cancelBy) {
+        this.cancelBy = cancelBy;
+    }
+
+    public String getCancelReason() {
+        return cancelReason;
+    }
+
+    public void setCancelReason(String cancelReason) {
+        this.cancelReason = cancelReason;
     }
 }

@@ -57,3 +57,23 @@ mybatis-plus:
     db-config:
       id-type: auto
   mapper-locations: classpath*:mapper/**/*.xml
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+logging:
+  level:
+    com.sx.passenger.dao: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+
+logging:
+  level:
+    com.sx.passenger.dao: DEBUG

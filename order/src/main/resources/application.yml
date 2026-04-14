@@ -41,3 +41,29 @@ mybatis-plus:
     db-config:
       id-type: auto
   mapper-locations: classpath*:mapper/**/*.xml
+
+# 待派单（CREATED）超时：仅由定时任务系统取消，不依赖乘客轮询
+order:
+  dispatch:
+    wait-timeout-seconds: 180
+    timeout-scan-interval-ms: 30000
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+logging:
+  level:
+    com.sx.order.dao: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+
+logging:
+  level:
+    com.sx.order.dao: DEBUG

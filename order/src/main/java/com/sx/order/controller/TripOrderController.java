@@ -13,6 +13,7 @@ import com.sx.order.model.dto.CreateOrderResult;
 import com.sx.order.model.dto.DriverIdBody;
 import com.sx.order.model.dto.FinishOrderBody;
 import com.sx.order.model.dto.OpenDriverOfferBody;
+import com.sx.order.model.dto.PendingDispatchOrderDto;
 import com.sx.order.service.TripOrderWriteService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -107,6 +108,21 @@ public class TripOrderController {
                 return ResultUtil.error(403, msg);
             }
             return ResultUtil.requestError(msg);
+        }
+    }
+
+    /**
+     * 内部：待派单（{@code CREATED}）列表，供运力服务迟滞匹配；须带起点经纬度。
+     * {@code GET /api/v1/orders/internal/pending-dispatch?cityCode=&limit=}
+     */
+    @GetMapping("/internal/pending-dispatch")
+    public ResponseVo<List<PendingDispatchOrderDto>> internalPendingDispatch(
+            @RequestParam String cityCode,
+            @RequestParam(required = false, defaultValue = "50") Integer limit) {
+        try {
+            return ResultUtil.success(tripOrderWriteService.listCreatedForDispatch(cityCode, limit));
+        } catch (IllegalArgumentException ex) {
+            return ResultUtil.requestError(ex.getMessage());
         }
     }
 

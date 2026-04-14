@@ -2,6 +2,7 @@ package com.sx.driverapi.controller;
 
 import com.sx.driverapi.common.util.ResultUtil;
 import com.sx.driverapi.common.vo.ResponseVo;
+import com.sx.driverapi.model.capacity.DriverListeningStatusVO;
 import com.sx.driverapi.model.capacity.DriverOnlineBody;
 import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
@@ -48,8 +49,20 @@ public class DriverBffController {
                                   @RequestBody @Valid DriverOnlineBody body) {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(driverId, authedDriverId);
-        driverBffService.setOnline(authedDriverId, Boolean.TRUE.equals(body.getOnline()));
+        driverBffService.setOnline(authedDriverId, Boolean.TRUE.equals(body.getOnline()), body.getLat(), body.getLng());
         return ResultUtil.success();
+    }
+
+    /**
+     * 听单状态摘要（运力 {@code monitor_status}），用于前端控制上线/下线按钮。
+     * {@code GET /driver/api/v1/drivers/{driverId}/listening-status}
+     */
+    @GetMapping("/drivers/{driverId}/listening-status")
+    public ResponseVo<DriverListeningStatusVO> listeningStatus(@PathVariable Long driverId,
+                                                             @RequestHeader(value = USER_ID_HEADER, required = false) String userId) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(driverId, authedDriverId);
+        return ResultUtil.success(driverBffService.getListeningStatus(authedDriverId));
     }
 
     /**

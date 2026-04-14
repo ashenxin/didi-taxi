@@ -1,11 +1,15 @@
 package com.sx.capacity.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sx.capacity.config.CapacityDispatchProperties;
 import com.sx.capacity.dao.DriverEntityMapper;
 import com.sx.capacity.model.Driver;
+import com.sx.capacity.service.geo.DriverGeoRedisPool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Date;
 import java.util.Objects;
@@ -15,16 +19,26 @@ import java.util.Objects;
 public class DriverStatusService {
 
     private final DriverEntityMapper driverEntityMapper;
+    private final DriverGeoRedisPool driverGeoRedisPool;
+    private final LateDispatchMatchService lateDispatchMatchService;
+    private final CapacityDispatchProperties dispatchProperties;
 
-    public DriverStatusService(DriverEntityMapper driverEntityMapper) {
+    public DriverStatusService(DriverEntityMapper driverEntityMapper,
+                               DriverGeoRedisPool driverGeoRedisPool,
+                               LateDispatchMatchService lateDispatchMatchService,
+                               CapacityDispatchProperties dispatchProperties) {
         this.driverEntityMapper = driverEntityMapper;
+        this.driverGeoRedisPool = driverGeoRedisPool;
+        this.lateDispatchMatchService = lateDispatchMatchService;
+        this.dispatchProperties = dispatchProperties;
     }
 
     /**
      * 司机上线/下线：更新 {@code monitor_status}（0 未听单，1 听单中；服务中 2 由业务后续写入）。
+     * 若上线且携带 {@code lat/lng}，写入 Redis 司机池并尝试迟滞匹配待派单订单。
      */
     @Transactional
-    public void setOnline(Long driverId, boolean online) {
+    public void setOnline(Long driverId, boolean online, Double lat, Double lng) {
         if (driverId == null) {
             throw new IllegalArgumentException("driverId不能为空");
         }
@@ -45,6 +59,50 @@ public class DriverStatusService {
                 .eq(Driver::getId, driverId)
                 .eq(Driver::getIsDeleted, 0));
         log.info("driver monitor updated driverId={} online={} monitorStatus={}", driverId, online, monitor);
+
+        final String cityCode = d.getCityCode();
+        final Long did = driverId;
+        final boolean on = online;
+        double[] geoUse = resolveOnlineGeoCoords(driverId, lat, lng);
+        final Double flat = geoUse == null ? null : geoUse[0];
+        final Double flng = geoUse == null ? null : geoUse[1];
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    if (on && flat != null && flng != null) {
+                        driverGeoRedisPool.add(cityCode, did, flat, flng);
+                        lateDispatchMatchService.tryMatchAfterDriverOnline(did, cityCode, flat, flng);
+                    } else if (!on) {
+                        driverGeoRedisPool.remove(cityCode, did);
+                    }
+                } catch (Exception e) {
+                    log.warn("afterCommit driver pool/match failed driverId={}: {}", did, e.toString());
+                }
+            }
+        });
+    }
+
+    /**
+     * 自测锚点：{@code capacity.dispatch.geo-pin} 命中时优先使用配置坐标（可与乘客 demo 东站起点一致），否则使用请求体中的 lat/lng。
+     */
+    private double[] resolveOnlineGeoCoords(Long driverId, Double lat, Double lng) {
+        if (driverId == null || dispatchProperties.getGeoPin() == null) {
+            return toPairOrNull(lat, lng);
+        }
+        CapacityDispatchProperties.GeoPin pin = dispatchProperties.getGeoPin().get(driverId);
+        if (pin != null) {
+            log.info("driver geo-pin applied driverId={} lat={} lng={}", driverId, pin.getLat(), pin.getLng());
+            return new double[]{pin.getLat(), pin.getLng()};
+        }
+        return toPairOrNull(lat, lng);
+    }
+
+    private static double[] toPairOrNull(Double lat, Double lng) {
+        if (lat == null || lng == null) {
+            return null;
+        }
+        return new double[]{lat, lng};
     }
 
     /**

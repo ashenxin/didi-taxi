@@ -11,6 +11,7 @@ import com.sx.order.model.dto.CancelOrderBody;
 import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.FinishOrderBody;
 import com.sx.order.model.dto.OpenDriverOfferBody;
+import com.sx.order.model.dto.PendingDispatchOrderDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.stereotype.Service;
@@ -22,7 +23,6 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
-
 @Service
 @Slf4j
 public class TripOrderWriteService {
@@ -43,6 +43,11 @@ public class TripOrderWriteService {
     /** 与表注释一致：系统取消（如司机已接其他单） */
     private static final int CANCEL_BY_SYSTEM = 3;
 
+    /**
+     * 系统取消原因：待派单超时（order-service 定时任务），与 passenger 提示一致。
+     */
+    public static final String CANCEL_REASON_DISPATCH_TIMEOUT = "待派单超时无可用车辆，请稍后重试";
+
     private final TripOrderEntityMapper tripOrderEntityMapper;
     private final OrderEventEntityMapper orderEventEntityMapper;
 
@@ -57,6 +62,7 @@ public class TripOrderWriteService {
      */
     @Transactional
     public String create(CreateOrderBody body) {
+        //查看是否有进行中的订单
         assertNoActiveOrderForPassenger(body.getPassengerId());
 
         LocalDateTime now = LocalDateTime.now();
@@ -267,6 +273,66 @@ public class TripOrderWriteService {
     }
 
     /**
+     * 查询「待派单超时」候选：{@code CREATED} 且创建时间早于 deadline。
+     */
+    public List<TripOrder> listCreatedOlderThan(LocalDateTime deadline) {
+        return tripOrderEntityMapper.selectList(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getStatus, STATUS_CREATED)
+                .eq(TripOrder::getIsDeleted, 0)
+                .lt(TripOrder::getCreatedAt, deadline)
+                .orderByAsc(TripOrder::getCreatedAt)
+                .last("LIMIT 200"));
+    }
+
+    /**
+     * 将单笔 {@code CREATED} 订单系统取消为 {@code CANCELLED}（待派单超时）；独立事务，供定时任务逐单调用。
+     *
+     * @return 是否本次成功更新一行
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean cancelCreatedDispatchTimeoutOne(String orderNo, LocalDateTime now) {
+        if (orderNo == null || orderNo.isBlank()) {
+            return false;
+        }
+        int updated = tripOrderEntityMapper.update(null,
+                Wrappers.<TripOrder>lambdaUpdate()
+                        .set(TripOrder::getStatus, STATUS_CANCELLED)
+                        .set(TripOrder::getCancelBy, CANCEL_BY_SYSTEM)
+                        .set(TripOrder::getCancelReason, CANCEL_REASON_DISPATCH_TIMEOUT)
+                        .set(TripOrder::getCancelledAt, now)
+                        .set(TripOrder::getUpdatedAt, now)
+                        .eq(TripOrder::getOrderNo, orderNo)
+                        .eq(TripOrder::getIsDeleted, 0)
+                        .eq(TripOrder::getStatus, STATUS_CREATED));
+        if (updated != 1) {
+            return false;
+        }
+        TripOrder after = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getOrderNo, orderNo)
+                .eq(TripOrder::getIsDeleted, 0)
+                .last("LIMIT 1"));
+        if (after == null) {
+            return false;
+        }
+        OrderEvent event = new OrderEvent()
+                .setOrderId(after.getId())
+                .setOrderNo(orderNo)
+                .setEventType("ORDER_CANCELLED")
+                .setFromStatus(STATUS_CREATED)
+                .setToStatus(STATUS_CANCELLED)
+                .setOperatorType(OPERATOR_SYSTEM)
+                .setOperatorId(null)
+                .setReasonCode("DISPATCH_TIMEOUT")
+                .setReasonDesc(CANCEL_REASON_DISPATCH_TIMEOUT)
+                .setEventPayload("{}")
+                .setOccurredAt(now)
+                .setCreatedAt(now);
+        orderEventEntityMapper.insert(event);
+        log.info("order cancelled by system (dispatch timeout) orderNo={}", orderNo);
+        return true;
+    }
+
+    /**
      * 指派给司机且仍为「待确认」的订单（派单轮询列表）：{@code ASSIGNED} 或 {@code PENDING_DRIVER_CONFIRM}。
      * 已完单（{@link #STATUS_FINISHED}）、已取消（{@link #STATUS_CANCELLED}）及行程中状态均不在此列表。
      */
@@ -279,6 +345,38 @@ public class TripOrderWriteService {
                 .in(TripOrder::getStatus, STATUS_ASSIGNED, STATUS_PENDING_DRIVER_CONFIRM)
                 .eq(TripOrder::getIsDeleted, 0)
                 .orderByDesc(TripOrder::getAssignedAt));
+    }
+
+    /**
+     * 待派单队列：{@code CREATED} 且起点坐标已落库，供运力服务做迟滞匹配（按创建时间升序）。
+     */
+    public List<PendingDispatchOrderDto> listCreatedForDispatch(String cityCode, int limit) {
+        if (cityCode == null || cityCode.isBlank()) {
+            throw new IllegalArgumentException("cityCode不能为空");
+        }
+        int lim = (limit <= 0 || limit > 100) ? 50 : limit;
+        List<TripOrder> list = tripOrderEntityMapper.selectList(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getCityCode, cityCode)
+                .eq(TripOrder::getStatus, STATUS_CREATED)
+                .eq(TripOrder::getIsDeleted, 0)
+                .isNotNull(TripOrder::getOriginLat)
+                .isNotNull(TripOrder::getOriginLng)
+                .orderByAsc(TripOrder::getCreatedAt)
+                .last("LIMIT " + lim));
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        return list.stream().map(this::toPendingDispatchDto).toList();
+    }
+
+    private PendingDispatchOrderDto toPendingDispatchDto(TripOrder o) {
+        PendingDispatchOrderDto d = new PendingDispatchOrderDto();
+        d.setOrderNo(o.getOrderNo());
+        d.setCityCode(o.getCityCode());
+        d.setProductCode(o.getProductCode());
+        d.setOriginLat(o.getOriginLat());
+        d.setOriginLng(o.getOriginLng());
+        return d;
     }
 
     /**

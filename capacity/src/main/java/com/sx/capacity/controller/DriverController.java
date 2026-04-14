@@ -47,7 +47,7 @@ public class DriverController {
     @PostMapping("/{driverId}/online")
     public ResponseVo<Void> online(@PathVariable Long driverId, @RequestBody @Valid DriverOnlineBody body) {
         try {
-            driverStatusService.setOnline(driverId, Boolean.TRUE.equals(body.getOnline()));
+            driverStatusService.setOnline(driverId, Boolean.TRUE.equals(body.getOnline()), body.getLat(), body.getLng());
             return ResultUtil.success(null);
         } catch (IllegalArgumentException ex) {
             return ResultUtil.requestError(ex.getMessage());
