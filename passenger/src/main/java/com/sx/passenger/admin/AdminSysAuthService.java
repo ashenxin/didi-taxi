@@ -42,10 +42,10 @@ public class AdminSysAuthService {
                         .eq(SysUser::getIsDeleted, 0)
                         .last("LIMIT 1"));
         if (user == null || user.getPasswordHash() == null || !BCRYPT.matches(password, user.getPasswordHash())) {
-            log.warn("admin login failed username={}", username);
+            log.warn("管理端登录失败 username={}", username);
             return null;
         }
-        log.info("admin login verify ok userId={} username={}", user.getId(), user.getUsername());
+        log.info("管理端登录校验通过 userId={} username={}", user.getId(), user.getUsername());
         return new AdminVerifyCredentialsResponse(user.getId(), user.getTokenVersion(), user.getStatus());
     }
 

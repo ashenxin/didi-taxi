@@ -64,12 +64,12 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
 
         String raw = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
         if (raw == null || raw.isBlank() || !raw.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
-            log.warn("JWT missing or not bearer path={}", path);
+            log.warn("JWT 缺失或非 Bearer path={}", path);
             return unauthorized(exchange, "缺少或非法的 Authorization");
         }
         String token = raw.substring(BEARER_PREFIX.length()).trim();
         if (token.isEmpty()) {
-            log.warn("JWT empty token path={}", path);
+            log.warn("JWT 空 token path={}", path);
             return unauthorized(exchange, "缺少或非法的 Authorization");
         }
         try {
@@ -79,10 +79,10 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
                     .build();
             return chain.filter(exchange.mutate().request(mutated).build());
         } catch (ExpiredJwtException e) {
-            log.warn("JWT expired path={} msg={}", path, e.getMessage());
+            log.warn("JWT 已过期 path={} msg={}", path, e.getMessage());
             return unauthorized(exchange, "token 已过期");
         } catch (JwtException | IllegalStateException e) {
-            log.warn("JWT invalid path={} msg={}", path, e.getMessage());
+            log.warn("JWT 无效 path={} msg={}", path, e.getMessage());
             return unauthorized(exchange, "token 无效");
         }
     }
@@ -159,7 +159,7 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
         try {
             body = objectMapper.writeValueAsBytes(Map.of("code", 401, "msg", msg));
         } catch (JsonProcessingException e) {
-            log.error("Failed to serialize 401 JSON body", e);
+            log.error("序列化 401 响应 JSON 失败", e);
             body = "{\"code\":401,\"msg\":\"Unauthorized\"}".getBytes();
         }
         DataBuffer buffer = exchange.getResponse().bufferFactory().wrap(body);

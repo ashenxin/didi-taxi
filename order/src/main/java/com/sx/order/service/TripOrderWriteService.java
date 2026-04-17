@@ -11,6 +11,7 @@ import com.sx.order.model.dto.CancelOrderBody;
 import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.FinishOrderBody;
 import com.sx.order.model.dto.OpenDriverOfferBody;
+import com.sx.order.model.dto.AssignedAwaitingRescheduleDto;
 import com.sx.order.model.dto.PendingDispatchOrderDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Propagation;
@@ -105,7 +106,7 @@ public class TripOrderWriteService {
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
 
-        log.info("order created orderNo={} passengerId={} cityCode={}", orderNo, body.getPassengerId(), body.getCityCode());
+        log.info("订单已创建 orderNo={} passengerId={} cityCode={}", orderNo, body.getPassengerId(), body.getCityCode());
         return orderNo;
     }
 
@@ -186,7 +187,76 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
-        log.info("order assigned orderNo={} driverId={}", orderNo, body.getDriverId());
+        log.info("订单已指派司机 orderNo={} driverId={}", orderNo, body.getDriverId());
+    }
+
+    /**
+     * 改派：{@code ASSIGNED} 且当前无进行中的确认窗口时，更换司机/车辆；重置 {@code offer_round}，保留 {@code last_offer_at} 以便调度列表仍能识别待推进订单。
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
+    public void reassign(String orderNo, AssignOrderBody body) {
+        if (orderNo == null || orderNo.isBlank()) {
+            throw new IllegalArgumentException("orderNo不能为空");
+        }
+        TripOrder existing = tripOrderEntityMapper.selectOne(com.baomidou.mybatisplus.core.toolkit.Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getOrderNo, orderNo)
+                .eq(TripOrder::getIsDeleted, 0)
+                .last("LIMIT 1"));
+        if (existing == null) {
+            throw new IllegalArgumentException("订单不存在");
+        }
+        if (!Objects.equals(existing.getStatus(), STATUS_ASSIGNED)) {
+            throw new IllegalArgumentException("订单当前状态不允许改派");
+        }
+        if (existing.getOfferExpiresAt() != null) {
+            throw new IllegalArgumentException("确认窗口未结束，暂不可改派");
+        }
+        if (body.getDriverId() == null) {
+            throw new IllegalArgumentException("driverId不能为空");
+        }
+        if (Objects.equals(existing.getDriverId(), body.getDriverId())) {
+            throw new IllegalArgumentException("改派目标司机不能与当前指派相同");
+        }
+        assertDriverNotInServiceTrip(body.getDriverId());
+        Long oldDriverId = existing.getDriverId();
+        LocalDateTime now = LocalDateTime.now();
+        int updated = tripOrderEntityMapper.update(null,
+                com.baomidou.mybatisplus.core.toolkit.Wrappers.<TripOrder>lambdaUpdate()
+                        .set(TripOrder::getDriverId, body.getDriverId())
+                        .set(body.getCarId() != null, TripOrder::getCarId, body.getCarId())
+                        .set(body.getCompanyId() != null, TripOrder::getCompanyId, body.getCompanyId())
+                        .set(TripOrder::getAssignedAt, now)
+                        .set(TripOrder::getOfferRound, null)
+                        .set(TripOrder::getUpdatedAt, now)
+                        .eq(TripOrder::getOrderNo, orderNo)
+                        .eq(TripOrder::getIsDeleted, 0)
+                        .eq(TripOrder::getStatus, STATUS_ASSIGNED)
+                        .isNull(TripOrder::getOfferExpiresAt));
+        if (updated != 1) {
+            throw new IllegalArgumentException("改派失败，请重试");
+        }
+        TripOrder after = tripOrderEntityMapper.selectOne(com.baomidou.mybatisplus.core.toolkit.Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getOrderNo, orderNo)
+                .eq(TripOrder::getIsDeleted, 0)
+                .last("LIMIT 1"));
+        if (after == null) {
+            throw new IllegalArgumentException("订单不存在");
+        }
+        OrderEvent event = new OrderEvent()
+                .setOrderId(after.getId())
+                .setOrderNo(orderNo)
+                .setEventType("ORDER_REASSIGNED")
+                .setFromStatus(STATUS_ASSIGNED)
+                .setToStatus(STATUS_ASSIGNED)
+                .setOperatorType(OPERATOR_SYSTEM)
+                .setOperatorId(null)
+                .setReasonCode(null)
+                .setReasonDesc("capacity reschedule")
+                .setEventPayload("{\"oldDriverId\":" + oldDriverId + ",\"newDriverId\":" + body.getDriverId() + "}")
+                .setOccurredAt(now)
+                .setCreatedAt(now);
+        orderEventEntityMapper.insert(event);
+        log.info("订单已改派 orderNo={} oldDriverId={} newDriverId={}", orderNo, oldDriverId, body.getDriverId());
     }
 
     /**
@@ -225,7 +295,7 @@ public class TripOrderWriteService {
         }
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_CANCELLED)) {
-            log.info("order cancel skipped (already cancelled) orderNo={}", orderNo);
+            log.info("取消订单跳过（已取消） orderNo={}", orderNo);
             return;
         }
         if (st == null || (st != STATUS_CREATED && st != STATUS_ASSIGNED && st != STATUS_PENDING_DRIVER_CONFIRM && st != STATUS_ACCEPTED)) {
@@ -269,7 +339,7 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
-        log.info("order cancelled by passenger orderNo={} passengerId={}", orderNo, body.getPassengerId());
+        log.info("乘客已取消订单 orderNo={} passengerId={}", orderNo, body.getPassengerId());
     }
 
     /**
@@ -328,7 +398,7 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
-        log.info("order cancelled by system (dispatch timeout) orderNo={}", orderNo);
+        log.info("系统已取消订单（待派单超时） orderNo={}", orderNo);
         return true;
     }
 
@@ -367,6 +437,55 @@ public class TripOrderWriteService {
             return List.of();
         }
         return list.stream().map(this::toPendingDispatchDto).toList();
+    }
+
+    /**
+     * 待派单队列（全城市）：{@code CREATED} 且起点坐标已落库，按创建时间升序；供运力服务定时迟滞匹配，无需按 cityCode 轮询。
+     */
+    public List<PendingDispatchOrderDto> listCreatedForDispatchAll(int limit) {
+        int lim = (limit <= 0 || limit > 200) ? 100 : limit;
+        List<TripOrder> list = tripOrderEntityMapper.selectList(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getStatus, STATUS_CREATED)
+                .eq(TripOrder::getIsDeleted, 0)
+                .isNotNull(TripOrder::getOriginLat)
+                .isNotNull(TripOrder::getOriginLng)
+                .orderByAsc(TripOrder::getCreatedAt)
+                .last("LIMIT " + lim));
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        return list.stream().map(this::toPendingDispatchDto).toList();
+    }
+
+    /**
+     * 待调度队列：{@code ASSIGNED}、无进行中的确认窗口、曾发起过 offer（通常为确认超时打回），按 {@code updated_at} 升序。
+     */
+    public List<AssignedAwaitingRescheduleDto> listAssignedAwaitingReschedule(int limit) {
+        int lim = (limit <= 0 || limit > 200) ? 50 : limit;
+        List<TripOrder> list = tripOrderEntityMapper.selectList(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getStatus, STATUS_ASSIGNED)
+                .eq(TripOrder::getIsDeleted, 0)
+                .isNull(TripOrder::getOfferExpiresAt)
+                .isNotNull(TripOrder::getLastOfferAt)
+                .isNotNull(TripOrder::getDriverId)
+                .orderByAsc(TripOrder::getUpdatedAt)
+                .last("LIMIT " + lim));
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        return list.stream().map(this::toAssignedAwaitingRescheduleDto).toList();
+    }
+
+    private AssignedAwaitingRescheduleDto toAssignedAwaitingRescheduleDto(TripOrder o) {
+        AssignedAwaitingRescheduleDto d = new AssignedAwaitingRescheduleDto();
+        d.setOrderNo(o.getOrderNo());
+        d.setCityCode(o.getCityCode());
+        d.setProductCode(o.getProductCode());
+        d.setOriginLat(o.getOriginLat());
+        d.setOriginLng(o.getOriginLng());
+        d.setDriverId(o.getDriverId());
+        d.setOfferRound(o.getOfferRound());
+        return d;
     }
 
     private PendingDispatchOrderDto toPendingDispatchDto(TripOrder o) {
@@ -439,7 +558,7 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
-        log.info("driver offer opened orderNo={} expiresAt={} round={}", orderNo, expires, nextRound);
+        log.info("司机确认窗口已打开 orderNo={} expiresAt={} round={}", orderNo, expires, nextRound);
     }
 
     /**
@@ -458,7 +577,7 @@ public class TripOrderWriteService {
                 timeoutOnePendingOffer(o.getOrderNo(), now);
                 n++;
             } catch (RuntimeException ex) {
-                log.warn("offer timeout skip orderNo={} reason={}", o.getOrderNo(), ex.toString());
+                log.warn("确认窗口超时处理跳过 orderNo={} reason={}", o.getOrderNo(), ex.toString());
             }
         }
         return n;
@@ -509,7 +628,7 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
-        log.info("driver offer timed out orderNo={} driverId={}", orderNo, after.getDriverId());
+        log.info("司机确认窗口已超时 orderNo={} driverId={}", orderNo, after.getDriverId());
     }
 
     private TripOrder loadActiveOrder(String orderNo) {
@@ -544,7 +663,7 @@ public class TripOrderWriteService {
         assertDriver(existing, driverId);
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_ACCEPTED)) {
-            log.info("accept idempotent (already accepted) orderNo={} driverId={}", orderNo, driverId);
+            log.info("接单幂等（已接单） orderNo={} driverId={}", orderNo, driverId);
             return;
         }
         if (!Objects.equals(st, STATUS_ASSIGNED) && !Objects.equals(st, STATUS_PENDING_DRIVER_CONFIRM)) {
@@ -569,7 +688,7 @@ public class TripOrderWriteService {
 
         insertDriverEvent(orderNo, driverId, "ORDER_ACCEPTED", fromStatus, STATUS_ACCEPTED, now);
         cancelOtherPendingAssignsForDriver(driverId, orderNo, now);
-        log.info("order accepted orderNo={} driverId={}", orderNo, driverId);
+        log.info("司机已接单 orderNo={} driverId={}", orderNo, driverId);
     }
 
     /**
@@ -602,7 +721,7 @@ public class TripOrderWriteService {
                         .eq(TripOrder::getIsDeleted, 0)
                         .in(TripOrder::getStatus, STATUS_ASSIGNED, STATUS_PENDING_DRIVER_CONFIRM));
         if (updated != 1) {
-            log.warn("system cancel skipped orderNo={} (concurrent state change?)", orderNo);
+            log.warn("系统取消跳过 orderNo={}（可能并发状态变更）", orderNo);
             return;
         }
         TripOrder after = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
@@ -626,7 +745,7 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
-        log.info("order cancelled by system orderNo={} reason={}", orderNo, reason);
+        log.info("系统已取消订单 orderNo={} reason={}", orderNo, reason);
     }
 
     /**
@@ -638,7 +757,7 @@ public class TripOrderWriteService {
         assertDriver(existing, driverId);
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_ARRIVED)) {
-            log.info("arrive idempotent orderNo={} driverId={}", orderNo, driverId);
+            log.info("到达幂等 orderNo={} driverId={}", orderNo, driverId);
             return;
         }
         if (!Objects.equals(st, STATUS_ACCEPTED)) {
@@ -660,7 +779,7 @@ public class TripOrderWriteService {
         }
 
         insertDriverEvent(orderNo, driverId, "ORDER_DRIVER_ARRIVED", STATUS_ACCEPTED, STATUS_ARRIVED, now);
-        log.info("driver arrived orderNo={} driverId={}", orderNo, driverId);
+        log.info("司机已到达上车点 orderNo={} driverId={}", orderNo, driverId);
     }
 
     /**
@@ -672,7 +791,7 @@ public class TripOrderWriteService {
         assertDriver(existing, driverId);
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_STARTED)) {
-            log.info("start trip idempotent orderNo={} driverId={}", orderNo, driverId);
+            log.info("开始行程幂等 orderNo={} driverId={}", orderNo, driverId);
             return;
         }
         if (!Objects.equals(st, STATUS_ARRIVED)) {
@@ -694,7 +813,7 @@ public class TripOrderWriteService {
         }
 
         insertDriverEvent(orderNo, driverId, "ORDER_TRIP_STARTED", STATUS_ARRIVED, STATUS_STARTED, now);
-        log.info("trip started orderNo={} driverId={}", orderNo, driverId);
+        log.info("行程已开始 orderNo={} driverId={}", orderNo, driverId);
     }
 
     /**
@@ -707,7 +826,7 @@ public class TripOrderWriteService {
         assertDriver(existing, driverId);
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_FINISHED)) {
-            log.info("finish idempotent orderNo={} driverId={}", orderNo, driverId);
+            log.info("完单幂等 orderNo={} driverId={}", orderNo, driverId);
             return;
         }
         if (!Objects.equals(st, STATUS_STARTED)) {
@@ -735,7 +854,7 @@ public class TripOrderWriteService {
         }
 
         insertDriverEvent(orderNo, driverId, "ORDER_FINISHED", STATUS_STARTED, STATUS_FINISHED, now);
-        log.info("order finished orderNo={} driverId={} finalAmount={}", orderNo, driverId, finalAmount);
+        log.info("订单已完单 orderNo={} driverId={} finalAmount={}", orderNo, driverId, finalAmount);
     }
 
     private void insertDriverEvent(String orderNo, Long driverId, String eventType,

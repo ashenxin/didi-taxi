@@ -83,9 +83,11 @@ public class DriverController {
 
     /**
      * 分页查询司机列表。
-     * {@code GET /api/v1/drivers?pageNo=&pageSize=&companyId=&name=&phone=&online=&provinceCode=&cityCode=}
-     * {@code cityCode}：精确匹配司机城市；仅传 {@code provinceCode} 且长度≥2 时按「省码前两位」匹配市码前缀（与 admin {@code AdminDataScope#cityBelongsToProvince} 一致）。
+     * {@code GET /api/v1/drivers?pageNo=&pageSize=&companyId=&name=&phone=&online=&provinceCode=&cityCode=&canAcceptOrder=&auditStatus=}
+     * {@code cityCode}：精确匹配司机城市；仅传 {@code provinceCode} 时优先匹配 {@code province_code}，为空的历史行退回市码两位前缀兼容。
      * {@code online}：{@code 1} 听单中或服务中（{@code monitor_status} 为 1/2），{@code 0} 未听单或空。
+     * {@code canAcceptOrder}：{@code 1} 可接单 / {@code 0} 不可接单。
+     * {@code auditStatus}：{@code 0} 待完善 {@code 1} 审核中 {@code 2} 通过 {@code 3} 驳回/需补件。
      */
     @GetMapping
     public ResponseVo<PageVo<Driver>> page(@RequestParam(defaultValue = "1") Integer pageNo,
@@ -95,7 +97,9 @@ public class DriverController {
                                           @RequestParam(required = false) String phone,
                                           @RequestParam(required = false) Integer online,
                                           @RequestParam(required = false) String provinceCode,
-                                          @RequestParam(required = false) String cityCode) {
+                                          @RequestParam(required = false) String cityCode,
+                                          @RequestParam(required = false) Integer canAcceptOrder,
+                                          @RequestParam(required = false) Integer auditStatus) {
         int safePageNo = pageNo == null || pageNo < 1 ? 1 : pageNo;
         int safePageSize = pageSize == null || pageSize < 1 ? 10 : Math.min(pageSize, 200);
         long offset = (long) (safePageNo - 1) * safePageSize;
@@ -109,9 +113,15 @@ public class DriverController {
                 .like(name != null && !name.isBlank(), Driver::getName, name)
                 .like(phone != null && !phone.isBlank(), Driver::getPhone, phone)
                 .eq(cc != null, Driver::getCityCode, cc);
-        // 仅省前缀：与 AdminDataScope.cityBelongsToProvince 一致（省码前两位 = 市码前缀）
-        if (pc != null && cc == null && pc.length() >= 2) {
-            qw.apply("city_code LIKE CONCAT({0}, '%')", pc.substring(0, 2));
+        if (pc != null && cc == null) {
+            String prefix2 = pc.length() >= 2 ? pc.substring(0, 2) : null;
+            qw.and(w -> {
+                w.eq(Driver::getProvinceCode, pc);
+                if (prefix2 != null) {
+                    w.or(w2 -> w2.isNull(Driver::getProvinceCode)
+                            .apply("city_code LIKE CONCAT({0}, '%')", prefix2));
+                }
+            });
         }
         if (online != null) {
             if (online == 1) {
@@ -119,6 +129,12 @@ public class DriverController {
             } else if (online == 0) {
                 qw.and(w -> w.eq(Driver::getMonitorStatus, 0).or().isNull(Driver::getMonitorStatus));
             }
+        }
+        if (canAcceptOrder != null) {
+            qw.eq(Driver::getCanAcceptOrder, canAcceptOrder);
+        }
+        if (auditStatus != null) {
+            qw.eq(Driver::getAuditStatus, auditStatus);
         }
         qw.orderByDesc(Driver::getId);
         Long total = driverEntityMapper.selectCount(qw);

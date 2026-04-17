@@ -34,17 +34,18 @@ public class AdminPricingController {
 
     /**
      * 计价规则分页列表；{@code provinceCode}/{@code cityCode} 与登录域合并。
-     * {@code GET /admin/api/v1/pricing/fare-rules?pageNo=&pageSize=&provinceCode=&cityCode=&productCode=&ruleName=&active=}
+     * {@code GET /admin/api/v1/pricing/fare-rules?pageNo=&pageSize=&companyId=&provinceCode=&cityCode=&productCode=&ruleName=&active=}
      */
     @GetMapping
     public ResponseVo<AdminPageVO<AdminFareRuleVO>> page(@RequestParam(defaultValue = "1") Integer pageNo,
                                                         @RequestParam(defaultValue = "10") Integer pageSize,
+                                                        @RequestParam(required = false) Long companyId,
                                                         @RequestParam(required = false) String provinceCode,
                                                         @RequestParam(required = false) String cityCode,
                                                         @RequestParam(required = false) String productCode,
                                                         @RequestParam(required = false) String ruleName,
                                                         @RequestParam(required = false) Integer active) {
-        return ResultUtil.success(adminPricingService.page(pageNo, pageSize, provinceCode, cityCode, productCode, ruleName, active));
+        return ResultUtil.success(adminPricingService.page(pageNo, pageSize, companyId, provinceCode, cityCode, productCode, ruleName, active));
     }
 
     /**

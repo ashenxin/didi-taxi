@@ -143,8 +143,12 @@ public class PassengerOrderService {
      *
      * 入参依赖 route 的 distance/duration；MVP 先按 fare_rule 规则计算。
      */
-    public EstimateFareResult estimate(CreateAndAssignOrderBody body, RouteResponse route) {
+    public EstimateFareResult estimate(CreateAndAssignOrderBody body, RouteResponse route, Long companyId) {
+        if (companyId == null) {
+            return null;
+        }
         EstimateFareBody req = new EstimateFareBody();
+        req.setCompanyId(companyId);
         req.setProvinceCode(body.getProvinceCode());
         req.setCityCode(body.getCityCode());
         req.setProductCode(body.getProductCode());
@@ -154,6 +158,11 @@ public class PassengerOrderService {
         var resp = calculateClient.estimate(req);
         if (resp == null) {
             throw new BizErrorException(502, "计费服务响应为空");
+        }
+        if (resp.getCode() != null && resp.getCode() == 404) {
+            log.warn("估价：该公司无可用计价规则 companyId={} city={} product={}",
+                    companyId, body.getCityCode(), body.getProductCode());
+            return null;
         }
         if (resp.getCode() == null || resp.getCode() != 200) {
             throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(), "计费服务调用失败: " + resp.getMsg());
@@ -265,7 +274,7 @@ public class PassengerOrderService {
     /**
      * 对外“一步 createAndAssign”的同步编排实现（当前版本）。
      *
-     * 同步链路（便于联调）：地理编码补坐标（如需）→ route → estimate → order.create → nearestDriver → order.assign。
+     * 同步链路：地理编码补坐标（如需）→ route → nearestDriver（取 companyId）→ estimate → order.create → assign。
      *
      * 后续推荐演进为“对内两段式”：
      * 先落库创建订单 + 写 outbox/event，再由调度器异步执行找司机与指派，避免分布式事务与长耗时链路。
@@ -273,14 +282,15 @@ public class PassengerOrderService {
     public CreateAndAssignOrderResult createAndAssign(CreateAndAssignOrderBody body) {
         resolveCoordinatesByGeocodeIfNeeded(body);//缺经纬度调map补齐
         RouteResponse route = route(body);//路线预估（高德驾车）
-        EstimateFareResult estimate = estimate(body, route);//费用预估
+        NearestDriverResult nearest = searchNearestDriver(body);//最近司机（用于 company 维度估价）
+        Long companyId = nearest == null ? null : nearest.getCompanyId();
+        EstimateFareResult estimate = estimate(body, route, companyId);//费用预估（无候选司机则跳过）
         CreateOrderResult created = createOrder(body, estimate);//创建订单
         String orderNo = created == null ? null : created.getOrderNo();
         if (orderNo == null || orderNo.isBlank()) {
             throw new BizErrorException(502, "订单创建失败：orderNo为空");
         }
 
-        NearestDriverResult nearest = searchNearestDriver(body);//最近司机
         // ETA 暂时用 route 的 duration 做占位（真实 ETA 后续接 map.matrix）
         Long etaSeconds = route == null ? null : route.getDurationSeconds();
         if (nearest != null) {
@@ -312,7 +322,7 @@ public class PassengerOrderService {
             ad.setEtaSeconds(etaSeconds);
             out.setAssignedDriver(ad);
         }
-        log.info("createAndAssign done orderNo={} passengerId={} assigned={}",
+        log.info("创建并指派完成 orderNo={} passengerId={} assigned={}",
                 orderNo, body.getPassengerId(), nearest != null);
         return out;
     }
@@ -356,7 +366,7 @@ public class PassengerOrderService {
             throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(),
                     resp.getMsg() == null ? "取消订单失败" : resp.getMsg());
         }
-        log.info("passenger cancel order orderNo={} passengerId={}", orderNo, req.getPassengerId());
+        log.info("乘客取消订单 orderNo={} passengerId={}", orderNo, req.getPassengerId());
     }
 
     private static PassengerOrderDetailVO toDetailVO(TripOrderRow row) {
@@ -426,10 +436,10 @@ public class PassengerOrderService {
             idx.setOrderNo(orderNo);
             var resp = capacityDispatchClient.addPendingOrderIndex(idx);
             if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-                log.warn("pending-order-index failed orderNo={} driverId={}", orderNo, driverId);
+                log.warn("待确认订单索引写入失败 orderNo={} driverId={}", orderNo, driverId);
             }
         } catch (Exception e) {
-            log.warn("pending-order-index error orderNo={} driverId={}: {}", orderNo, driverId, e.toString());
+            log.warn("待确认订单索引异常 orderNo={} driverId={}: {}", orderNo, driverId, e.toString());
         }
     }
 }

@@ -50,6 +50,7 @@ public class EstimateController {
         LocalDateTime now = LocalDateTime.now();
         FareRule rule = fareRuleEntityMapper.selectOne(Wrappers.<FareRule>lambdaQuery()
                 .eq(FareRule::getIsDeleted, 0)
+                .eq(FareRule::getCompanyId, body.getCompanyId())
                 .eq(FareRule::getProvinceCode, body.getProvinceCode())
                 .eq(FareRule::getCityCode, body.getCityCode())
                 .eq(FareRule::getProductCode, body.getProductCode())
@@ -59,8 +60,8 @@ public class EstimateController {
                 .orderByDesc(FareRule::getId)
                 .last("LIMIT 1"));
         if (rule == null) {
-            log.warn("estimate: no fare rule province={} city={} product={}",
-                    body.getProvinceCode(), body.getCityCode(), body.getProductCode());
+            log.warn("估价：未找到计价规则 companyId={} province={} city={} product={}",
+                    body.getCompanyId(), body.getProvinceCode(), body.getCityCode(), body.getProductCode());
             return ResultUtil.error(404, "未找到可用计价规则");
         }
 
@@ -70,7 +71,7 @@ public class EstimateController {
         resp.setEstimatedAmount(amount);
         resp.setDistanceMeters(body.getDistanceMeters());
         resp.setDurationSeconds(body.getDurationSeconds());
-        log.info("estimate: ruleId={} amount={} distanceM={} durationS={}",
+        log.info("估价：ruleId={} amount={} distanceM={} durationS={}",
                 rule.getId(), amount, body.getDistanceMeters(), body.getDurationSeconds());
         return ResultUtil.success(resp);
     }

@@ -1,5 +1,7 @@
 CREATE TABLE IF NOT EXISTS fare_rule (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    company_id BIGINT NOT NULL,
+    company_no VARCHAR(32) NOT NULL,
     province_code VARCHAR(32) NOT NULL,
     city_code VARCHAR(32) NOT NULL,
     product_code VARCHAR(64) NOT NULL,

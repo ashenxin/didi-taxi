@@ -161,7 +161,7 @@ public class AdminOrderService {
         AdminOrderDetailVO resp = new AdminOrderDetailVO();
         resp.setOrder(order);
         resp.setEvents(events);
-        log.info("admin order detail loaded orderNo={} events={}", orderNo, events.size());
+        log.info("管理端订单详情已加载 orderNo={} events={}", orderNo, events.size());
         return resp;
     }
 

@@ -1,4 +1,7 @@
--- 订单服务 order 库：主表 + 事件流水
+-- =============================================================================
+-- order 库：建表（trip_order + order_event；含派单确认窗口字段）
+-- 种子数据见 order_seed.sql
+-- =============================================================================
 CREATE DATABASE IF NOT EXISTS `order` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 USE `order`;
@@ -24,7 +27,7 @@ CREATE TABLE IF NOT EXISTS `trip_order` (
     `dest_lat` DECIMAL(10, 7) NOT NULL COMMENT '终点纬度',
     `dest_lng` DECIMAL(10, 7) NOT NULL COMMENT '终点经度',
 
-    `status` INT NOT NULL COMMENT '订单状态：0已创建 1已分配 2已接单 3司机已到达 4行程中 5已完成 6已取消',
+    `status` INT NOT NULL COMMENT '订单状态：0已创建 1已分配 2已接单 3司机已到达 4行程中 5已完成 6已取消 7待司机确认',
 
     `estimated_amount` DECIMAL(10, 2) NULL COMMENT '预估金额（下单时计价）',
     `final_amount` DECIMAL(10, 2) NULL COMMENT '最终金额（完单后计价）',
@@ -37,6 +40,9 @@ CREATE TABLE IF NOT EXISTS `trip_order` (
 
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下单时间',
     `assigned_at` DATETIME NULL COMMENT '派单时间',
+    `offer_expires_at` DATETIME NULL COMMENT '当前司机确认窗口截止时间（status=7 时有效）',
+    `offer_round` INT NOT NULL DEFAULT 0 COMMENT '派单/确认轮次',
+    `last_offer_at` DATETIME NULL COMMENT '最近一次发起确认的时间',
     `accepted_at` DATETIME NULL COMMENT '接单时间',
     `arrived_at` DATETIME NULL COMMENT '司机到达时间',
     `started_at` DATETIME NULL COMMENT '行程开始时间',

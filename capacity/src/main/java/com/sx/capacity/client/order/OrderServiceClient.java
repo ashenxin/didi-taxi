@@ -1,6 +1,7 @@
 package com.sx.capacity.client.order;
 
 import com.sx.capacity.client.order.dto.AssignOrderFeignBody;
+import com.sx.capacity.client.order.dto.AssignedAwaitingRescheduleFeignDto;
 import com.sx.capacity.client.order.dto.OpenDriverOfferFeignBody;
 import com.sx.capacity.client.order.dto.PendingDispatchFeignDto;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -19,6 +20,18 @@ public interface OrderServiceClient {
     OrderServiceResponseVo<List<PendingDispatchFeignDto>> listPendingDispatch(
             @RequestParam("cityCode") String cityCode,
             @RequestParam(value = "limit", required = false) Integer limit);
+
+    @GetMapping("/api/v1/orders/internal/pending-dispatch-all")
+    OrderServiceResponseVo<List<PendingDispatchFeignDto>> listPendingDispatchAll(
+            @RequestParam(value = "limit", required = false) Integer limit);
+
+    @GetMapping("/api/v1/orders/internal/assigned-awaiting-reschedule")
+    OrderServiceResponseVo<List<AssignedAwaitingRescheduleFeignDto>> listAssignedAwaitingReschedule(
+            @RequestParam(value = "limit", required = false) Integer limit);
+
+    @PostMapping("/api/v1/orders/internal/reassign/{orderNo}")
+    OrderServiceResponseVo<Void> reassign(@PathVariable("orderNo") String orderNo,
+                                          @RequestBody AssignOrderFeignBody body);
 
     @PostMapping("/api/v1/orders/{orderNo}/assign")
     OrderServiceResponseVo<Void> assign(@PathVariable("orderNo") String orderNo,

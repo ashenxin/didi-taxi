@@ -33,7 +33,7 @@ public class PassengerAuthService {
         if (body.getCode() != 200) {
             throw new BizErrorException(body.getCode(), body.getMsg());
         }
-        log.info("passenger sms send requested phone={}", maskPhone(phone));
+        log.info("乘客短信发送请求已提交 phone={}", maskPhone(phone));
     }
 
     public CustomerLoginResponse loginSms(String phone, String code) {
@@ -75,7 +75,7 @@ public class PassengerAuthService {
         resp.setTokenType("Bearer");
         resp.setExpiresIn(jwtService.getExpirationSeconds());
         resp.setCustomer(profile);
-        log.info("passenger login success customerId={} phone={}", brief.getId(), maskPhone(brief.getPhone()));
+        log.info("乘客登录成功 customerId={} phone={}", brief.getId(), maskPhone(brief.getPhone()));
         return resp;
     }
 

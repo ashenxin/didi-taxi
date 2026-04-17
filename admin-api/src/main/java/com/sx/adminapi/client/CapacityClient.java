@@ -1,9 +1,13 @@
 package com.sx.adminapi.client;
 
 import org.springframework.cloud.openfeign.FeignClient;
+import com.sx.adminapi.model.capacity.CompanyCreateBody;
+import com.sx.adminapi.model.capacity.CompanyUpdateBody;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
@@ -22,9 +26,21 @@ public interface CapacityClient {
     @GetMapping("/api/v1/companies")
     Map<String, Object> companyPage(@RequestParam Map<String, Object> params);
 
+    @GetMapping("/api/v1/companies/{id}")
+    Map<String, Object> companyDetail(@PathVariable("id") Long id);
+
+    @PostMapping("/api/v1/companies")
+    Map<String, Object> createCompany(@RequestBody CompanyCreateBody body);
+
+    @PutMapping("/api/v1/companies/{id}")
+    Map<String, Object> updateCompany(@PathVariable("id") Long id, @RequestBody CompanyUpdateBody body);
+
+    @DeleteMapping("/api/v1/companies/{id}")
+    Map<String, Object> deleteCompany(@PathVariable("id") Long id);
+
     /**
      * 司机分页。Query 中常用：{@code pageNo}、{@code pageSize}、{@code companyId}、{@code name}、{@code phone}、{@code online}、
-     * {@code provinceCode}（省内按市码前缀筛）、{@code cityCode}（精确市码）。
+     * {@code provinceCode}（省内按市码前缀筛）、{@code cityCode}（精确市码）、{@code canAcceptOrder}、{@code auditStatus}。
      */
     @GetMapping("/api/v1/drivers")
     Map<String, Object> driverPage(@RequestParam Map<String, Object> params);

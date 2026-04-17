@@ -1,5 +1,9 @@
 package com.sx.adminapi.model.order;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.sx.adminapi.common.jackson.FlexibleLocalDateTimeDeserializer;
+import com.sx.adminapi.common.jackson.LocalDateTimeDisplaySerializer;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -31,13 +35,29 @@ public class AdminOrderVO {
     private String fareRuleSnapshot;
     private Integer cancelBy;
     private String cancelReason;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime createdAt;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime assignedAt;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime acceptedAt;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime arrivedAt;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime startedAt;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime finishedAt;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime cancelledAt;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime updatedAt;
     private Integer isDeleted;
 }

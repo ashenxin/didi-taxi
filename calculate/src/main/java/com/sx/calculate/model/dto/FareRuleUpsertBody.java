@@ -1,5 +1,7 @@
 package com.sx.calculate.model.dto;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.sx.calculate.common.jackson.FlexibleLocalDateTimeDeserializer;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
@@ -11,6 +13,12 @@ import java.time.LocalDateTime;
 @Getter
 @Setter
 public class FareRuleUpsertBody {
+    @NotNull(message = "运力公司不能为空")
+    private Long companyId;
+
+    @NotBlank(message = "公司编号不能为空")
+    private String companyNo;
+
     @NotBlank(message = "省份编码不能为空")
     private String provinceCode;
 
@@ -23,8 +31,10 @@ public class FareRuleUpsertBody {
     private String ruleName;
 
     @NotNull(message = "生效开始时间不能为空")
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime effectiveFrom;
 
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime effectiveTo;
 
     @NotNull(message = "起步价不能为空")

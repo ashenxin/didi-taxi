@@ -19,7 +19,7 @@ public class TestController {
      */
     @GetMapping("/test/ping")
     public ResponseVo<String> ping() {
-        log.info("calculate ping");
+        log.info("计价服务连通检查");
         return ResultUtil.success("calculate ok");
     }
 }

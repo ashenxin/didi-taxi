@@ -8,8 +8,11 @@ import com.sx.adminapi.security.AdminDataScope;
 import com.sx.adminapi.security.AdminLoginUser;
 import com.sx.adminapi.model.capacity.AdminCarVO;
 import com.sx.adminapi.model.capacity.AdminCompanyVO;
+import com.sx.adminapi.model.capacity.AdminDriverDetailVO;
 import com.sx.adminapi.model.capacity.AdminDriverVO;
 import com.sx.adminapi.model.capacity.AdminPageVO;
+import com.sx.adminapi.model.capacity.CompanyCreateBody;
+import com.sx.adminapi.model.capacity.CompanyUpdateBody;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -53,6 +56,65 @@ public class AdminCapacityService {
     }
 
     /**
+     * 创建「公司 + 车队」；请求体经 {@link AdminDataScope#scopeCompanyWrite} 与登录域合并后下发 capacity。
+     */
+    public AdminCompanyVO createCompany(CompanyCreateBody body) {
+        AdminLoginUser login = AdminDataScope.requireUser();
+        CompanyCreateBody scoped = AdminDataScope.scopeCompanyWrite(login, body);
+        Map<String, Object> wrapper = capacityClient.createCompany(scoped);
+        Object data = unwrapData(wrapper);
+        if (data == null) {
+            throw new BizErrorException(ExceptionCode.SERVER_ERROR.getValue(), "创建失败");
+        }
+        return objectMapper.convertValue(data, AdminCompanyVO.class);
+    }
+
+    /**
+     * 逻辑删除；先拉详情做数据域校验。
+     */
+    public void deleteCompany(Long id) {
+        AdminLoginUser login = AdminDataScope.requireUser();
+        Map<String, Object> detailWrap = capacityClient.companyDetail(id);
+        Object detailData = unwrapData(detailWrap);
+        if (detailData == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "公司不存在");
+        }
+        AdminCompanyVO vo = objectMapper.convertValue(detailData, AdminCompanyVO.class);
+        AdminDataScope.assertCompanyReadable(login, vo.getProvinceCode(), vo.getCityCode());
+        Map<String, Object> delWrap = capacityClient.deleteCompany(id);
+        unwrapData(delWrap);
+    }
+
+    /**
+     * 更新公司名称、车队名称；先拉详情做数据域校验。
+     */
+    public AdminCompanyVO updateCompany(Long id, CompanyUpdateBody body) {
+        if (body == null) {
+            throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "请求体不能为空");
+        }
+        if (body.getCompanyName() == null || body.getCompanyName().isBlank()) {
+            throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "公司名称不能为空");
+        }
+        if (body.getTeam() == null || body.getTeam().isBlank()) {
+            throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "车队名称不能为空");
+        }
+        AdminLoginUser login = AdminDataScope.requireUser();
+        Map<String, Object> detailWrap = capacityClient.companyDetail(id);
+        Object detailData = unwrapData(detailWrap);
+        if (detailData == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "公司不存在");
+        }
+        AdminCompanyVO vo = objectMapper.convertValue(detailData, AdminCompanyVO.class);
+        AdminDataScope.assertCompanyReadable(login, vo.getProvinceCode(), vo.getCityCode());
+        Map<String, Object> wrap = capacityClient.updateCompany(id, body);
+        Object data = unwrapData(wrap);
+        if (data == null) {
+            throw new BizErrorException(ExceptionCode.SERVER_ERROR.getValue(), "更新失败");
+        }
+        return objectMapper.convertValue(data, AdminCompanyVO.class);
+    }
+
+    /**
      * 司机分页；地区参数合并规则同 {@link #companyPage}。
      */
     @SuppressWarnings("unchecked")
@@ -63,7 +125,9 @@ public class AdminCapacityService {
                                                  String phone,
                                                  Integer online,
                                                  String provinceCode,
-                                                 String cityCode) {
+                                                 String cityCode,
+                                                 Integer canAcceptOrder,
+                                                 Integer auditStatus) {
         AdminLoginUser login = AdminDataScope.requireUser();
         AdminDataScope.RegionQuery rq = AdminDataScope.mergeRegionForQuery(login, provinceCode, cityCode);
 
@@ -80,10 +144,43 @@ public class AdminCapacityService {
         }
         putIfNotBlank(params, "provinceCode", rq.provinceCode());
         putIfNotBlank(params, "cityCode", rq.cityCode());
+        if (canAcceptOrder != null) {
+            params.put("canAcceptOrder", canAcceptOrder);
+        }
+        if (auditStatus != null) {
+            params.put("auditStatus", auditStatus);
+        }
 
         Map<String, Object> wrapper = capacityClient.driverPage(params);
         Map<String, Object> data = castMap(unwrapData(wrapper));
         return toPage(data, AdminDriverVO.class, pageNo, pageSize);
+    }
+
+    /**
+     * 司机档案详情：拉 capacity 全量可读字段（不含密码），校验数据域后可附带公司名称。
+     */
+    public AdminDriverDetailVO driverDetail(Long driverId) {
+        AdminLoginUser login = AdminDataScope.requireUser();
+        Map<String, Object> wrapper = capacityClient.driverDetail(driverId);
+        Object data = unwrapData(wrapper);
+        if (data == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "司机不存在");
+        }
+        AdminDriverDetailVO vo = objectMapper.convertValue(data, AdminDriverDetailVO.class);
+        AdminDataScope.assertDriverCityReadable(login, vo.getCityCode());
+        if (vo.getCompanyId() != null) {
+            try {
+                Map<String, Object> cw = capacityClient.companyDetail(vo.getCompanyId());
+                Object cd = unwrapData(cw);
+                if (cd != null) {
+                    AdminCompanyVO c = objectMapper.convertValue(cd, AdminCompanyVO.class);
+                    vo.setCompanyName(c.getCompanyName());
+                }
+            } catch (BizErrorException ignored) {
+                // 无公司或无查询权时仍返回司机详情
+            }
+        }
+        return vo;
     }
 
     /**

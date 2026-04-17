@@ -48,7 +48,7 @@ public class NearestDriverQueryService {
             for (Long driverId : ids) {
                 NearestDriverResult r = buildEligible(driverId, cityCode, productCode);
                 if (r != null) {
-                    log.info("nearest-driver: redis geo hit driverId={} cityCode={}", driverId, cityCode);
+                    log.info("最近司机：Redis GEO 命中 driverId={} cityCode={}", driverId, cityCode);
                     return r;
                 }
             }
@@ -114,7 +114,7 @@ public class NearestDriverQueryService {
         }
         List<Car> cars = carEntityMapper.selectList(carQw.last("LIMIT 200"));
         if (cars == null || cars.isEmpty()) {
-            log.warn("nearest-driver: no cars cityCode={} productCode={}", cityCode, productCode);
+            log.warn("最近司机：无可用车辆 cityCode={} productCode={}", cityCode, productCode);
             return null;
         }
 
@@ -149,11 +149,11 @@ public class NearestDriverQueryService {
             resp.setCarNo(car.getCarNo());
             resp.setCityCode(cityCode);
             resp.setProductCode(productCode);
-            log.info("nearest-driver: db fallback hit driverId={} carId={} cityCode={}", d.getId(), car.getId(), cityCode);
+            log.info("最近司机：数据库回退命中 driverId={} carId={} cityCode={}", d.getId(), car.getId(), cityCode);
             return resp;
         }
 
-        log.warn("nearest-driver: no eligible driver cityCode={} productCode={}", cityCode, productCode);
+        log.warn("最近司机：无符合条件的司机 cityCode={} productCode={}", cityCode, productCode);
         return null;
     }
 }

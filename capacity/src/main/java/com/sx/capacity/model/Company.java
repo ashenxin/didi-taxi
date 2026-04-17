@@ -40,6 +40,11 @@ public class Company {
     private String provinceCode;
 
     /**
+     * 省份名称（展示；与 {@link #provinceCode} 对应）
+     */
+    private String provinceName;
+
+    /**
      * 运力公司编号
      */
     @NotBlank(message = "运力公司编号错误")

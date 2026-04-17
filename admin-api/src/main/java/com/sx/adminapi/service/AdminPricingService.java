@@ -2,8 +2,10 @@ package com.sx.adminapi.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.adminapi.client.CalculateClient;
+import com.sx.adminapi.client.CapacityClient;
 import com.sx.adminapi.common.enums.ExceptionCode;
 import com.sx.adminapi.common.exception.BizErrorException;
+import com.sx.adminapi.model.capacity.AdminCompanyVO;
 import com.sx.adminapi.model.capacity.AdminPageVO;
 import com.sx.adminapi.model.pricing.AdminFareRuleVO;
 import com.sx.adminapi.model.pricing.FareRuleUpsertBody;
@@ -16,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 计价规则 BFF：分页/详情/增删改均经 {@link AdminDataScope} 裁剪查询条件或写 body 中的省、市。
@@ -25,10 +28,14 @@ import java.util.Map;
 public class AdminPricingService {
 
     private final CalculateClient calculateClient;
+    private final CapacityClient capacityClient;
     private final ObjectMapper objectMapper;
 
-    public AdminPricingService(CalculateClient calculateClient, ObjectMapper objectMapper) {
+    public AdminPricingService(CalculateClient calculateClient,
+                             CapacityClient capacityClient,
+                             ObjectMapper objectMapper) {
         this.calculateClient = calculateClient;
+        this.capacityClient = capacityClient;
         this.objectMapper = objectMapper;
     }
 
@@ -36,6 +43,7 @@ public class AdminPricingService {
     @SuppressWarnings("unchecked")
     public AdminPageVO<AdminFareRuleVO> page(Integer pageNo,
                                              Integer pageSize,
+                                             Long companyId,
                                              String provinceCode,
                                              String cityCode,
                                              String productCode,
@@ -47,6 +55,9 @@ public class AdminPricingService {
         Map<String, Object> params = new HashMap<>();
         params.put("pageNo", pageNo);
         params.put("pageSize", pageSize);
+        if (companyId != null) {
+            params.put("companyId", companyId);
+        }
         putIfNotBlank(params, "provinceCode", rq.provinceCode());
         putIfNotBlank(params, "cityCode", rq.cityCode());
         putIfNotBlank(params, "productCode", productCode);
@@ -70,6 +81,7 @@ public class AdminPricingService {
         if (list == null) {
             list = new ArrayList<>();
         }
+        enrichCompanyNames(list);
         result.setList(list);
         result.setTotal(toLong(data.get("total"), 0L));
         result.setPageNo(toInt(data.get("pageNo"), pageNo));
@@ -86,6 +98,7 @@ public class AdminPricingService {
         }
         AdminFareRuleVO vo = objectMapper.convertValue(data, AdminFareRuleVO.class);
         AdminDataScope.assertFareRuleReadable(AdminDataScope.requireUser(), vo.getProvinceCode(), vo.getCityCode());
+        enrichCompanyName(vo);
         return vo;
     }
 
@@ -93,13 +106,14 @@ public class AdminPricingService {
     public Long create(FareRuleUpsertBody body) {
         FareRuleUpsertBody scoped = objectMapper.convertValue(objectMapper.convertValue(body, Map.class), FareRuleUpsertBody.class);
         AdminDataScope.scopeFareRuleWrite(AdminDataScope.requireUser(), scoped);
+        validateCompanyForFareRule(scoped);
         Map<String, Object> wrapper = calculateClient.create(objectMapper.convertValue(scoped, Map.class));
         Object data = unwrapData(wrapper);
         if (data == null) {
             return null;
         }
         Long id = Long.valueOf(String.valueOf(data));
-        log.info("admin fare rule created id={} city={}", id, scoped.getCityCode());
+        log.info("管理端计价规则已创建 id={} city={}", id, scoped.getCityCode());
         return id;
     }
 
@@ -109,9 +123,10 @@ public class AdminPricingService {
         AdminDataScope.assertFareRuleReadable(AdminDataScope.requireUser(), existing.getProvinceCode(), existing.getCityCode());
         FareRuleUpsertBody scoped = objectMapper.convertValue(objectMapper.convertValue(body, Map.class), FareRuleUpsertBody.class);
         AdminDataScope.scopeFareRuleWrite(AdminDataScope.requireUser(), scoped);
+        validateCompanyForFareRule(scoped);
         Map<String, Object> wrapper = calculateClient.update(id, objectMapper.convertValue(scoped, Map.class));
         unwrapData(wrapper);
-        log.info("admin fare rule updated id={}", id);
+        log.info("管理端计价规则已更新 id={}", id);
     }
 
     /** 删除；域校验同 {@link #update}。 */
@@ -120,7 +135,85 @@ public class AdminPricingService {
         AdminDataScope.assertFareRuleReadable(AdminDataScope.requireUser(), existing.getProvinceCode(), existing.getCityCode());
         Map<String, Object> wrapper = calculateClient.delete(id);
         unwrapData(wrapper);
-        log.info("admin fare rule deleted id={}", id);
+        log.info("管理端计价规则已删除 id={}", id);
+    }
+
+    private void validateCompanyForFareRule(FareRuleUpsertBody scoped) {
+        if (scoped == null || scoped.getCompanyId() == null) {
+            throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "请选择运力公司");
+        }
+        Map<String, Object> detailWrap = capacityClient.companyDetail(scoped.getCompanyId());
+        Object detailData = unwrapData(detailWrap);
+        if (detailData == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "运力公司不存在");
+        }
+        AdminCompanyVO c = objectMapper.convertValue(detailData, AdminCompanyVO.class);
+        AdminLoginUser login = AdminDataScope.requireUser();
+        AdminDataScope.assertCompanyReadable(login, c.getProvinceCode(), c.getCityCode());
+        String p = trimToNull(scoped.getProvinceCode());
+        String city = trimToNull(scoped.getCityCode());
+        if (!Objects.equals(trimToNull(c.getProvinceCode()), p) || !Objects.equals(trimToNull(c.getCityCode()), city)) {
+            throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "计价区域与所选公司的省市不一致");
+        }
+        if (c.getCompanyNo() == null || c.getCompanyNo().isBlank()) {
+            throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "运力公司编号缺失");
+        }
+        scoped.setCompanyNo(c.getCompanyNo().trim());
+    }
+
+    private void enrichCompanyNames(List<AdminFareRuleVO> list) {
+        if (list == null || list.isEmpty()) {
+            return;
+        }
+        Map<Long, String> names = new HashMap<>();
+        for (AdminFareRuleVO vo : list) {
+            if (vo == null || vo.getCompanyId() == null || names.containsKey(vo.getCompanyId())) {
+                continue;
+            }
+            try {
+                Map<String, Object> w = capacityClient.companyDetail(vo.getCompanyId());
+                Object data = unwrapData(w);
+                if (data != null) {
+                    AdminCompanyVO c = objectMapper.convertValue(data, AdminCompanyVO.class);
+                    if (c != null && c.getCompanyName() != null) {
+                        names.put(vo.getCompanyId(), c.getCompanyName());
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("enrich company name id={}: {}", vo.getCompanyId(), e.toString());
+            }
+        }
+        for (AdminFareRuleVO vo : list) {
+            if (vo != null && vo.getCompanyId() != null) {
+                vo.setCompanyName(names.get(vo.getCompanyId()));
+            }
+        }
+    }
+
+    private void enrichCompanyName(AdminFareRuleVO vo) {
+        if (vo == null || vo.getCompanyId() == null) {
+            return;
+        }
+        try {
+            Map<String, Object> w = capacityClient.companyDetail(vo.getCompanyId());
+            Object data = unwrapData(w);
+            if (data != null) {
+                AdminCompanyVO c = objectMapper.convertValue(data, AdminCompanyVO.class);
+                if (c != null) {
+                    vo.setCompanyName(c.getCompanyName());
+                }
+            }
+        } catch (Exception e) {
+            log.debug("enrich company name id={}: {}", vo.getCompanyId(), e.toString());
+        }
+    }
+
+    private static String trimToNull(String s) {
+        if (s == null) {
+            return null;
+        }
+        String t = s.trim();
+        return t.isEmpty() ? null : t;
     }
 
     /** 写操作前拉取规则；不经过 {@link #detail(Long)}，避免重复做可读性断言。 */

@@ -70,7 +70,7 @@ public class AdminSystemStaffService {
         ResponseVo<PassengerStaffUserVO> vo = callPassengerResponse(
                 () -> passengerAdminSysClient.staffCreate(caller.userId(), req));
         AdminSystemStaffUserVO out = map(requireOk(vo, null));
-        log.info("admin staff created id={} username={}", out != null ? out.getId() : null, body.getUsername());
+        log.info("管理端员工已创建 id={} username={}", out != null ? out.getId() : null, body.getUsername());
         return out;
     }
 
@@ -85,7 +85,7 @@ public class AdminSystemStaffService {
         ResponseVo<PassengerStaffUserVO> vo = callPassengerResponse(
                 () -> passengerAdminSysClient.staffUpdate(caller.userId(), id, req));
         AdminSystemStaffUserVO out = map(requireOk(vo, null));
-        log.info("admin staff updated id={}", id);
+        log.info("管理端员工已更新 id={}", id);
         return out;
     }
 
@@ -93,7 +93,7 @@ public class AdminSystemStaffService {
         AdminLoginUser caller = requireStaffManager();
         ResponseVo<Void> vo = callPassengerResponse(() -> passengerAdminSysClient.staffDelete(caller.userId(), id));
         requireOk(vo, null);
-        log.info("admin staff deleted id={}", id);
+        log.info("管理端员工已删除 id={}", id);
     }
 
     private static AdminLoginUser requireStaffManager() {

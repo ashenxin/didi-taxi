@@ -124,9 +124,9 @@ public class AppDriverAuthService {
         redis.opsForValue().set(otpKey, code, props.getCodeTtlSeconds(), TimeUnit.SECONDS);
 
         if (props.isMockSendEnabled()) {
-            log.info("[capacity.app.driver-auth] mock SMS otp phone={} code={} (mockSendEnabled=true)", p, code);
+            log.info("[运力端司机认证] 模拟短信验证码 phone={} code={}（mockSendEnabled=true）", p, code);
         } else {
-            log.warn("[capacity.app.driver-auth] mockSendEnabled=false but no SMS provider wired; phone={}", p);
+            log.warn("[运力端司机认证] mockSendEnabled=false 且未接入短信通道 phone={}", p);
         }
         return ResultUtil.success(null);
     }
@@ -170,7 +170,7 @@ public class AppDriverAuthService {
             return ResultUtil.error(409, "该手机号已注册，请直接登录");
         }
         clearLoginFailToday(phone);
-        log.info("driver registerSms success driverId={} phone={}", d.getId(), maskPhone(phone));
+        log.info("司机短信注册成功 driverId={} phone={}", d.getId(), maskPhone(phone));
         return ResultUtil.success(toBrief(d));
     }
 
@@ -215,7 +215,7 @@ public class AppDriverAuthService {
         Driver refreshed = driverMapper.selectById(d.getId());
         clearLoginFailToday(phone);
         Driver out = refreshed == null ? d : refreshed;
-        log.info("driver registerPassword success driverId={} phone={}", out.getId(), maskPhone(phone));
+        log.info("司机密码注册成功 driverId={} phone={}", out.getId(), maskPhone(phone));
         return ResultUtil.success(toBrief(out));
     }
 
@@ -241,7 +241,7 @@ public class AppDriverAuthService {
             return ResultUtil.error(otpOk.getCode(), otpOk.getMsg());
         }
         clearLoginFailToday(phone);
-        log.info("driver loginSms success driverId={} phone={}", d.getId(), maskPhone(phone));
+        log.info("司机短信登录成功 driverId={} phone={}", d.getId(), maskPhone(phone));
         return ResultUtil.success(toBrief(d));
     }
 
@@ -270,7 +270,7 @@ public class AppDriverAuthService {
             return ResultUtil.error(401, "手机号或密码错误");
         }
         clearLoginFailToday(phone);
-        log.info("driver loginPassword success driverId={} phone={}", d.getId(), maskPhone(phone));
+        log.info("司机密码登录成功 driverId={} phone={}", d.getId(), maskPhone(phone));
         return ResultUtil.success(toBrief(d));
     }
 

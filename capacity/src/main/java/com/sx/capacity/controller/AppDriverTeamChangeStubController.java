@@ -25,6 +25,6 @@ public class AppDriverTeamChangeStubController {
         return ResultUtil.notImplemented(
                 "司机端 App 尚未接入。实现时请 POST JSON：driverId、toTeamId、reason?，"
                         + "并调用 DriverTeamChangeService.submit(driverId, toTeamId, reason, requestedBy)；"
-                        + "需先执行 sql/migrate_driver_team_change.sql。");
+                        + "需先执行运力库建表 capacity_schema.sql（含 driver_team_change_request）。");
     }
 }

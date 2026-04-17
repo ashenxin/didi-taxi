@@ -3,6 +3,7 @@ package com.sx.driverapi.service;
 import com.sx.driverapi.auth.DriverJwtService;
 import com.sx.driverapi.auth.DriverTokenVersionStore;
 import com.sx.driverapi.client.CapacityDriverAuthClient;
+import com.sx.driverapi.client.CapacityDriverClient;
 import com.sx.driverapi.client.CoreResponseVo;
 import com.sx.driverapi.client.dto.AppAuthDriverBrief;
 import com.sx.driverapi.client.dto.AppPasswordLoginRequest;
@@ -13,6 +14,7 @@ import com.sx.driverapi.client.dto.AppSmsSendRequest;
 import com.sx.driverapi.common.exception.BizErrorException;
 import com.sx.driverapi.model.auth.DriverLoginResponse;
 import com.sx.driverapi.model.auth.DriverProfileVO;
+import com.sx.driverapi.model.capacity.DriverOnlineBody;
 import feign.FeignException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,13 +24,16 @@ import org.springframework.stereotype.Service;
 public class DriverAuthService {
 
     private final CapacityDriverAuthClient capacityDriverAuthClient;
+    private final CapacityDriverClient capacityDriverClient;
     private final DriverJwtService jwtService;
     private final DriverTokenVersionStore tokenVersionStore;
 
     public DriverAuthService(CapacityDriverAuthClient capacityDriverAuthClient,
+                             CapacityDriverClient capacityDriverClient,
                              DriverJwtService jwtService,
                              DriverTokenVersionStore tokenVersionStore) {
         this.capacityDriverAuthClient = capacityDriverAuthClient;
+        this.capacityDriverClient = capacityDriverClient;
         this.jwtService = jwtService;
         this.tokenVersionStore = tokenVersionStore;
     }
@@ -37,9 +42,9 @@ public class DriverAuthService {
         try {
             CoreResponseVo<Void> resp = capacityDriverAuthClient.sendSms(new AppSmsSendRequest(phone));
             unwrapOk(resp);
-            log.info("driver sms send requested phone={}", maskPhone(phone));
+            log.info("司机短信发送请求已提交 phone={}", maskPhone(phone));
         } catch (FeignException e) {
-            log.error("driver sms send feign error phone={} status={}", maskPhone(phone), e.status(), e);
+            log.error("司机短信发送 Feign 异常 phone={} status={}", maskPhone(phone), e.status(), e);
             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
         }
     }
@@ -65,14 +70,27 @@ public class DriverAuthService {
     }
 
     /**
-     * 登出：递增 token 版本，使当前及此前 JWT 全部失效。
+     * 登出：先通知运力下线听单并删除 Redis 司机池 GEO（与《乘客司机端_Redis与听单下线策略》§3 一致），再递增 token 版本使 JWT 失效。
      */
     public void logout(long driverId) {
         if (driverId <= 0) {
             throw new BizErrorException(400, "driverId非法");
         }
+        try {
+            DriverOnlineBody body = new DriverOnlineBody();
+            body.setOnline(false);
+            CoreResponseVo<Void> resp = capacityDriverClient.setOnline(driverId, body);
+            if (resp != null && resp.getCode() != null && resp.getCode() == 200) {
+                log.debug("登出：运力下线成功 driverId={}", driverId);
+            } else {
+                log.warn("登出：运力下线返回非200 driverId={} code={} msg={}",
+                        driverId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+            }
+        } catch (FeignException e) {
+            log.warn("登出：运力 Feign 调用失败 driverId={} status={}", driverId, e.status(), e);
+        }
         tokenVersionStore.nextVersion(driverId);
-        log.info("driver logout driverId={}", driverId);
+        log.info("司机已登出 driverId={}", driverId);
     }
 
     /**
@@ -93,7 +111,7 @@ public class DriverAuthService {
         out.setTokenType("Bearer");
         out.setExpiresIn(jwtService.getExpirationSeconds());
         out.setDriver(driver);
-        log.info("driver ws token issued driverId={}", driverId);
+        log.info("司机 WebSocket Token 已签发 driverId={}", driverId);
         return out;
     }
 
@@ -139,7 +157,7 @@ public class DriverAuthService {
         out.setTokenType("Bearer");
         out.setExpiresIn(jwtService.getExpirationSeconds());
         out.setDriver(driver);
-        log.info("driver login success driverId={} phone={}", brief.getId(), maskPhone(brief.getPhone()));
+        log.info("司机登录成功 driverId={} phone={}", brief.getId(), maskPhone(brief.getPhone()));
         return out;
     }
 }

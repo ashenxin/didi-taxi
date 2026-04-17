@@ -5,6 +5,9 @@ import jakarta.validation.constraints.NotNull;
 
 public class EstimateFareBody {
 
+    @NotNull(message = "companyId不能为空")
+    private Long companyId;
+
     @NotBlank(message = "provinceCode不能为空")
     private String provinceCode;
 
@@ -58,6 +61,14 @@ public class EstimateFareBody {
 
     public void setDurationSeconds(Long durationSeconds) {
         this.durationSeconds = durationSeconds;
+    }
+
+    public Long getCompanyId() {
+        return companyId;
+    }
+
+    public void setCompanyId(Long companyId) {
+        this.companyId = companyId;
     }
 }
 

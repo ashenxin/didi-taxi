@@ -40,6 +40,16 @@ public class Driver {
     private String cityName;
 
     /**
+     * 省份编码（国标省码 6 位，与前端级联一致）
+     */
+    private String provinceCode;
+
+    /**
+     * 省份名称
+     */
+    private String provinceName;
+
+    /**
      * 运力主体ID，关联 company.id
      */
     private Long companyId;
@@ -160,7 +170,7 @@ public class Driver {
     private Integer canAcceptOrder;
 
     /**
-     * 审核状态快照：0待完善 1审核中 2通过 3驳回/需补件 4暂停接单
+     * 审核状态快照：0待完善 1审核中 2通过 3驳回/需补件
      */
     private Integer auditStatus;
 

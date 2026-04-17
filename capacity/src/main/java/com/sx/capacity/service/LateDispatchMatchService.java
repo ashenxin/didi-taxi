@@ -15,11 +15,13 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 司机入池后尝试迟滞匹配：仅当该司机在 GEO 上为订单上车点的最近候选时，才落库 assign + 打开确认窗口。
+ * 迟滞匹配：司机上线入 GEO 后按「最近邻」尝试一条 CREATED；定时任务按 GEO 最近候选列表依次尝试 assign + 打开确认窗口（不依赖新司机登录）。
  */
 @Service
 @Slf4j
 public class LateDispatchMatchService {
+
+    private static final int SCHEDULED_NEAREST_LIMIT = 32;
 
     private final OrderServiceClient orderServiceClient;
     private final DriverGeoRedisPool driverGeoRedisPool;
@@ -27,19 +29,22 @@ public class LateDispatchMatchService {
     private final DispatchOrderPoolService dispatchOrderPoolService;
     private final double matchRadiusMeters;
     private final int driverOfferSeconds;
+    private final int scheduledScanBatchLimit;
 
     public LateDispatchMatchService(OrderServiceClient orderServiceClient,
                                     DriverGeoRedisPool driverGeoRedisPool,
                                     NearestDriverQueryService nearestDriverQueryService,
                                     DispatchOrderPoolService dispatchOrderPoolService,
                                     @Value("${capacity.dispatch.match-radius-meters:3000}") double matchRadiusMeters,
-                                    @Value("${capacity.dispatch.driver-offer-seconds:10}") int driverOfferSeconds) {
+                                    @Value("${capacity.dispatch.driver-offer-seconds:10}") int driverOfferSeconds,
+                                    @Value("${capacity.dispatch.late-match-batch-limit:50}") int scheduledScanBatchLimit) {
         this.orderServiceClient = orderServiceClient;
         this.driverGeoRedisPool = driverGeoRedisPool;
         this.nearestDriverQueryService = nearestDriverQueryService;
         this.dispatchOrderPoolService = dispatchOrderPoolService;
         this.matchRadiusMeters = matchRadiusMeters;
         this.driverOfferSeconds = driverOfferSeconds;
+        this.scheduledScanBatchLimit = scheduledScanBatchLimit;
     }
 
     /**
@@ -51,7 +56,7 @@ public class LateDispatchMatchService {
         }
         OrderServiceResponseVo<List<PendingDispatchFeignDto>> resp = orderServiceClient.listPendingDispatch(cityCode, 50);
         if (resp == null || resp.getCode() == null || resp.getCode() != 200 || resp.getData() == null) {
-            log.warn("late dispatch: pending list failed cityCode={} msg={}", cityCode, resp == null ? null : resp.getMsg());
+            log.warn("迟滞派单：待派单列表拉取失败 cityCode={} msg={}", cityCode, resp == null ? null : resp.getMsg());
             return;
         }
         for (PendingDispatchFeignDto order : resp.getData()) {
@@ -73,12 +78,60 @@ public class LateDispatchMatchService {
             try {
                 assignAndOpenOffer(order.getOrderNo(), nearest);
                 dispatchOrderPoolService.addPending(driverId, order.getOrderNo());
-                log.info("late dispatch matched orderNo={} driverId={}", order.getOrderNo(), driverId);
+                log.info("迟滞派单已匹配 orderNo={} driverId={}", order.getOrderNo(), driverId);
                 return;
             } catch (Exception e) {
-                log.warn("late dispatch assign failed orderNo={} driverId={}: {}", order.getOrderNo(), driverId, e.toString());
+                log.warn("迟滞派单指派失败 orderNo={} driverId={}: {}", order.getOrderNo(), driverId, e.toString());
             }
         }
+    }
+
+    /**
+     * 定时扫描：拉取一批 CREATED 待派单，对每条订单按 GEO 最近若干司机依次尝试 assign + openOffer，成功则写入运力侧待确认池。
+     *
+     * @return 本轮成功指派并打开确认窗口的订单数
+     */
+    public int tryMatchScheduledScan() {
+        OrderServiceResponseVo<List<PendingDispatchFeignDto>> resp =
+                orderServiceClient.listPendingDispatchAll(scheduledScanBatchLimit);
+        if (resp == null || resp.getCode() == null || resp.getCode() != 200 || resp.getData() == null) {
+            log.warn("迟滞派单定时扫描：全量待派单列表拉取失败 msg={}", resp == null ? null : resp.getMsg());
+            return 0;
+        }
+        int matched = 0;
+        for (PendingDispatchFeignDto order : resp.getData()) {
+            if (order == null || order.getOrderNo() == null) {
+                continue;
+            }
+            BigDecimal olat = order.getOriginLat();
+            BigDecimal olng = order.getOriginLng();
+            String cityCode = order.getCityCode();
+            if (olat == null || olng == null || cityCode == null || cityCode.isBlank()) {
+                continue;
+            }
+            List<Long> driverIds = driverGeoRedisPool.listNearestDriverIds(
+                    cityCode, olat.doubleValue(), olng.doubleValue(), matchRadiusMeters, SCHEDULED_NEAREST_LIMIT);
+            if (driverIds == null || driverIds.isEmpty()) {
+                continue;
+            }
+            for (Long driverId : driverIds) {
+                var nearest = nearestDriverQueryService.buildEligibleForDriver(driverId, cityCode, order.getProductCode());
+                if (nearest == null) {
+                    continue;
+                }
+                try {
+                    assignAndOpenOffer(order.getOrderNo(), nearest);
+                    dispatchOrderPoolService.addPending(driverId, order.getOrderNo());
+                    matched++;
+                    log.info("迟滞派单定时扫描已匹配 orderNo={} driverId={}", order.getOrderNo(), driverId);
+                    break;
+                } catch (Exception e) {
+                    log.debug("迟滞派单定时扫描跳过 orderNo={} driverId={}: {}",
+                            order.getOrderNo(), driverId, e.toString());
+                }
+            }
+        }
+        return matched;
     }
 
     private boolean isDriverNearestAtOrder(String cityCode, Long driverId, double originLat, double originLng) {

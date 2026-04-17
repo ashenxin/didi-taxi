@@ -17,7 +17,7 @@ public class TestController {
      */
     @GetMapping("/test/ping")
     public String ping() {
-        log.info("passenger ping");
+        log.info("乘客核心服务连通检查");
         return "passenger ok";
     }
 }

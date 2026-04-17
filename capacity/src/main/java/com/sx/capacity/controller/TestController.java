@@ -19,9 +19,9 @@ public class TestController {
      */
     @GetMapping("/test/sleuth")
     public ResponseVo<String> testSleuth() {
-        log.info("info");
-        log.error("error");
-        log.debug("debug");
+        log.info("测试 info 日志");
+        log.error("测试 error 日志");
+        log.debug("测试 debug 日志");
         return ResultUtil.success("Hello sleuth capacity");
     }
 }

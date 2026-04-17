@@ -83,12 +83,12 @@ public class AmapDrivingRouteService {
             resp.setDurationSeconds(durationSeconds);
             resp.setProvider("gaode");
             resp.setTraceId(UUID.randomUUID().toString());
-            log.info("amap driving route ok distanceM={} durationS={}", distanceMeters, durationSeconds);
+            log.info("高德驾车路线成功 distanceM={} durationS={}", distanceMeters, durationSeconds);
             return resp;
         } catch (AmapApiException e) {
             throw e;
         } catch (Exception e) {
-            log.error("amap driving route parse failed", e);
+            log.error("高德驾车路线响应解析失败", e);
             throw new AmapApiException("解析高德响应失败: " + e.getMessage());
         }
     }

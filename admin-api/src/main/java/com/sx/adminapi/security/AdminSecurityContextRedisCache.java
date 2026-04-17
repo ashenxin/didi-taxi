@@ -51,7 +51,7 @@ public class AdminSecurityContextRedisCache {
         try {
             raw = redis.get().opsForValue().get(cacheKey(userId));
         } catch (RuntimeException e) {
-            log.warn("Redis get admin security-context failed userId={}: {}", userId, e.toString());
+            log.warn("Redis 读取管理端安全上下文失败 userId={}: {}", userId, e.toString());
             return Optional.empty();
         }
         if (raw == null || raw.isBlank()) {
@@ -67,7 +67,7 @@ public class AdminSecurityContextRedisCache {
             }
             return Optional.of(ctx);
         } catch (JsonProcessingException e) {
-            log.warn("Redis admin security-context JSON corrupt userId={}", userId);
+            log.warn("Redis 管理端安全上下文 JSON 损坏 userId={}", userId);
             try {
                 redis.get().delete(cacheKey(userId));
             } catch (RuntimeException ignored) {
@@ -88,9 +88,9 @@ public class AdminSecurityContextRedisCache {
             String json = objectMapper.writeValueAsString(ctx);
             redis.get().opsForValue().set(cacheKey(userId), json, ttlSeconds, TimeUnit.SECONDS);
         } catch (JsonProcessingException e) {
-            log.warn("Serialize admin security-context for Redis failed userId={}", userId);
+            log.warn("序列化管理端安全上下文写入 Redis 失败 userId={}", userId);
         } catch (RuntimeException e) {
-            log.warn("Redis set admin security-context failed userId={}: {}", userId, e.toString());
+            log.warn("Redis 写入管理端安全上下文失败 userId={}: {}", userId, e.toString());
         }
     }
 

@@ -77,12 +77,12 @@ public class AmapIpLocationService {
             resp.setRectangle(textOrEmpty(root, "rectangle"));
             resp.setProvider("gaode");
             resp.setTraceId(UUID.randomUUID().toString());
-            log.info("amap ip locate ok ip={} adcode={}", trimmed, resp.getAdcode());
+            log.info("高德 IP 定位成功 ip={} adcode={}", trimmed, resp.getAdcode());
             return resp;
         } catch (AmapApiException e) {
             throw e;
         } catch (Exception e) {
-            log.error("amap ip locate parse failed", e);
+            log.error("高德 IP 定位响应解析失败", e);
             throw new AmapApiException("解析高德 IP 响应失败: " + e.getMessage());
         }
     }

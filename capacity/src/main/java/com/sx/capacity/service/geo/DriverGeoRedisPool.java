@@ -45,7 +45,7 @@ public class DriverGeoRedisPool {
             redis.opsForGeo().add(key, point, String.valueOf(driverId));
             redis.expire(key, Duration.ofSeconds(Math.max(60, geoTtlSeconds)));
         } catch (Exception e) {
-            log.warn("driver geo add failed cityCode={} driverId={}: {}", cityCode, driverId, e.toString());
+            log.warn("司机地理位置写入失败 cityCode={} driverId={}: {}", cityCode, driverId, e.toString());
         }
     }
 
@@ -57,7 +57,7 @@ public class DriverGeoRedisPool {
         try {
             redis.opsForGeo().remove(key, String.valueOf(driverId));
         } catch (Exception e) {
-            log.warn("driver geo remove failed cityCode={} driverId={}: {}", cityCode, driverId, e.toString());
+            log.warn("司机地理位置移除失败 cityCode={} driverId={}: {}", cityCode, driverId, e.toString());
         }
     }
 
@@ -99,7 +99,7 @@ public class DriverGeoRedisPool {
             }
             return out;
         } catch (Exception e) {
-            log.warn("driver geo radius failed cityCode={}: {}", cityCode, e.toString());
+            log.warn("司机地理位置半径查询失败 cityCode={}: {}", cityCode, e.toString());
             return List.of();
         }
     }

@@ -6,6 +6,7 @@ import com.sx.order.common.util.ResultUtil;
 import com.sx.order.common.vo.ResponseVo;
 import com.sx.order.dao.TripOrderEntityMapper;
 import com.sx.order.model.TripOrder;
+import com.sx.order.model.dto.AssignedAwaitingRescheduleDto;
 import com.sx.order.model.dto.AssignOrderBody;
 import com.sx.order.model.dto.CancelOrderBody;
 import com.sx.order.model.dto.CreateOrderBody;
@@ -121,6 +122,40 @@ public class TripOrderController {
             @RequestParam(required = false, defaultValue = "50") Integer limit) {
         try {
             return ResultUtil.success(tripOrderWriteService.listCreatedForDispatch(cityCode, limit));
+        } catch (IllegalArgumentException ex) {
+            return ResultUtil.requestError(ex.getMessage());
+        }
+    }
+
+    /**
+     * 内部：全量待派单（{@code CREATED}）列表，供运力服务定时迟滞匹配；按创建时间升序。
+     * {@code GET /api/v1/orders/internal/pending-dispatch-all?limit=}
+     */
+    @GetMapping("/internal/pending-dispatch-all")
+    public ResponseVo<List<PendingDispatchOrderDto>> internalPendingDispatchAll(
+            @RequestParam(required = false, defaultValue = "100") Integer limit) {
+        return ResultUtil.success(tripOrderWriteService.listCreatedForDispatchAll(limit));
+    }
+
+    /**
+     * 内部：确认超时打回后、待下一轮 offer 或 GEO 改派的 {@code ASSIGNED} 订单列表。
+     * {@code GET /api/v1/orders/internal/assigned-awaiting-reschedule?limit=}
+     */
+    @GetMapping("/internal/assigned-awaiting-reschedule")
+    public ResponseVo<List<AssignedAwaitingRescheduleDto>> internalAssignedAwaitingReschedule(
+            @RequestParam(required = false, defaultValue = "50") Integer limit) {
+        return ResultUtil.success(tripOrderWriteService.listAssignedAwaitingReschedule(limit));
+    }
+
+    /**
+     * 内部：改派（无进行中确认窗口时更换司机），供运力调度调用。
+     * {@code POST /api/v1/orders/internal/reassign/{orderNo}}
+     */
+    @PostMapping("/internal/reassign/{orderNo}")
+    public ResponseVo<Void> internalReassign(@PathVariable String orderNo, @RequestBody @Valid AssignOrderBody body) {
+        try {
+            tripOrderWriteService.reassign(orderNo, body);
+            return ResultUtil.success(null);
         } catch (IllegalArgumentException ex) {
             return ResultUtil.requestError(ex.getMessage());
         }

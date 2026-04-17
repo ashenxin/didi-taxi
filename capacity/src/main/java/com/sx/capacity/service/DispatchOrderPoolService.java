@@ -30,7 +30,19 @@ public class DispatchOrderPoolService {
             redis.opsForSet().add(key, orderNo);
             redis.expire(key, Duration.ofDays(1));
         } catch (Exception e) {
-            log.warn("order pool add failed driverId={} orderNo={}: {}", driverId, orderNo, e.toString());
+            log.warn("订单池写入失败 driverId={} orderNo={}: {}", driverId, orderNo, e.toString());
+        }
+    }
+
+    public void removePending(Long driverId, String orderNo) {
+        if (driverId == null || orderNo == null || orderNo.isBlank()) {
+            return;
+        }
+        String key = KEY_PREFIX + driverId;
+        try {
+            redis.opsForSet().remove(key, orderNo);
+        } catch (Exception e) {
+            log.warn("订单池移除失败 driverId={} orderNo={}: {}", driverId, orderNo, e.toString());
         }
     }
 }

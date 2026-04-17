@@ -137,20 +137,36 @@ public class AdminSysStaffService {
         AdminSecurityContextResponse caller = requireStaffCaller(callerUserId);
         boolean superUser = caller.getRoleCodes().contains(R_SUPER);
 
-        String rc = body.getRoleCode();
+        String rc = normalizeStaffRoleCode(body.getRoleCode());
         if (!R_PROVINCE.equals(rc) && !R_CITY.equals(rc)) {
             throw new AdminPermissionException("仅支持创建省管理员或市管理员");
         }
-        if (!superUser) {
-            if (!R_CITY.equals(rc)) {
-                throw new AdminPermissionException("仅超级管理员可创建省管理员");
-            }
-            if (!Objects.equals(body.getProvinceCode(), caller.getProvinceCode())) {
-                throw new AdminPermissionException("市管理员只能建立在本人所辖省份");
-            }
-        }
+        String provinceCodeInput = trimOrNull(body.getProvinceCode());
+        String cityCode = trimOrNull(body.getCityCode());
 
-        validateScopeFields(rc, body.getProvinceCode(), body.getCityCode());
+        final String provinceToPersist;
+        if (superUser) {
+            provinceToPersist = provinceCodeInput;
+            validateScopeFields(rc, provinceToPersist, cityCode);
+        } else {
+            // 省管理员：仅可创建「本人所属省」下的市操作员；市编码与省编码校验一律以 caller 的省为准，不信任可被篡改的 body
+            if (!caller.getRoleCodes().contains(R_PROVINCE)) {
+                throw new AdminPermissionException("无权限创建管理员");
+            }
+            if (!R_CITY.equals(rc)) {
+                throw new AdminPermissionException(
+                        "仅超级管理员可创建省管理员；省管理员仅能创建本市操作员（角色 CITY_OPERATOR）");
+            }
+            String callerProv = trimOrNull(caller.getProvinceCode());
+            if (callerProv == null) {
+                throw new AdminPermissionException("省管理员账号缺少省份编码");
+            }
+            if (provinceCodeInput != null && !callerProv.equals(provinceCodeInput)) {
+                throw new AdminPermissionException("不能创建非本省范围内的市操作员（省份须与本人一致）");
+            }
+            validateScopeFields(R_CITY, callerProv, cityCode);
+            provinceToPersist = callerProv;
+        }
 
         SysRole role = sysRoleMapper.selectOne(
                 Wrappers.<SysRole>lambdaQuery().eq(SysRole::getCode, rc).eq(SysRole::getIsDeleted, 0).last("LIMIT 1"));
@@ -162,8 +178,8 @@ public class AdminSysStaffService {
                 .setUsername(body.getUsername().trim())
                 .setPasswordHash(BCRYPT.encode(body.getPassword()))
                 .setDisplayName(trimOrNull(body.getDisplayName()))
-                .setProvinceCode(body.getProvinceCode())
-                .setCityCode(R_CITY.equals(rc) ? body.getCityCode() : null)
+                .setProvinceCode(provinceToPersist)
+                .setCityCode(R_CITY.equals(rc) ? cityCode : null)
                 .setTokenVersion(0L)
                 .setStatus(1)
                 .setIsDeleted(0);
@@ -200,14 +216,19 @@ public class AdminSysStaffService {
         boolean touchGeo = body.getProvinceCode() != null || body.getCityCode() != null;
         if (touchGeo) {
             if (provOnly) {
-                if (body.getProvinceCode() != null && !Objects.equals(body.getProvinceCode(), u.getProvinceCode())) {
+                if (body.getProvinceCode() != null
+                        && !Objects.equals(trimOrNull(body.getProvinceCode()), trimOrNull(u.getProvinceCode()))) {
                     throw new AdminPermissionException("省管理员不可修改目标省份");
                 }
                 if (!R_CITY.equals(roleCode)) {
                     throw new AdminPermissionException("省管理员仅可调整本市管理员的城市");
                 }
-                String newCity = body.getCityCode() != null ? body.getCityCode() : u.getCityCode();
-                validateScopeFields(R_CITY, u.getProvinceCode(), newCity);
+                String callerProv = trimOrNull(caller.getProvinceCode());
+                if (callerProv == null || !callerProv.equals(trimOrNull(u.getProvinceCode()))) {
+                    throw new AdminPermissionException("仅能调整本省下属市操作员的城市");
+                }
+                String newCity = trimOrNull(body.getCityCode() != null ? body.getCityCode() : u.getCityCode());
+                validateScopeFields(R_CITY, callerProv, newCity);
                 u.setCityCode(newCity);
             } else {
                 String np = body.getProvinceCode() != null ? body.getProvinceCode() : u.getProvinceCode();
@@ -365,6 +386,14 @@ public class AdminSysStaffService {
         return t.isEmpty() ? null : t;
     }
 
+    /** 前端可能传大小写不一致的 roleCode */
+    private static String normalizeStaffRoleCode(String roleCode) {
+        if (roleCode == null) {
+            return null;
+        }
+        return roleCode.trim().toUpperCase();
+    }
+
     private static void validateScopeFields(String roleCode, String provinceCode, String cityCode) {
         if (provinceCode == null || provinceCode.isBlank()) {
             throw new AdminPermissionException("省份编码不能为空");
@@ -379,7 +408,7 @@ public class AdminSysStaffService {
             throw new AdminPermissionException("市管理员必须填写城市编码");
         }
         if (!cityBelongsToProvince(cityCode.trim(), provinceCode.trim())) {
-            throw new AdminPermissionException("城市须隶属于所选省份（行政区划编码前缀校验）");
+            throw new AdminPermissionException("城市须隶属于所选省份，不得跨省或前缀不匹配");
         }
     }
 

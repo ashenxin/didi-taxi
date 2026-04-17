@@ -1,5 +1,9 @@
 package com.sx.adminapi.model.order;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.sx.adminapi.common.jackson.FlexibleLocalDateTimeDeserializer;
+import com.sx.adminapi.common.jackson.LocalDateTimeDisplaySerializer;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -19,6 +23,10 @@ public class AdminOrderEventVO {
     private String operatorId;
     private String reasonDesc;
     private String extJson;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime occurredAt;
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)
     private LocalDateTime createdAt;
 }

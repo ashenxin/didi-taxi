@@ -83,7 +83,7 @@ public class DriverTeamChangeService {
         driver.setUpdatedAt(now);
         driverMapper.updateById(driver);
 
-        log.info("team change submitted requestId={} driverId={} toTeamId={}", row.getId(), driverId, toTeamId);
+        log.info("换队申请已提交 requestId={} driverId={} toTeamId={}", row.getId(), driverId, toTeamId);
         return row.getId();
     }
 
@@ -127,9 +127,13 @@ public class DriverTeamChangeService {
                 dw.eq(Driver::getCityCode, cityCode.trim());
             } else if (StringUtils.hasText(provinceCode)) {
                 String p = provinceCode.trim();
-                if (p.length() >= 2) {
-                    dw.likeRight(Driver::getCityCode, p.substring(0, 2));
-                }
+                String prefix2 = p.length() >= 2 ? p.substring(0, 2) : null;
+                dw.and(w -> {
+                    w.eq(Driver::getProvinceCode, p);
+                    if (prefix2 != null) {
+                        w.or(w2 -> w2.isNull(Driver::getProvinceCode).likeRight(Driver::getCityCode, prefix2));
+                    }
+                });
             }
             List<Driver> drivers = driverMapper.selectList(dw);
             if (drivers.isEmpty()) {
@@ -187,11 +191,18 @@ public class DriverTeamChangeService {
         if (driver == null || Objects.equals(driver.getIsDeleted(), 1)) {
             throw new CapacityBizException("司机不存在");
         }
+        Company toCompany = companyMapper.selectById(fresh.getToCompanyId());
         driver.setCompanyId(fresh.getToCompanyId());
         driver.setCanAcceptOrder(1);
+        if (toCompany != null) {
+            driver.setProvinceCode(toCompany.getProvinceCode());
+            driver.setProvinceName(toCompany.getProvinceName());
+            driver.setCityCode(toCompany.getCityCode());
+            driver.setCityName(toCompany.getCityName());
+        }
         driver.setUpdatedAt(now);
         driverMapper.updateById(driver);
-        log.info("team change approved requestId={} driverId={}", id, fresh.getDriverId());
+        log.info("换队申请已通过 requestId={} driverId={}", id, fresh.getDriverId());
     }
 
     /**
@@ -213,7 +224,7 @@ public class DriverTeamChangeService {
         if (n == 0) {
             throw new CapacityBizException("申请不存在或已审核");
         }
-        log.info("team change rejected requestId={}", id);
+        log.info("换队申请已拒绝 requestId={}", id);
     }
 
     private DriverTeamChangeRequestVO toVo(DriverTeamChangeRequest r) {

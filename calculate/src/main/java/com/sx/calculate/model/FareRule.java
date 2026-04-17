@@ -13,7 +13,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * 计价规则实体（按省/市/产品线维度配置，支持生效区间）。
+ * 计价规则实体（按运力公司、省/市、产品线维度配置，支持生效区间）。
  * 对应 MySQL 库 {@code calculate}、表 {@code fare_rule}。
  * 计费公式概要：起步价 + 超包含里程×单价 + 超包含时长×单价，再应用可选 {@code minimum_fare}/{@code maximum_fare}。
  */
@@ -26,6 +26,12 @@ public class FareRule {
     /** 主键，自增 */
     @TableId(type = IdType.AUTO)
     private Long id;
+
+    /** 运力公司主键，对应 {@code capacity.company.id} */
+    private Long companyId;
+
+    /** 运力公司编号，与 {@code capacity.company.company_no} 一致 */
+    private String companyNo;
 
     /**
      * 省份编码

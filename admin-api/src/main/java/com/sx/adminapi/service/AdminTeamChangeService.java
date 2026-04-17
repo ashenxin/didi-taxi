@@ -107,7 +107,7 @@ public class AdminTeamChangeService {
         }
         Map<String, Object> wrapper = capacityClient.approveDriverTeamChange(id, body, reviewedBy);
         assertSuccess(wrapper);
-        log.info("admin team change approved id={} by={}", id, reviewedBy);
+        log.info("管理端换队申请已通过 id={} 审核人={}", id, reviewedBy);
     }
 
     /** 审核拒绝；域校验同 {@link #approve}。 */
@@ -117,7 +117,7 @@ public class AdminTeamChangeService {
         body.put("reviewReason", reviewReason);
         Map<String, Object> wrapper = capacityClient.rejectDriverTeamChange(id, body, reviewedBy);
         assertSuccess(wrapper);
-        log.info("admin team change rejected id={} by={}", id, reviewedBy);
+        log.info("管理端换队申请已拒绝 id={} 审核人={}", id, reviewedBy);
     }
 
     /** 拉详情（不做可读断言）后校验司机城市是否在域内。 */

@@ -2,6 +2,7 @@ package com.sx.adminapi.security;
 
 import com.sx.adminapi.common.enums.ExceptionCode;
 import com.sx.adminapi.common.exception.BizErrorException;
+import com.sx.adminapi.model.capacity.CompanyCreateBody;
 import com.sx.adminapi.model.pricing.FareRuleUpsertBody;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -136,6 +137,45 @@ public final class AdminDataScope {
                 throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "司机不存在");
             }
         }
+    }
+
+    /**
+     * 创建运力公司：省管锁定本省，市管锁定本市；SUPER 不改动请求体中的省市区（由下游校验非空）。
+     */
+    public static CompanyCreateBody scopeCompanyWrite(AdminLoginUser u, CompanyCreateBody body) {
+        if (body == null) {
+            throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "请求体不能为空");
+        }
+        if (isSuper(u)) {
+            return body;
+        }
+        if (isProvinceAdmin(u)) {
+            String fixedP = trimToNull(u.provinceCode());
+            if (fixedP == null) {
+                throw new BizErrorException(ExceptionCode.FORBIDDEN.getValue(), "账号缺少省份信息");
+            }
+            String bp = trimToNull(body.getProvinceCode());
+            if (bp != null && !bp.equals(fixedP)) {
+                throw new BizErrorException(ExceptionCode.FORBIDDEN.getValue(), "无权在其它省份创建数据");
+            }
+            body.setProvinceCode(fixedP);
+            String bc = trimToNull(body.getCityCode());
+            if (bc != null && !cityBelongsToProvince(bc, fixedP)) {
+                throw new BizErrorException(ExceptionCode.FORBIDDEN.getValue(), "城市不属于本省");
+            }
+            return body;
+        }
+        if (isCityOperator(u)) {
+            String fixedP = trimToNull(u.provinceCode());
+            String fixedC = trimToNull(u.cityCode());
+            if (fixedP == null || fixedC == null) {
+                throw new BizErrorException(ExceptionCode.FORBIDDEN.getValue(), "账号缺少省/市信息");
+            }
+            body.setProvinceCode(fixedP);
+            body.setCityCode(fixedC);
+            return body;
+        }
+        throw new BizErrorException(ExceptionCode.FORBIDDEN.getValue(), "无权创建运力公司");
     }
 
     /**

@@ -41,11 +41,11 @@ public class CreatedDispatchTimeoutScheduler {
                     n++;
                 }
             } catch (RuntimeException ex) {
-                log.warn("created dispatch timeout cancel failed orderNo={}: {}", o.getOrderNo(), ex.toString());
+                log.warn("待派单超时系统取消失败 orderNo={}: {}", o.getOrderNo(), ex.toString());
             }
         }
         if (n > 0) {
-            log.info("dispatch timeout scan: system-cancelled {} CREATED order(s) (wait>={}s)", n, waitTimeoutSeconds);
+            log.info("待派单超时扫描：本轮系统取消 {} 笔 CREATED 订单（等待≥{}秒）", n, waitTimeoutSeconds);
         }
     }
 }

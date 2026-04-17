@@ -14,6 +14,6 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        log.info("driver ws connected sessionId={} remote={}", session.getId(), session.getRemoteAddress());
+        log.info("司机 WebSocket 已连接 sessionId={} remote={}", session.getId(), session.getRemoteAddress());
     }
 }

@@ -89,7 +89,7 @@ public class AmapGeocodeService {
         resp.setLevel(text(first, "level"));
         resp.setProvider("gaode");
         resp.setTraceId(UUID.randomUUID().toString());
-        log.info("amap geocode ok address={} lng={} lat={}", address.trim(), lngLat[0], lngLat[1]);
+        log.info("高德地理编码成功 address={} lng={} lat={}", address.trim(), lngLat[0], lngLat[1]);
         return resp;
     }
 
@@ -141,7 +141,7 @@ public class AmapGeocodeService {
         resp.setAdcode(text(ac, "adcode"));
         resp.setProvider("gaode");
         resp.setTraceId(UUID.randomUUID().toString());
-        log.info("amap regeo ok lng={} lat={}", lng, lat);
+        log.info("高德逆地理编码成功 lng={} lat={}", lng, lat);
         return resp;
     }
 
@@ -153,7 +153,7 @@ public class AmapGeocodeService {
         try {
             return objectMapper.readTree(raw);
         } catch (Exception e) {
-            log.error("amap json parse failed uri={}", uri, e);
+            log.error("高德接口 JSON 解析失败 uri={}", uri, e);
             throw new AmapApiException("解析高德响应失败: " + e.getMessage());
         }
     }

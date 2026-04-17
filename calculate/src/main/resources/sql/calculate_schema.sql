@@ -1,10 +1,17 @@
--- 计费服务 calculate 库 - 计价规则表
+-- =============================================================================
+-- calculate 库：建表（当前仅 fare_rule）
+-- 种子数据见 calculate_seed.sql
+-- =============================================================================
+-- 业务唯一维度：运力公司 + 省 + 市 + 产品线（product_code）；同一维度下生效区间不可重叠（由计费服务校验）
 CREATE DATABASE IF NOT EXISTS `calculate` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 USE `calculate`;
 
 CREATE TABLE IF NOT EXISTS `fare_rule` (
     `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+
+    `company_id` BIGINT NOT NULL COMMENT '运力公司主键 capacity.company.id',
+    `company_no` VARCHAR(32) NOT NULL COMMENT '运力公司编号，与 capacity.company.company_no 一致',
 
     `province_code` VARCHAR(32) NOT NULL COMMENT '省份编码',
     `city_code` VARCHAR(32) NOT NULL COMMENT '城市编码',
@@ -29,6 +36,8 @@ CREATE TABLE IF NOT EXISTS `fare_rule` (
     `updated_at` DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 
     PRIMARY KEY (`id`),
+    KEY `idx_fare_rule_company_scope` (`company_id`, `province_code`, `city_code`, `product_code`),
+    KEY `idx_fare_rule_company_id` (`company_id`),
     KEY `idx_fare_rule_province_city_product` (`province_code`, `city_code`, `product_code`),
     KEY `idx_fare_rule_city_product` (`city_code`, `product_code`),
     KEY `idx_fare_rule_effective` (`effective_from`, `effective_to`)

@@ -58,7 +58,7 @@ public class DriverStatusService {
                 .set(Driver::getUpdatedAt, new Date())
                 .eq(Driver::getId, driverId)
                 .eq(Driver::getIsDeleted, 0));
-        log.info("driver monitor updated driverId={} online={} monitorStatus={}", driverId, online, monitor);
+        log.info("司机听单状态已更新 driverId={} online={} monitorStatus={}", driverId, online, monitor);
 
         final String cityCode = d.getCityCode();
         final Long did = driverId;
@@ -74,10 +74,14 @@ public class DriverStatusService {
                         driverGeoRedisPool.add(cityCode, did, flat, flng);
                         lateDispatchMatchService.tryMatchAfterDriverOnline(did, cityCode, flat, flng);
                     } else if (!on) {
-                        driverGeoRedisPool.remove(cityCode, did);
+                        if (cityCode == null || cityCode.isBlank()) {
+                            log.warn("司机下线/登出同步：cityCode 为空，无法从 Redis GEO 移除 driverId={}", did);
+                        } else {
+                            driverGeoRedisPool.remove(cityCode, did);
+                        }
                     }
                 } catch (Exception e) {
-                    log.warn("afterCommit driver pool/match failed driverId={}: {}", did, e.toString());
+                    log.warn("事务提交后司机入池/匹配失败 driverId={}: {}", did, e.toString());
                 }
             }
         });
@@ -92,7 +96,7 @@ public class DriverStatusService {
         }
         CapacityDispatchProperties.GeoPin pin = dispatchProperties.getGeoPin().get(driverId);
         if (pin != null) {
-            log.info("driver geo-pin applied driverId={} lat={} lng={}", driverId, pin.getLat(), pin.getLng());
+            log.info("司机位置锚点已应用 driverId={} lat={} lng={}", driverId, pin.getLat(), pin.getLng());
             return new double[]{pin.getLat(), pin.getLng()};
         }
         return toPairOrNull(lat, lng);

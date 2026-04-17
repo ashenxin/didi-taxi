@@ -2,13 +2,16 @@ CREATE TABLE IF NOT EXISTS company (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     city_code VARCHAR(32) NULL,
     city_name VARCHAR(64) NULL,
+    province_code VARCHAR(32) NULL,
+    province_name VARCHAR(64) NULL,
     company_no VARCHAR(32) NOT NULL,
     company_name VARCHAR(128) NOT NULL,
     team_id BIGINT NULL,
     team VARCHAR(128) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_deleted INT NOT NULL DEFAULT 0
+    is_deleted INT NOT NULL DEFAULT 0,
+    UNIQUE (team_id)
 );
 
 CREATE TABLE IF NOT EXISTS driver (
@@ -16,6 +19,8 @@ CREATE TABLE IF NOT EXISTS driver (
     driver_source INT NULL,
     city_code VARCHAR(32) NULL,
     city_name VARCHAR(64) NULL,
+    province_code VARCHAR(32) NULL,
+    province_name VARCHAR(64) NULL,
     company_id BIGINT NULL,
     brand_no VARCHAR(32) NULL,
     brand_name VARCHAR(128) NULL,

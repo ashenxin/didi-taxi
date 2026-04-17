@@ -24,7 +24,7 @@ public class OfferTimeoutScheduler {
     public void scanExpiredOffers() {
         int n = tripOrderWriteService.timeoutPendingDriverOffers(LocalDateTime.now());
         if (n > 0) {
-            log.info("offer timeout scan: reverted {} pending driver confirm(s)", n);
+            log.info("司机确认窗口超时扫描：本轮打回 {} 笔待确认订单", n);
         }
     }
 }

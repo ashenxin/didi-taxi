@@ -40,11 +40,12 @@ public class FareRuleController {
 
     /**
      * 计价规则分页列表。
-     * {@code GET /api/v1/fare-rules?pageNo=&pageSize=&provinceCode=&cityCode=&productCode=&ruleName=&active=}
+     * {@code GET /api/v1/fare-rules?pageNo=&pageSize=&companyId=&provinceCode=&cityCode=&productCode=&ruleName=&active=}
      */
     @GetMapping
     public ResponseVo<PageVo<FareRule>> page(@RequestParam(defaultValue = "1") Integer pageNo,
                                              @RequestParam(defaultValue = "10") Integer pageSize,
+                                             @RequestParam(required = false) Long companyId,
                                              @RequestParam(required = false) String provinceCode,
                                              @RequestParam(required = false) String cityCode,
                                              @RequestParam(required = false) String productCode,
@@ -56,6 +57,7 @@ public class FareRuleController {
 
         var qw = Wrappers.<FareRule>lambdaQuery()
                 .eq(FareRule::getIsDeleted, 0)
+                .eq(companyId != null, FareRule::getCompanyId, companyId)
                 .eq(provinceCode != null && !provinceCode.isBlank(), FareRule::getProvinceCode, provinceCode)
                 .eq(cityCode != null && !cityCode.isBlank(), FareRule::getCityCode, cityCode)
                 .eq(productCode != null && !productCode.isBlank(), FareRule::getProductCode, productCode)
@@ -110,7 +112,13 @@ public class FareRuleController {
         if (err != null) {
             return ResultUtil.requestError(err);
         }
+        err = assertNoTimeOverlap(null, body);
+        if (err != null) {
+            return ResultUtil.requestError(err);
+        }
         FareRule row = new FareRule()
+                .setCompanyId(body.getCompanyId())
+                .setCompanyNo(body.getCompanyNo().trim())
                 .setProvinceCode(body.getProvinceCode())
                 .setCityCode(body.getCityCode())
                 .setProductCode(body.getProductCode())
@@ -126,7 +134,7 @@ public class FareRuleController {
                 .setMaximumFare(body.getMaximumFare())
                 .setIsDeleted(0);
         fareRuleEntityMapper.insert(row);
-        log.info("fare rule created id={} city={} product={}", row.getId(), body.getCityCode(), body.getProductCode());
+        log.info("计价规则已创建 id={} city={} product={}", row.getId(), body.getCityCode(), body.getProductCode());
         return ResultUtil.success(row.getId());
     }
 
@@ -149,6 +157,12 @@ public class FareRuleController {
         if (err != null) {
             return ResultUtil.requestError(err);
         }
+        err = assertNoTimeOverlap(id, body);
+        if (err != null) {
+            return ResultUtil.requestError(err);
+        }
+        existing.setCompanyId(body.getCompanyId());
+        existing.setCompanyNo(body.getCompanyNo().trim());
         existing.setProvinceCode(body.getProvinceCode());
         existing.setCityCode(body.getCityCode());
         existing.setProductCode(body.getProductCode());
@@ -163,7 +177,7 @@ public class FareRuleController {
         existing.setMinimumFare(body.getMinimumFare());
         existing.setMaximumFare(body.getMaximumFare());
         fareRuleEntityMapper.updateById(existing);
-        log.info("fare rule updated id={}", id);
+        log.info("计价规则已更新 id={}", id);
         return ResultUtil.success(null);
     }
 
@@ -184,7 +198,7 @@ public class FareRuleController {
         }
         existing.setIsDeleted(1);
         fareRuleEntityMapper.updateById(existing);
-        log.info("fare rule deleted id={}", id);
+        log.info("计价规则已删除 id={}", id);
         return ResultUtil.success(null);
     }
 
@@ -208,6 +222,39 @@ public class FareRuleController {
             return "封顶价不能小于 0";
         }
         return null;
+    }
+
+    /**
+     * 同一运力公司、省、市、产品线（{@code product_code}）下，未删除记录的生效区间不得重叠（便于保留历史失效版本）。
+     */
+    private String assertNoTimeOverlap(Long excludeId, FareRuleUpsertBody body) {
+        var q = Wrappers.<FareRule>lambdaQuery()
+                .eq(FareRule::getIsDeleted, 0)
+                .eq(FareRule::getCompanyId, body.getCompanyId())
+                .eq(FareRule::getProvinceCode, body.getProvinceCode().trim())
+                .eq(FareRule::getCityCode, body.getCityCode().trim())
+                .eq(FareRule::getProductCode, body.getProductCode().trim());
+        if (excludeId != null) {
+            q.ne(FareRule::getId, excludeId);
+        }
+        List<FareRule> others = fareRuleEntityMapper.selectList(q);
+        for (FareRule o : others) {
+            if (intervalsOverlap(body.getEffectiveFrom(), body.getEffectiveTo(),
+                    o.getEffectiveFrom(), o.getEffectiveTo())) {
+                return "该公司在省/市/产品线下已存在生效区间重叠的计价规则";
+            }
+        }
+        return null;
+    }
+
+    private static boolean intervalsOverlap(LocalDateTime aFrom, LocalDateTime aTo,
+                                            LocalDateTime bFrom, LocalDateTime bTo) {
+        if (aFrom == null || bFrom == null) {
+            return false;
+        }
+        LocalDateTime aEnd = aTo == null ? LocalDateTime.MAX : aTo;
+        LocalDateTime bEnd = bTo == null ? LocalDateTime.MAX : bTo;
+        return !aFrom.isAfter(bEnd) && !bFrom.isAfter(aEnd);
     }
 
     private boolean nonNegative(BigDecimal value) {

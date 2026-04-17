@@ -28,7 +28,7 @@ public class AdminSecurityContextCacheEvictor {
         try {
             redis.delete(keyPrefix + userId);
         } catch (RuntimeException e) {
-            log.warn("Evict admin security-context cache failed userId={}: {}", userId, e.toString());
+            log.warn("清除管理端安全上下文缓存失败 userId={}: {}", userId, e.toString());
         }
     }
 }

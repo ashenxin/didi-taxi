@@ -82,7 +82,7 @@ public class AppCustomerAuthService {
             recordLoginFail(req.getPhone());
             return unauthorized();
         }
-        log.info("passenger core loginPassword ok customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
+        log.info("乘客核心服务密码登录成功 customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
         return ResultUtil.success(toBrief(c));
     }
 
@@ -109,10 +109,10 @@ public class AppCustomerAuthService {
         redis.opsForValue().set(otpKey, code, smsProps.getCodeTtlSeconds(), TimeUnit.SECONDS);
 
         if (smsProps.isMockSendEnabled()) {
-            log.info("[passenger.app.customer-auth] mock SMS otp phone={} code={} (mockSendEnabled=true)", phone, code);
+            log.info("[乘客端认证] 模拟短信验证码 phone={} code={}（mockSendEnabled=true）", phone, code);
         } else {
             // 生产：在此调用短信网关；失败时应 delete gapKey、回滚 daily 计数（简化可接受少量误差）
-            log.warn("[passenger.app.customer-auth] mockSendEnabled=false but no SMS provider wired; phone={}", phone);
+            log.warn("[乘客端认证] mockSendEnabled=false 且未接入短信通道 phone={}", phone);
         }
         return ResultUtil.success(null);
     }
@@ -150,7 +150,7 @@ public class AppCustomerAuthService {
         if (c.getStatus() != null && c.getStatus() != 0) {
             return ResultUtil.forbidden("账号已冻结，请联系客服");
         }
-        log.info("passenger core loginSms ok customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
+        log.info("乘客核心服务短信登录成功 customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
         return ResultUtil.success(toBrief(c));
     }
 

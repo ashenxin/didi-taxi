@@ -19,4 +19,8 @@ public class ResultUtil {
     public static <T> ResponseVo<T> notImplemented(String msg) {
         return error(ExceptionCode.NOT_IMPLEMENTED.getValue(), msg);
     }
+
+    public static <T> ResponseVo<T> notFound(String msg) {
+        return error(ExceptionCode.NOT_FOUND.getValue(), msg);
+    }
 }

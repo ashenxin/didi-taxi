@@ -42,7 +42,7 @@ public class DriverBffService {
         body.setLat(lat);
         body.setLng(lng);
         unwrap(capacityDriverClient.setOnline(driverId, body), "运力上线状态");
-        log.info("driver online updated driverId={} online={}", driverId, online);
+        log.info("司机在线状态已更新 driverId={} online={}", driverId, online);
     }
 
     /**
@@ -69,9 +69,9 @@ public class DriverBffService {
             Integer st = row.getStatus();
             if (st == null || (st != STATUS_ASSIGNED && st != STATUS_PENDING_DRIVER_CONFIRM)) {
                 if (st != null && (st == STATUS_FINISHED || st == STATUS_CANCELLED)) {
-                    log.debug("skip terminal order in assigned list orderNo={} status={}", row.getOrderNo(), st);
+                    log.debug("指派列表跳过终态订单 orderNo={} status={}", row.getOrderNo(), st);
                 } else if (st != null) {
-                    log.warn("skip unexpected status in assigned list orderNo={} status={}", row.getOrderNo(), st);
+                    log.warn("指派列表跳过异常状态 orderNo={} status={}", row.getOrderNo(), st);
                 }
                 continue;
             }
@@ -93,26 +93,26 @@ public class DriverBffService {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.accept(orderNo, body), "确认接单");
-        log.info("driver accept order orderNo={} driverId={}", orderNo, driverId);
+        log.info("司机已接单 orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void arrive(String orderNo, Long driverId) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.arrive(orderNo, body), "到达上报");
-        log.info("driver arrive orderNo={} driverId={}", orderNo, driverId);
+        log.info("司机已到达 orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void start(String orderNo, Long driverId) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.start(orderNo, body), "开始行程");
-        log.info("driver start trip orderNo={} driverId={}", orderNo, driverId);
+        log.info("司机已开始行程 orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void finish(String orderNo, FinishOrderBody body) {
         unwrap(orderClient.finish(orderNo, body), "完单");
-        log.info("driver finish order orderNo={} driverId={}", orderNo, body != null ? body.getDriverId() : null);
+        log.info("司机已完单 orderNo={} driverId={}", orderNo, body != null ? body.getDriverId() : null);
     }
 
     /**
