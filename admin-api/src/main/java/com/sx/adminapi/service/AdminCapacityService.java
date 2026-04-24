@@ -200,6 +200,67 @@ public class AdminCapacityService {
         return toPage(data, AdminCarVO.class, pageNo, pageSize);
     }
 
+    /**
+     * 独立车辆分页列表：按车辆城市/司机归属公司等筛选；省/市由 {@link AdminDataScope#mergeRegionForQuery} 合并后下发 capacity。
+     */
+    @SuppressWarnings("unchecked")
+    public AdminPageVO<AdminCarVO> carPage(Integer pageNo,
+                                          Integer pageSize,
+                                          String provinceCode,
+                                          String cityCode,
+                                          Long companyId,
+                                          Long driverId,
+                                          String driverPhone,
+                                          String carNo,
+                                          String brandName,
+                                          String rideTypeId) {
+        AdminLoginUser login = AdminDataScope.requireUser();
+        AdminDataScope.RegionQuery rq = AdminDataScope.mergeRegionForQuery(login, provinceCode, cityCode);
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("pageNo", pageNo);
+        params.put("pageSize", pageSize);
+        putIfNotBlank(params, "provinceCode", rq.provinceCode());
+        putIfNotBlank(params, "cityCode", rq.cityCode());
+        if (companyId != null) {
+            params.put("companyId", companyId);
+        }
+        if (driverId != null) {
+            params.put("driverId", driverId);
+        }
+        putIfNotBlank(params, "driverPhone", driverPhone);
+        putIfNotBlank(params, "carNo", carNo);
+        putIfNotBlank(params, "brandName", brandName);
+        putIfNotBlank(params, "rideTypeId", rideTypeId);
+
+        Map<String, Object> wrapper = capacityClient.carPage(params);
+        Map<String, Object> data = castMap(unwrapData(wrapper));
+        return toPage(data, AdminCarVO.class, pageNo, pageSize);
+    }
+
+    /**
+     * 车辆详情：若车辆城市不在当前用户域内，返回 404 掩蔽。
+     */
+    public AdminCarVO carDetail(Long id) {
+        AdminLoginUser login = AdminDataScope.requireUser();
+        Map<String, Object> wrapper = capacityClient.carDetail(id);
+        Object data = unwrapData(wrapper);
+        if (data == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "车辆不存在");
+        }
+        AdminCarVO vo = objectMapper.convertValue(data, AdminCarVO.class);
+        // 使用车辆 cityCode 做数据域裁剪（与司机裁剪语义一致，但报错文案按车辆处理）
+        try {
+            AdminDataScope.assertDriverCityReadable(login, vo.getCityCode());
+        } catch (BizErrorException e) {
+            if (e.getErrorCode() == ExceptionCode.NOT_FOUND.getValue()) {
+                throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "车辆不存在");
+            }
+            throw e;
+        }
+        return vo;
+    }
+
     /** Feign 拉取司机；用于车辆列表前的域校验。 */
     private AdminDriverVO fetchDriverOrThrow(Long driverId) {
         Map<String, Object> wrapper = capacityClient.driverDetail(driverId);

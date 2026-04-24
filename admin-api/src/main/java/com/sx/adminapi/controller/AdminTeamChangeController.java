@@ -70,26 +70,24 @@ public class AdminTeamChangeController {
 
     /**
      * 审核通过；先校验申请对应司机城市在数据域内，再调用 capacity。
-     * {@code POST /admin/api/v1/capacity/team-change-requests/{id}/approve?reviewedBy=}
+     * {@code POST /admin/api/v1/capacity/team-change-requests/{id}/approve}
      */
     @PostMapping("/{id}/approve")
     public ResponseVo<Void> approve(@PathVariable Long id,
-                                    @RequestBody(required = false) ApproveTeamChangeBody body,
-                                    @RequestParam(required = false, defaultValue = "system") String reviewedBy) {
+                                    @RequestBody(required = false) ApproveTeamChangeBody body) {
         String reason = body != null ? body.getReviewReason() : null;
-        adminTeamChangeService.approve(id, reason, reviewedBy);
+        adminTeamChangeService.approve(id, reason);
         return ResultUtil.success(null);
     }
 
     /**
      * 审核拒绝（原因必填）；数据域校验同 {@link #approve}。
-     * {@code POST /admin/api/v1/capacity/team-change-requests/{id}/reject?reviewedBy=}
+     * {@code POST /admin/api/v1/capacity/team-change-requests/{id}/reject}
      */
     @PostMapping("/{id}/reject")
     public ResponseVo<Void> reject(@PathVariable Long id,
-                                   @Valid @RequestBody RejectTeamChangeBody body,
-                                   @RequestParam(required = false, defaultValue = "system") String reviewedBy) {
-        adminTeamChangeService.reject(id, body.getReviewReason(), reviewedBy);
+                                   @Valid @RequestBody RejectTeamChangeBody body) {
+        adminTeamChangeService.reject(id, body.getReviewReason());
         return ResultUtil.success(null);
     }
 }

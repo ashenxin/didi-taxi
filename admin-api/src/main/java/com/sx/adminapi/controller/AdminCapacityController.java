@@ -115,5 +115,33 @@ public class AdminCapacityController {
                                                            @RequestParam(defaultValue = "10") Integer pageSize) {
         return ResultUtil.success(adminCapacityService.carsByDriver(driverId, pageNo, pageSize));
     }
+
+    /**
+     * 独立车辆分页列表；省/市与当前登录用户数据域合并（越界 403）。
+     * {@code GET /admin/api/v1/capacity/cars?pageNo=&pageSize=&provinceCode=&cityCode=&companyId=&driverId=&driverPhone=&carNo=&brandName=&rideTypeId=}
+     */
+    @GetMapping("/cars")
+    public ResponseVo<AdminPageVO<AdminCarVO>> carPage(@RequestParam(defaultValue = "1") Integer pageNo,
+                                                       @RequestParam(defaultValue = "10") Integer pageSize,
+                                                       @RequestParam(required = false) String provinceCode,
+                                                       @RequestParam(required = false) String cityCode,
+                                                       @RequestParam(required = false) Long companyId,
+                                                       @RequestParam(required = false) Long driverId,
+                                                       @RequestParam(required = false) String driverPhone,
+                                                       @RequestParam(required = false) String carNo,
+                                                       @RequestParam(required = false) String brandName,
+                                                       @RequestParam(required = false) String rideTypeId) {
+        return ResultUtil.success(adminCapacityService.carPage(
+                pageNo, pageSize, provinceCode, cityCode, companyId, driverId, driverPhone, carNo, brandName, rideTypeId));
+    }
+
+    /**
+     * 车辆详情；车辆城市不在当前用户域内时 404（与“车辆不存在”同类掩蔽）。
+     * {@code GET /admin/api/v1/capacity/cars/{id}}
+     */
+    @GetMapping("/cars/{id}")
+    public ResponseVo<AdminCarVO> carDetail(@PathVariable Long id) {
+        return ResultUtil.success(adminCapacityService.carDetail(id));
+    }
 }
 

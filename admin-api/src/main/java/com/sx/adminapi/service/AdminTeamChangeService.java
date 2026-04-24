@@ -99,8 +99,9 @@ public class AdminTeamChangeService {
     }
 
     /** 审核通过；{@link #assertTeamChangeInScope} 防纵向越权。 */
-    public void approve(Long id, String reviewReason, String reviewedBy) {
+    public void approve(Long id, String reviewReason) {
         assertTeamChangeInScope(id);
+        String reviewedBy = String.valueOf(AdminDataScope.requireUser().userId());
         Map<String, Object> body = new HashMap<>();
         if (reviewReason != null && !reviewReason.isBlank()) {
             body.put("reviewReason", reviewReason);
@@ -111,8 +112,9 @@ public class AdminTeamChangeService {
     }
 
     /** 审核拒绝；域校验同 {@link #approve}。 */
-    public void reject(Long id, String reviewReason, String reviewedBy) {
+    public void reject(Long id, String reviewReason) {
         assertTeamChangeInScope(id);
+        String reviewedBy = String.valueOf(AdminDataScope.requireUser().userId());
         Map<String, Object> body = new HashMap<>();
         body.put("reviewReason", reviewReason);
         Map<String, Object> wrapper = capacityClient.rejectDriverTeamChange(id, body, reviewedBy);

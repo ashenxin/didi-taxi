@@ -1,0 +1,21 @@
+---
+description: Default frontend repo path for didi-taxi related work
+alwaysApply: true
+---
+
+# Default frontend repository path
+
+When the user asks to change or review frontend code but does not specify a path with `@...`, assume the frontend repository is located at:
+
+- `/Users/sx/Documents/workSpace/didi-taxi-front`
+
+Use that directory as the default root for searching, reading, and editing frontend files (e.g. pages, API clients, routes) related to this backend repo.
+
+# Frontend subprojects in this repo
+
+Within `/Users/sx/Documents/workSpace/didi-taxi-front`, treat these directories as:
+
+- `didi-driver-h5`: driver-side app (司机端)
+- `didi-passenger-h5`: passenger-side app (乘客端)
+- `didi-Vue`: admin console (后台管理平台)
+

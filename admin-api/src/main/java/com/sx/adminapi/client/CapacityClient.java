@@ -58,6 +58,18 @@ public interface CapacityClient {
     Map<String, Object> carsByDriver(@PathVariable("driverId") Long driverId, @RequestParam Map<String, Object> params);
 
     /**
+     * 车辆分页（管理端独立车辆列表）。
+     * Query 常用：{@code pageNo}、{@code pageSize}、{@code provinceCode}、{@code cityCode}、{@code companyId}、
+     * {@code driverId}、{@code driverPhone}、{@code carNo}、{@code brandName}、{@code rideTypeId}。
+     */
+    @GetMapping("/api/v1/cars")
+    Map<String, Object> carPage(@RequestParam Map<String, Object> params);
+
+    /** 车辆详情（含司机与公司字段）。 */
+    @GetMapping("/api/v1/cars/{id}")
+    Map<String, Object> carDetail(@PathVariable("id") Long id);
+
+    /**
      * 换队申请分页。Query 中含 {@code pageNo}、{@code pageSize}、{@code status}、{@code driverId}、{@code driverPhone}、时间范围，以及
      * {@code provinceCode}、{@code cityCode}（按司机档案城市缩小列表；由 BFF 注入登录域）。
      */

@@ -61,8 +61,8 @@
 | 优先级 | 项 | 说明 |
 |--------|-----|------|
 | ~~**高**~~ | ~~**换队申请提交（POST）**~~ | ✅ **已完成**：`capacity` 已实现 app 侧提交/查询/撤销接口（`AppDriverTeamChangeStubController` + `DriverTeamChangeService` 真实落库与解绑/恢复逻辑，不再 501）。`driver-api` 已对外提供司机端换队接口（搜索/提交/查询/撤销），并补充 `GET /driver/api/v1/team-change/belonging` 用于在“提交后解绑（companyId=null）”场景仍能展示**原属车队**（从申请单 `fromCompanyId` 回填）。对应 H5（`didi-driver-h5`）已接入该接口展示当前归属。 |
-| **中** | **独立车辆列表 BFF** | capacity 可有 **`GET /api/v1/cars`**；**admin-api 未聚合**；当前产品路径多为「公司 → 司机 → 车辆」。 |
-| **中** | **`reviewedBy`** | 审核请求仍常带 **query 占位**；宜改为登录用户名（或由网关注入）。 |
+| ~~**中**~~ | ~~**独立车辆列表 BFF**~~ | ✅ **已完成**：新增 **`GET /admin/api/v1/capacity/cars`**（按车牌/司机/公司/城市/品牌名称/运力类型筛选）与 **`GET /admin/api/v1/capacity/cars/{id}`** 详情；省/市域按登录用户 `AdminDataScope` 约束。对应 capacity 直连补齐 **`GET /api/v1/cars`**（支持同筛选）与 **`GET /api/v1/cars/{id}`**。 |
+| ~~**中**~~ | ~~**`reviewedBy`**~~ | ✅ **已完成**：换队审核不再依赖 query 入参；`admin-api` 从登录态写入操作者 **`sys_user.id`**（`AdminLoginUser.userId`）并透传至 capacity 落库（`driver_team_change_request.reviewed_by`）。 |
 | **低** | **修改密码等 auth 扩展** | 权限文档中的 **`PUT .../auth/password`** 等是否在 BFF 接满，可与《权限与接口文档》逐条对照。 |
 | **低** | **审核结构化审计日志** | 设计文档建议字段；若仅业务/控制台日志，记为 **可观测性待加强**。 |
 | **低** | **通用前端组件** | SearchForm / DataTable 等抽象：页面内联实现为主则视为 **技术债**（前端仓核对）。 |
@@ -85,8 +85,8 @@
 
 1. **换队申请 POST**：开放 app 或内部创建路径 + 必要时 BFF 透传，消除 **501**。  
 2. **前端**：登录/菜单/计价/运力页与现 BFF **对齐验收**（若在独立仓库，单列一轮联调）。  
-3. **`reviewedBy` 与审计**：审核动作带真实操作者 + 按需补日志。  
-4. **按需**：独立车辆列表 BFF、修改密码接口、`GET .../{id}` 详情类接口（详见《运力配置_设计》「按需再补」）。
+3. **按需：审计**：在业务/审计表中补齐结构化日志（操作者 id、资源 id、动作、结果、时间等）。  
+4. **按需**：修改密码接口、其它 `GET .../{id}` 详情类接口（详见《运力配置_设计》「按需再补」）。
 
 ---
 
