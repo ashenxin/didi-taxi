@@ -4,7 +4,7 @@ import com.sx.driverapi.client.CapacityDriverClient;
 import com.sx.driverapi.client.CoreResponseVo;
 import com.sx.driverapi.client.OrderClient;
 import com.sx.driverapi.common.exception.BizErrorException;
-import com.sx.driverapi.model.capacity.CapacityDriverSnapshot;
+import com.sx.driverapi.model.capacity.CapacityDriverDetail;
 import com.sx.driverapi.model.capacity.DriverListeningStatusVO;
 import com.sx.driverapi.model.capacity.DriverOnlineBody;
 import com.sx.driverapi.model.order.AssignedOrderItemVO;
@@ -49,9 +49,9 @@ public class DriverBffService {
      * 当前司机听单状态（与运力 {@code monitor_status} 一致），供前端禁用重复上线/下线。
      */
     public DriverListeningStatusVO getListeningStatus(Long driverId) {
-        CoreResponseVo<CapacityDriverSnapshot> resp = capacityDriverClient.getDriver(driverId);
+        CoreResponseVo<CapacityDriverDetail> resp = capacityDriverClient.getDriver(driverId);
         unwrap(resp, "拉取司机听单状态");
-        CapacityDriverSnapshot snap = resp.getData();
+        CapacityDriverDetail snap = resp.getData();
         DriverListeningStatusVO vo = new DriverListeningStatusVO();
         vo.setMonitorStatus(snap != null ? snap.getMonitorStatus() : null);
         return vo;

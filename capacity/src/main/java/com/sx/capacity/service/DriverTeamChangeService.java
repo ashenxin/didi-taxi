@@ -52,6 +52,16 @@ public class DriverTeamChangeService {
         if (driver == null || Objects.equals(driver.getIsDeleted(), 1)) {
             throw new CapacityBizException("司机不存在");
         }
+        // 申请地一致性校验：driver.city_code != null 时，要求 fromCompany.city_code 与之相等
+        if (StringUtils.hasText(driver.getCityCode()) && driver.getCompanyId() != null) {
+            Company fromCompany = companyMapper.selectById(driver.getCompanyId());
+            if (fromCompany != null
+                    && Objects.equals(fromCompany.getIsDeleted(), 0)
+                    && StringUtils.hasText(fromCompany.getCityCode())
+                    && !Objects.equals(fromCompany.getCityCode(), driver.getCityCode())) {
+                throw new CapacityBizException("司机档案城市与当前归属运力城市不一致，请联系运营修正");
+            }
+        }
         Company toCompany = companyMapper.selectById(toTeamId);
         if (toCompany == null || Objects.equals(toCompany.getIsDeleted(), 1)) {
             throw new CapacityBizException("目标运力主体不存在");
@@ -85,6 +95,81 @@ public class DriverTeamChangeService {
 
         log.info("换队申请已提交 requestId={} driverId={} toTeamId={}", row.getId(), driverId, toTeamId);
         return row.getId();
+    }
+
+    /**
+     * 司机端查询「当前换队申请」：若存在 PENDING 则返回该条，否则返回最新一条；若无申请返回 null。
+     */
+    public DriverTeamChangeRequestVO current(Long driverId) {
+        List<DriverTeamChangeRequest> pending = requestMapper.selectList(Wrappers.<DriverTeamChangeRequest>lambdaQuery()
+                .eq(DriverTeamChangeRequest::getDriverId, driverId)
+                .eq(DriverTeamChangeRequest::getStatus, DriverTeamChangeStatus.PENDING.name())
+                .eq(DriverTeamChangeRequest::getIsDeleted, 0)
+                .orderByDesc(DriverTeamChangeRequest::getRequestedAt)
+                .last("LIMIT 1"));
+        if (pending != null && !pending.isEmpty()) {
+            return toVo(pending.getFirst());
+        }
+        List<DriverTeamChangeRequest> latest = requestMapper.selectList(Wrappers.<DriverTeamChangeRequest>lambdaQuery()
+                .eq(DriverTeamChangeRequest::getDriverId, driverId)
+                .eq(DriverTeamChangeRequest::getIsDeleted, 0)
+                .orderByDesc(DriverTeamChangeRequest::getRequestedAt)
+                .last("LIMIT 1"));
+        if (latest == null || latest.isEmpty()) {
+            return null;
+        }
+        return toVo(latest.getFirst());
+    }
+
+    /**
+     * 司机撤销/放弃换队并恢复接单（方案A）。
+     * 允许：PENDING 或 REJECTED → CANCELLED。APPROVED 不允许撤销。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void cancelAndRestore(Long driverId, Long requestId, String requestedBy) {
+        DriverTeamChangeRequest row = requestMapper.selectById(requestId);
+        if (row == null || Objects.equals(row.getIsDeleted(), 1)) {
+            throw new CapacityBizException("申请不存在");
+        }
+        if (!Objects.equals(row.getDriverId(), driverId)) {
+            throw new CapacityBizException("禁止操作其他司机数据");
+        }
+        String st = row.getStatus();
+        if (DriverTeamChangeStatus.APPROVED.name().equals(st)) {
+            throw new CapacityBizException("已通过的申请不允许撤销");
+        }
+        if (!DriverTeamChangeStatus.PENDING.name().equals(st) && !DriverTeamChangeStatus.REJECTED.name().equals(st)) {
+            // 其它状态视为幂等：直接返回
+            return;
+        }
+
+        Date now = new Date();
+        // CAS：仅允许从 PENDING/REJECTED 更新为 CANCELLED
+        LambdaUpdateWrapper<DriverTeamChangeRequest> uw = Wrappers.<DriverTeamChangeRequest>lambdaUpdate()
+                .set(DriverTeamChangeRequest::getStatus, DriverTeamChangeStatus.CANCELLED.name())
+                .set(DriverTeamChangeRequest::getUpdatedAt, now)
+                .set(DriverTeamChangeRequest::getRequestedBy, StringUtils.hasText(requestedBy) ? requestedBy : row.getRequestedBy())
+                .eq(DriverTeamChangeRequest::getId, requestId)
+                .in(DriverTeamChangeRequest::getStatus,
+                        DriverTeamChangeStatus.PENDING.name(),
+                        DriverTeamChangeStatus.REJECTED.name())
+                .eq(DriverTeamChangeRequest::getIsDeleted, 0);
+        int n = requestMapper.update(null, uw);
+        if (n == 0) {
+            // 并发下可能已被审核或撤销：当作幂等成功
+            return;
+        }
+
+        Driver driver = driverMapper.selectById(driverId);
+        if (driver == null || Objects.equals(driver.getIsDeleted(), 1)) {
+            throw new CapacityBizException("司机不存在");
+        }
+        driver.setCompanyId(row.getFromCompanyId());
+        driver.setCanAcceptOrder(1);
+        driver.setMonitorStatus(0);
+        driver.setUpdatedAt(now);
+        driverMapper.updateById(driver);
+        log.info("换队申请已撤销并恢复接单 requestId={} driverId={}", requestId, driverId);
     }
 
     /**

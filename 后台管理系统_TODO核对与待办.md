@@ -3,7 +3,7 @@
 对照 **本仓库 `didi-taxi`**（`admin-api`、`passenger`、`order`、`capacity`、`calculate` 等）与配套设计/接口文档，整理：**已实现要点**、**仍存在的差距**、**文档索引**。  
 前端 **`didi-Vue`** 若不在本仓库，以下凡写「前端」处请在你本地前端工程内再核一眼。
 
-> 核对日期：**2026-04-03**（以当前提交为准；本地未提交改动请自行复核）。
+> 核对日期：**2026-04-24**（以当前提交为准；本地未提交改动请自行复核）。
 
 ---
 
@@ -60,7 +60,7 @@
 
 | 优先级 | 项 | 说明 |
 |--------|-----|------|
-| **高** | **换队申请提交（POST）** | **`POST /api/v1/app/driver-team-change-requests`** 仍为 **501 / Stub**；管理端无创建透传。**闭环缺口**。 |
+| ~~**高**~~ | ~~**换队申请提交（POST）**~~ | ✅ **已完成**：`capacity` 已实现 app 侧提交/查询/撤销接口（`AppDriverTeamChangeStubController` + `DriverTeamChangeService` 真实落库与解绑/恢复逻辑，不再 501）。`driver-api` 已对外提供司机端换队接口（搜索/提交/查询/撤销），并补充 `GET /driver/api/v1/team-change/belonging` 用于在“提交后解绑（companyId=null）”场景仍能展示**原属车队**（从申请单 `fromCompanyId` 回填）。对应 H5（`didi-driver-h5`）已接入该接口展示当前归属。 |
 | **中** | **独立车辆列表 BFF** | capacity 可有 **`GET /api/v1/cars`**；**admin-api 未聚合**；当前产品路径多为「公司 → 司机 → 车辆」。 |
 | **中** | **`reviewedBy`** | 审核请求仍常带 **query 占位**；宜改为登录用户名（或由网关注入）。 |
 | **低** | **修改密码等 auth 扩展** | 权限文档中的 **`PUT .../auth/password`** 等是否在 BFF 接满，可与《权限与接口文档》逐条对照。 |

@@ -18,9 +18,14 @@ public class OfferRescheduleScheduler {
 
     @Scheduled(fixedDelayString = "${capacity.dispatch.offer-reschedule.scan-interval-ms:5000}")
     public void scanAssignedAwaitingReschedule() {
-        int n = offerRescheduleService.processRescheduleBatch();
-        if (n > 0) {
-            log.info("确认窗口改派扫描：本轮推进 {} 笔订单", n);
+        try {
+            int n = offerRescheduleService.processRescheduleBatch();
+            if (n > 0) {
+                log.info("确认窗口改派扫描：本轮推进 {} 笔订单", n);
+            }
+        } catch (Exception e) {
+            // 本地未启动 order-service（或网络抖动）时避免定时任务刷 ERROR 堆栈
+            log.warn("确认窗口改派扫描失败（可能 order-service 未启动/不可达）：{}", e.toString());
         }
     }
 }
