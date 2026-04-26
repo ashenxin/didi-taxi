@@ -52,3 +52,21 @@ CREATE TABLE IF NOT EXISTS order_event (
     occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS order_outbox_event (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    topic VARCHAR(128) NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    aggregate_id VARCHAR(64) NOT NULL,
+    payload VARCHAR(8000) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    retry_count INT NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processing_at TIMESTAMP NULL,
+    processing_by VARCHAR(128) NULL,
+    last_error VARCHAR(2000) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_status_next ON order_outbox_event (status, next_retry_at, id);

@@ -6,6 +6,7 @@ import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.order.CancelOrderRequest;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderBody;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderResult;
+import com.sx.passengerapi.model.order.CreateOrderResultV1;
 import com.sx.passengerapi.model.order.PassengerOrderDetailVO;
 import com.sx.passengerapi.service.PassengerOrderService;
 import jakarta.validation.Valid;
@@ -46,6 +47,22 @@ public class PassengerOrderController {
         rejectPassengerIdBodyMismatch(passengerId, body.getPassengerId());
         body.setPassengerId(passengerId);
         return ResultUtil.success(passengerOrderService.createAndAssign(body));
+    }
+
+    /**
+     * 下单（两段式）：路线/估价 → 创建订单；派单异步推进。
+     * {@code POST /app/api/v1/orders/create}
+     */
+    @PostMapping("/orders/create")
+    public ResponseVo<CreateOrderResultV1> createTwoPhase(
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @RequestBody @Valid CreateAndAssignOrderBody body) {
+        if (passengerId == null) {
+            throw new BizErrorException(401, "未授权，请重新登录");
+        }
+        rejectPassengerIdBodyMismatch(passengerId, body.getPassengerId());
+        body.setPassengerId(passengerId);
+        return ResultUtil.success(passengerOrderService.createTwoPhase(body));
     }
 
     /**

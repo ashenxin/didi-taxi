@@ -57,6 +57,40 @@ public class NearestDriverQueryService {
     }
 
     /**
+     * TopN 候选司机（按 GEO 距离近似顺序）：用于 Kafka 消费“一次派单尝试”中换候选提升成功率。
+     */
+    public List<NearestDriverResult> findNearestEligibleDrivers(String cityCode, String productCode,
+                                                                Double originLat, Double originLng,
+                                                                int limit) {
+        int n = Math.max(1, Math.min(32, limit));
+        if (cityCode == null || cityCode.isBlank()) {
+            return List.of();
+        }
+        if (originLat != null && originLng != null) {
+            List<Long> ids = driverGeoRedisPool.listNearestDriverIds(cityCode, originLat, originLng, matchRadiusMeters, 32);
+            if (ids == null || ids.isEmpty()) {
+                return List.of();
+            }
+            java.util.ArrayList<NearestDriverResult> out = new java.util.ArrayList<>(n);
+            for (Long driverId : ids) {
+                if (driverId == null) {
+                    continue;
+                }
+                NearestDriverResult r = buildEligible(driverId, cityCode, productCode);
+                if (r != null) {
+                    out.add(r);
+                    if (out.size() >= n) {
+                        break;
+                    }
+                }
+            }
+            return out;
+        }
+        NearestDriverResult one = findNearestDbFallback(cityCode, productCode);
+        return one == null ? List.of() : List.of(one);
+    }
+
+    /**
      * 将指定司机在 DB 中构造成派单结果（车型/在线/听单等校验与 {@link #findNearestDbFallback} 一致）。
      */
     public NearestDriverResult buildEligibleForDriver(Long driverId, String cityCode, String productCode) {

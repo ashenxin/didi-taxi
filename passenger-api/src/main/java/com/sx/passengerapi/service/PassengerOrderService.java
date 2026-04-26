@@ -16,6 +16,7 @@ import com.sx.passengerapi.model.order.AssignedDriver;
 import com.sx.passengerapi.model.order.CancelOrderRequest;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderBody;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderResult;
+import com.sx.passengerapi.model.order.CreateOrderResultV1;
 import com.sx.passengerapi.model.order.OrderStatus;
 import com.sx.passengerapi.model.order.PassengerOrderDetailVO;
 import com.sx.passengerapi.model.order.PassengerOrderDriverVO;
@@ -324,6 +325,32 @@ public class PassengerOrderService {
         }
         log.info("创建并指派完成 orderNo={} passengerId={} assigned={}",
                 orderNo, body.getPassengerId(), nearest != null);
+        return out;
+    }
+
+    /**
+     * 对外“两段式 create”：路线预估 →（可选）最近司机用于 company 维度估价 → 创建订单；
+     * 不做同步指派与打开确认窗口。
+     */
+    public CreateOrderResultV1 createTwoPhase(CreateAndAssignOrderBody body) {
+        resolveCoordinatesByGeocodeIfNeeded(body);
+        RouteResponse route = route(body);
+        NearestDriverResult nearest = searchNearestDriver(body);
+        Long companyId = nearest == null ? null : nearest.getCompanyId();
+        EstimateFareResult estimate = estimate(body, route, companyId);
+        CreateOrderResult created = createOrder(body, estimate);
+        String orderNo = created == null ? null : created.getOrderNo();
+        if (orderNo == null || orderNo.isBlank()) {
+            throw new BizErrorException(502, "订单创建失败：orderNo为空");
+        }
+
+        CreateOrderResultV1 out = new CreateOrderResultV1();
+        out.setOrderNo(orderNo);
+        out.setStatus(OrderStatus.CREATED);
+        out.setAssignedDriver(null);
+        out.setRoute(route);
+        out.setEstimate(estimate);
+        log.info("两段式下单完成 orderNo={} passengerId={}", orderNo, body.getPassengerId());
         return out;
     }
 

@@ -106,3 +106,12 @@ CREATE TABLE IF NOT EXISTS car (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_deleted INT NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS capacity_processed_event (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    consumer_group VARCHAR(128) NOT NULL,
+    event_id VARCHAR(64) NOT NULL,
+    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_capacity_processed_event ON capacity_processed_event (consumer_group, event_id);

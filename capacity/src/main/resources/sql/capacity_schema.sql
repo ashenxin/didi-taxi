@@ -129,3 +129,15 @@ CREATE TABLE IF NOT EXISTS `driver_audit_record` (
     KEY `idx_driver_audit_driver` (`driver_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='司机审核流水';
 
+-- =============================================================================
+-- capacity 消费端事件去重表（Kafka consumer idempotency）
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS `capacity_processed_event` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `consumer_group` VARCHAR(128) NOT NULL,
+    `event_id` VARCHAR(64) NOT NULL,
+    `processed_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_capacity_processed_event` (`consumer_group`, `event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='capacity 消费端幂等去重表';
+

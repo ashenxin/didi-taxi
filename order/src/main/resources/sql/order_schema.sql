@@ -90,3 +90,25 @@ CREATE TABLE IF NOT EXISTS `order_event` (
     KEY `idx_order_event_event_type` (`event_type`),
     KEY `idx_order_event_occurred_at` (`occurred_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单事件流水';
+
+-- =============================================================================
+-- Transactional Outbox（两段式异步派单）
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS `order_outbox_event` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '事件ID（消息中 eventId=该ID字符串化）',
+    `topic` VARCHAR(128) NOT NULL COMMENT 'Kafka topic，如 order.dispatch.requested.v1',
+    `event_type` VARCHAR(64) NOT NULL COMMENT '事件类型，如 ORDER_CREATED_NEED_DISPATCH',
+    `aggregate_id` VARCHAR(64) NOT NULL COMMENT '聚合ID：orderNo',
+    `payload` JSON NOT NULL COMMENT '消息体 JSON（含 schemaVersion/eventId/orderNo/cityCode/productCode/origin/createdAt 等）',
+    `status` VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/PROCESSING/PUBLISHED/FAILED',
+    `retry_count` INT NOT NULL DEFAULT 0 COMMENT '发布重试次数',
+    `next_retry_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下次重试时间',
+    `processing_at` DATETIME NULL COMMENT '领取时间（PROCESSING）',
+    `processing_by` VARCHAR(128) NULL COMMENT '领取者标识（hostname/instanceId）',
+    `last_error` VARCHAR(2000) NULL COMMENT '最近一次发布失败原因（截断）',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_outbox_status_next` (`status`, `next_retry_at`, `id`),
+    KEY `idx_outbox_agg` (`aggregate_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单 Outbox 事件表';

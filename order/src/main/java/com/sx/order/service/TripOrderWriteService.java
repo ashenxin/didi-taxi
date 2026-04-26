@@ -2,9 +2,11 @@ package com.sx.order.service;
 
 import com.sx.order.common.exception.OrderConflictException;
 import com.sx.order.common.util.OrderNoUtil;
+import com.sx.order.dao.OrderOutboxEventMapper;
 import com.sx.order.dao.OrderEventEntityMapper;
 import com.sx.order.dao.TripOrderEntityMapper;
 import com.sx.order.model.OrderEvent;
+import com.sx.order.model.OrderOutboxEvent;
 import com.sx.order.model.TripOrder;
 import com.sx.order.model.dto.AssignOrderBody;
 import com.sx.order.model.dto.CancelOrderBody;
@@ -19,6 +21,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -51,10 +55,17 @@ public class TripOrderWriteService {
 
     private final TripOrderEntityMapper tripOrderEntityMapper;
     private final OrderEventEntityMapper orderEventEntityMapper;
+    private final OrderOutboxEventMapper orderOutboxEventMapper;
+    private final ObjectMapper objectMapper;
 
-    public TripOrderWriteService(TripOrderEntityMapper tripOrderEntityMapper, OrderEventEntityMapper orderEventEntityMapper) {
+    public TripOrderWriteService(TripOrderEntityMapper tripOrderEntityMapper,
+                                 OrderEventEntityMapper orderEventEntityMapper,
+                                 OrderOutboxEventMapper orderOutboxEventMapper,
+                                 ObjectMapper objectMapper) {
         this.tripOrderEntityMapper = tripOrderEntityMapper;
         this.orderEventEntityMapper = orderEventEntityMapper;
+        this.orderOutboxEventMapper = orderOutboxEventMapper;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -106,8 +117,47 @@ public class TripOrderWriteService {
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
 
+        // Transactional Outbox：与订单创建同事务写入派单事件（后续由发布器投递 Kafka）
+        OrderOutboxEvent outbox = new OrderOutboxEvent()
+                .setTopic("order.dispatch.requested.v1")
+                .setEventType("ORDER_CREATED_NEED_DISPATCH")
+                .setAggregateId(orderNo)
+                .setPayload("{}")
+                .setStatus("PENDING")
+                .setRetryCount(0)
+                .setNextRetryAt(now)
+                .setCreatedAt(now)
+                .setUpdatedAt(now);
+        orderOutboxEventMapper.insert(outbox);
+        // eventId 需要与 outbox id 对齐（JSON 中用 string 承载）
+        String payload = buildDispatchRequestedPayload(body, orderNo, outbox.getId(), now);
+        outbox.setPayload(payload);
+        orderOutboxEventMapper.updateById(outbox);
+
         log.info("订单已创建 orderNo={} passengerId={} cityCode={}", orderNo, body.getPassengerId(), body.getCityCode());
         return orderNo;
+    }
+
+    private String buildDispatchRequestedPayload(CreateOrderBody body, String orderNo, Long outboxId, LocalDateTime now) {
+        try {
+            // 仅用入参组装，避免额外回查 trip_order（裁决仍以 DB 为准）
+            var root = new java.util.LinkedHashMap<String, Object>();
+            root.put("schemaVersion", 1);
+            root.put("eventId", outboxId == null ? null : String.valueOf(outboxId));
+            root.put("eventType", "ORDER_CREATED_NEED_DISPATCH");
+            root.put("orderNo", orderNo);
+            root.put("cityCode", body.getCityCode());
+            root.put("productCode", body.getProductCode());
+            var origin = new java.util.LinkedHashMap<String, Object>();
+            origin.put("lat", body.getOrigin() == null ? null : body.getOrigin().getLat());
+            origin.put("lng", body.getOrigin() == null ? null : body.getOrigin().getLng());
+            root.put("origin", origin);
+            // ISO-8601 with timezone is preferred; keep simple for MVP and use as debug only
+            root.put("createdAt", now.toString());
+            return objectMapper.writeValueAsString(root);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("outbox payload json 序列化失败", e);
+        }
     }
 
     /**

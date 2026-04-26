@@ -17,6 +17,11 @@ spring:
     druid:
       validation-query: SELECT 1
       test-while-idle: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      properties:
+        enable.idempotence: true
 
 logging:
   config: classpath:logback-spring.xml
@@ -47,6 +52,19 @@ order:
   dispatch:
     wait-timeout-seconds: 180
     timeout-scan-interval-ms: 30000
+
+# XXL-JOB 执行器：需独立部署 xxl-job-admin，版本需与根 pom 中 xxl.job.version 对齐
+xxl:
+  job:
+    enabled: false
+    access-token: ${XXL_JOB_ACCESS_TOKEN:default_token}
+    admin:
+      addresses: http://127.0.0.1:8080/xxl-job-admin
+    executor:
+      appname: order-executor
+      port: 9998
+      log-path: ./logs/xxl-job
+      log-retention-days: 7
 
 ---
 spring:
