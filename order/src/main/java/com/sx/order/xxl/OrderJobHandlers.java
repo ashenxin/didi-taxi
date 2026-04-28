@@ -32,27 +32,39 @@ public class OrderJobHandlers {
      */
     @XxlJob("orderCreatedDispatchTimeoutScan")
     public void createdDispatchTimeoutScan() {
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime deadline = now.minusSeconds(Math.max(60, waitTimeoutSeconds));
-        List<TripOrder> list = tripOrderWriteService.listCreatedOlderThan(deadline);
-        if (list == null || list.isEmpty()) {
-            XxlJobHelper.log("no stale CREATED orders (deadline={})", deadline);
-            return;
-        }
+        final long startMs = System.currentTimeMillis();
+        XxlJobHelper.log("[START] job=orderCreatedDispatchTimeoutScan waitTimeoutSeconds={}", waitTimeoutSeconds);
+        int scanned = 0;
         int cancelled = 0;
-        for (TripOrder o : list) {
-            if (o == null || o.getOrderNo() == null) {
-                continue;
+        LocalDateTime deadline = null;
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            deadline = now.minusSeconds(Math.max(60, waitTimeoutSeconds));
+            List<TripOrder> list = tripOrderWriteService.listCreatedOlderThan(deadline);
+            if (list == null || list.isEmpty()) {
+                XxlJobHelper.log("no stale CREATED orders (deadline={})", deadline);
+                return;
             }
-            try {
-                if (tripOrderWriteService.cancelCreatedDispatchTimeoutOne(o.getOrderNo(), now)) {
-                    cancelled++;
+            scanned = list.size();
+            for (TripOrder o : list) {
+                if (o == null || o.getOrderNo() == null) {
+                    continue;
                 }
-            } catch (RuntimeException ex) {
-                log.warn("待派单超时系统取消失败 orderNo={}: {}", o.getOrderNo(), ex.toString());
+                try {
+                    if (tripOrderWriteService.cancelCreatedDispatchTimeoutOne(o.getOrderNo(), now)) {
+                        cancelled++;
+                    }
+                } catch (RuntimeException ex) {
+                    log.warn("待派单超时系统取消失败 orderNo={}: {}", o.getOrderNo(), ex.toString());
+                }
             }
+            XxlJobHelper.log("cancelled {} stale CREATED orders (waitTimeoutSeconds={})", cancelled, waitTimeoutSeconds);
+        } finally {
+            XxlJobHelper.log(
+                    "[END] job=orderCreatedDispatchTimeoutScan scanned={} cancelled={} deadline={} elapsedMs={}",
+                    scanned, cancelled, deadline, (System.currentTimeMillis() - startMs)
+            );
         }
-        XxlJobHelper.log("cancelled {} stale CREATED orders (waitTimeoutSeconds={})", cancelled, waitTimeoutSeconds);
     }
 
     /**
@@ -60,10 +72,17 @@ public class OrderJobHandlers {
      */
     @XxlJob("orderOfferTimeoutScan")
     public void offerTimeoutScan() {
-        int n = tripOrderWriteService.timeoutPendingDriverOffers(LocalDateTime.now());
-        XxlJobHelper.log("timeout pending driver offers: {}", n);
-        if (n > 0) {
-            log.info("司机确认窗口超时扫描：本轮打回 {} 笔待确认订单", n);
+        final long startMs = System.currentTimeMillis();
+        XxlJobHelper.log("[START] job=orderOfferTimeoutScan");
+        int n = 0;
+        try {
+            n = tripOrderWriteService.timeoutPendingDriverOffers(LocalDateTime.now());
+            XxlJobHelper.log("timeout pending driver offers: {}", n);
+            if (n > 0) {
+                log.info("司机确认窗口超时扫描：本轮打回 {} 笔待确认订单", n);
+            }
+        } finally {
+            XxlJobHelper.log("[END] job=orderOfferTimeoutScan affected={} elapsedMs={}", n, (System.currentTimeMillis() - startMs));
         }
     }
 }
