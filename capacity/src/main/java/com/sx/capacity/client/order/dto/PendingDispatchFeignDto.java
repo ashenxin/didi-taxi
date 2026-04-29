@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 public class PendingDispatchFeignDto {
 
     private String orderNo;
+    private Long passengerId;
     private String cityCode;
     private String productCode;
     private BigDecimal originLat;
@@ -24,6 +25,14 @@ public class PendingDispatchFeignDto {
 
     public void setCityCode(String cityCode) {
         this.cityCode = cityCode;
+    }
+
+    public Long getPassengerId() {
+        return passengerId;
+    }
+
+    public void setPassengerId(Long passengerId) {
+        this.passengerId = passengerId;
     }
 
     public String getProductCode() {

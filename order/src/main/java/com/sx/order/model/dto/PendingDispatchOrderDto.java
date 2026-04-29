@@ -13,6 +13,7 @@ import java.math.BigDecimal;
 public class PendingDispatchOrderDto {
 
     private String orderNo;
+    private Long passengerId;
     private String cityCode;
     private String productCode;
     private BigDecimal originLat;

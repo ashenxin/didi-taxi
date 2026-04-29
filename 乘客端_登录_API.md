@@ -37,7 +37,8 @@
 - 签名：HMAC（与网关共享密钥）
 - `sub`：`customerId`（字符串）
 - `aud`：`app-bff`（网关开启 `aud` 校验时需要）
-- 过期：7 天（`expiresIn=604800`；首期仅客户端删除 token 视为退出，不做服务端即时失效）
+- `tv`：token 版本（数字）；`passenger-api` 登录时递增，`POST /app/api/v1/auth/logout` 再递增，使旧 JWT 立即失效；请求业务接口时须与 Redis `passenger:tv:{customerId}` 一致
+- 过期：7 天（`expiresIn=604800`）
 
 后续业务接口涉及乘客身份统一从网关注入头 `X-User-Id`（即 JWT `sub`）获取，不信任客户端传 `passengerId/customerId`。
 
@@ -165,9 +166,44 @@
 
 ---
 
-## 4. 自测用例（示例）
+## 4. 退出登录
 
-### 4.1 发送验证码
+### 4.1 接口
+
+- **POST** `/app/api/v1/auth/logout`
+- **鉴权**：须 `Authorization: Bearer <accessToken>`（不在白名单）
+
+### 4.2 请求体
+
+无，或 `{}`。
+
+### 4.3 行为说明（与 MVP PRD §5.6 一致）
+
+- 登出成功后旧 token 不可用（`tv` 递增）。
+- 若乘客存在「司机到达前」在途单（订单状态 CREATED / ASSIGNED / PENDING_DRIVER_CONFIRM / ACCEPTED）：服务端代为取消，取消原因「乘客退出登录」。
+- 若存在已到达或行程中订单：不代为取消；响应 `data.hint` 给出说明，仍完成登出。
+
+### 4.4 响应
+
+成功示例：
+
+```json
+{
+  "code": 200,
+  "msg": "success",
+  "data": {
+    "hint": "已为您取消进行中的订单（退出登录）。"
+  }
+}
+```
+
+`hint` 可空；无在途单时通常无提示。
+
+---
+
+## 5. 自测用例（示例）
+
+### 5.1 发送验证码
 
 ```bash
 curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/sms/send' \
@@ -175,7 +211,7 @@ curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/sms/send' \
   -d '{"phone":"13800138000"}'
 ```
 
-### 4.2 验证码登录
+### 5.2 验证码登录
 
 ```bash
 curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/login-sms' \
@@ -183,7 +219,7 @@ curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/login-sms' \
   -d '{"phone":"13800138000","code":"123456"}'
 ```
 
-### 4.3 密码登录
+### 5.3 密码登录
 
 ```bash
 curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/login-password' \
@@ -191,9 +227,18 @@ curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/login-password' \
   -d '{"phone":"13800138000","password":"plaintext"}'
 ```
 
+### 5.4 退出登录（需先登录拿 token）
+
+```bash
+curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/logout' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <accessToken>' \
+  -d '{}'
+```
+
 ---
 
-## 5. 备注（与后续业务接口的衔接）
+## 6. 备注（与后续业务接口的衔接）
 
 - 网关验签通过后会注入 `X-User-Id`（值为 JWT `sub`）。
 - 后续订单/行程/资料等接口涉及乘客身份统一从 `X-User-Id` 获取 `customerId`，不再让客户端提交 `passengerId/customerId`。

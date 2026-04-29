@@ -1,6 +1,7 @@
 package com.sx.passengerapi.service;
 
 import com.sx.passengerapi.auth.AppJwtService;
+import com.sx.passengerapi.auth.PassengerTokenVersionStore;
 import com.sx.passengerapi.client.PassengerCoreAuthClient;
 import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
 import com.sx.passengerapi.client.dto.AppLoginPasswordRequest;
@@ -10,6 +11,7 @@ import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
 import com.sx.passengerapi.model.auth.CustomerProfileVO;
+import com.sx.passengerapi.model.auth.PassengerLogoutResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -19,10 +21,18 @@ public class PassengerAuthService {
 
     private final PassengerCoreAuthClient passengerCoreAuthClient;
     private final AppJwtService jwtService;
+    private final PassengerTokenVersionStore tokenVersionStore;
+    private final PassengerOrderService passengerOrderService;
 
-    public PassengerAuthService(PassengerCoreAuthClient passengerCoreAuthClient, AppJwtService jwtService) {
+    public PassengerAuthService(
+            PassengerCoreAuthClient passengerCoreAuthClient,
+            AppJwtService jwtService,
+            PassengerTokenVersionStore tokenVersionStore,
+            PassengerOrderService passengerOrderService) {
         this.passengerCoreAuthClient = passengerCoreAuthClient;
         this.jwtService = jwtService;
+        this.tokenVersionStore = tokenVersionStore;
+        this.passengerOrderService = passengerOrderService;
     }
 
     public void sendSms(String phone) {
@@ -44,6 +54,19 @@ public class PassengerAuthService {
     public CustomerLoginResponse loginPassword(String phone, String password) {
         AppAuthCustomerBrief brief = unwrap(passengerCoreAuthClient.loginPassword(new AppLoginPasswordRequest(phone, password)));
         return toLoginResponse(brief);
+    }
+
+    /**
+     * 登出：到达前在途单按 PRD §5.6 代乘客取消；到达后/行程中不取消仅提示；最后递增 token 版本使 JWT 失效。
+     */
+    public PassengerLogoutResult logout(long passengerId) {
+        if (passengerId <= 0) {
+            throw new BizErrorException(400, "乘客ID非法");
+        }
+        PassengerLogoutResult side = passengerOrderService.cancelInFlightOrdersOnPassengerLogout(passengerId);
+        tokenVersionStore.nextVersion(passengerId);
+        log.info("乘客已登出 customerId={}", passengerId);
+        return side;
     }
 
     private AppAuthCustomerBrief unwrap(ResponseVo<AppAuthCustomerBrief> body) {
@@ -69,7 +92,8 @@ public class PassengerAuthService {
         profile.setPhone(brief.getPhone());
         profile.setNickname(brief.getNickname());
 
-        String token = jwtService.createPassengerToken(brief.getId(), brief.getPhone());
+        long tv = tokenVersionStore.nextVersion(brief.getId());
+        String token = jwtService.createPassengerToken(brief.getId(), brief.getPhone(), tv);
         CustomerLoginResponse resp = new CustomerLoginResponse();
         resp.setAccessToken(token);
         resp.setTokenType("Bearer");

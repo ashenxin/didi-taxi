@@ -11,7 +11,9 @@ import com.sx.order.model.dto.AssignOrderBody;
 import com.sx.order.model.dto.CancelOrderBody;
 import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.CreateOrderResult;
+import com.sx.order.model.dto.DriverCancelBeforeArriveBody;
 import com.sx.order.model.dto.DriverIdBody;
+import com.sx.order.model.dto.DriverRejectBody;
 import com.sx.order.model.dto.FinishOrderBody;
 import com.sx.order.model.dto.OpenDriverOfferBody;
 import com.sx.order.model.dto.PendingDispatchOrderDto;
@@ -197,6 +199,36 @@ public class TripOrderController {
             Long authedDriverId = requireAuthedDriverId(userId);
             assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
             tripOrderWriteService.accept(orderNo, authedDriverId);
+        });
+    }
+
+    /**
+     * 司机拒单：{@code ASSIGNED / PENDING_DRIVER_CONFIRM → CREATED}，重新进入派单。
+     * {@code POST /api/v1/orders/{orderNo}/reject}
+     */
+    @PostMapping("/{orderNo}/reject")
+    public ResponseVo<Void> rejectByDriver(@PathVariable String orderNo,
+                                             @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                             @RequestBody @Valid DriverRejectBody body) {
+        return handleDriverWrite(() -> {
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
+            tripOrderWriteService.rejectByDriver(orderNo, authedDriverId, body.getReasonCode());
+        });
+    }
+
+    /**
+     * 司机取消（已接单、到达前）：{@code ACCEPTED → CREATED}，重新进入派单。
+     * {@code POST /api/v1/orders/{orderNo}/driver/cancel}
+     */
+    @PostMapping("/{orderNo}/driver/cancel")
+    public ResponseVo<Void> driverCancelBeforeArrive(@PathVariable String orderNo,
+                                                      @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                                      @RequestBody @Valid DriverCancelBeforeArriveBody body) {
+        return handleDriverWrite(() -> {
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
+            tripOrderWriteService.driverCancelBeforeArrive(orderNo, authedDriverId, body.getReasonCode());
         });
     }
 

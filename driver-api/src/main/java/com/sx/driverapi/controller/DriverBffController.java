@@ -6,6 +6,7 @@ import com.sx.driverapi.model.capacity.DriverListeningStatusVO;
 import com.sx.driverapi.model.capacity.DriverOnlineBody;
 import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
+import com.sx.driverapi.model.order.DriverOrderReasonBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
 import com.sx.driverapi.service.DriverBffService;
@@ -102,6 +103,34 @@ public class DriverBffController {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
         driverBffService.accept(orderNo, authedDriverId);
+        return ResultUtil.success();
+    }
+
+    /**
+     * 拒单（未接单）：订单收回并重新派单。
+     * {@code POST /driver/api/v1/orders/{orderNo}/reject}
+     */
+    @PostMapping("/orders/{orderNo}/reject")
+    public ResponseVo<Void> reject(@PathVariable String orderNo,
+                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestBody @Valid DriverOrderReasonBody body) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(body.getDriverId(), authedDriverId);
+        driverBffService.reject(orderNo, authedDriverId, body.getReasonCode());
+        return ResultUtil.success();
+    }
+
+    /**
+     * 司机取消（已接单、到达前）：收回并重新派单。
+     * {@code POST /driver/api/v1/orders/{orderNo}/cancel}
+     */
+    @PostMapping("/orders/{orderNo}/cancel")
+    public ResponseVo<Void> driverCancel(@PathVariable String orderNo,
+                                        @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                        @RequestBody @Valid DriverOrderReasonBody body) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(body.getDriverId(), authedDriverId);
+        driverBffService.driverCancelBeforeArrive(orderNo, authedDriverId, body.getReasonCode());
         return ResultUtil.success();
     }
 

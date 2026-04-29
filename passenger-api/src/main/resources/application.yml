@@ -7,6 +7,11 @@ server:
 spring:
   application:
     name: passenger-api
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DB:0}
 
 app:
   order:

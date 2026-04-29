@@ -57,15 +57,18 @@ public class TripOrderWriteService {
     private final OrderEventEntityMapper orderEventEntityMapper;
     private final OrderOutboxEventMapper orderOutboxEventMapper;
     private final ObjectMapper objectMapper;
+    private final DriverPassengerMatchBlockService matchBlockService;
 
     public TripOrderWriteService(TripOrderEntityMapper tripOrderEntityMapper,
                                  OrderEventEntityMapper orderEventEntityMapper,
                                  OrderOutboxEventMapper orderOutboxEventMapper,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 DriverPassengerMatchBlockService matchBlockService) {
         this.tripOrderEntityMapper = tripOrderEntityMapper;
         this.orderEventEntityMapper = orderEventEntityMapper;
         this.orderOutboxEventMapper = orderOutboxEventMapper;
         this.objectMapper = objectMapper;
+        this.matchBlockService = matchBlockService;
     }
 
     /**
@@ -146,6 +149,7 @@ public class TripOrderWriteService {
             root.put("eventId", outboxId == null ? null : String.valueOf(outboxId));
             root.put("eventType", "ORDER_CREATED_NEED_DISPATCH");
             root.put("orderNo", orderNo);
+            root.put("passengerId", body.getPassengerId());
             root.put("cityCode", body.getCityCode());
             root.put("productCode", body.getProductCode());
             var origin = new java.util.LinkedHashMap<String, Object>();
@@ -301,7 +305,7 @@ public class TripOrderWriteService {
                 .setOperatorType(OPERATOR_SYSTEM)
                 .setOperatorId(null)
                 .setReasonCode(null)
-                .setReasonDesc("capacity reschedule")
+                .setReasonDesc("运力侧改派")
                 .setEventPayload("{\"oldDriverId\":" + oldDriverId + ",\"newDriverId\":" + body.getDriverId() + "}")
                 .setOccurredAt(now)
                 .setCreatedAt(now);
@@ -464,7 +468,10 @@ public class TripOrderWriteService {
                 .eq(TripOrder::getDriverId, driverId)
                 .in(TripOrder::getStatus, STATUS_ASSIGNED, STATUS_PENDING_DRIVER_CONFIRM)
                 .eq(TripOrder::getIsDeleted, 0)
-                .orderByDesc(TripOrder::getAssignedAt));
+                .orderByDesc(TripOrder::getAssignedAt))
+                .stream()
+                .filter(o -> !matchBlockService.isBlocked(driverId, o.getPassengerId()))
+                .toList();
     }
 
     /**
@@ -541,6 +548,7 @@ public class TripOrderWriteService {
     private PendingDispatchOrderDto toPendingDispatchDto(TripOrder o) {
         PendingDispatchOrderDto d = new PendingDispatchOrderDto();
         d.setOrderNo(o.getOrderNo());
+        d.setPassengerId(o.getPassengerId());
         d.setCityCode(o.getCityCode());
         d.setProductCode(o.getProductCode());
         d.setOriginLat(o.getOriginLat());
@@ -603,7 +611,7 @@ public class TripOrderWriteService {
                 .setOperatorType(OPERATOR_SYSTEM)
                 .setOperatorId(null)
                 .setReasonCode(null)
-                .setReasonDesc("offerSeconds=" + seconds)
+                .setReasonDesc("派单确认窗口时长 " + seconds + " 秒")
                 .setEventPayload("{\"offerExpiresAt\":\"" + expires + "\",\"offerRound\":" + nextRound + "}")
                 .setOccurredAt(now)
                 .setCreatedAt(now);
@@ -673,7 +681,7 @@ public class TripOrderWriteService {
                 .setOperatorType(OPERATOR_SYSTEM)
                 .setOperatorId(null)
                 .setReasonCode("OFFER_TIMEOUT")
-                .setReasonDesc("driver_id retained for reschedule")
+                .setReasonDesc("确认窗口超时，保留指派司机待改派或下一轮确认")
                 .setEventPayload("{\"driverId\":" + after.getDriverId() + "}")
                 .setOccurredAt(now)
                 .setCreatedAt(now);
@@ -739,6 +747,147 @@ public class TripOrderWriteService {
         insertDriverEvent(orderNo, driverId, "ORDER_ACCEPTED", fromStatus, STATUS_ACCEPTED, now);
         cancelOtherPendingAssignsForDriver(driverId, orderNo, now);
         log.info("司机已接单 orderNo={} driverId={}", orderNo, driverId);
+    }
+
+    /**
+     * 司机拒单：{@code ASSIGNED / PENDING_DRIVER_CONFIRM → CREATED}，清空指派并再次投递派单 Outbox（与下单时事件类型一致，供 capacity 消费）。
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
+    public void rejectByDriver(String orderNo, Long driverId, String reasonCode) {
+        String code = normalizeReasonCode(reasonCode);
+        TripOrder existing = loadActiveOrder(orderNo);
+        assertDriver(existing, driverId);
+        Integer st = existing.getStatus();
+        if (!Objects.equals(st, STATUS_ASSIGNED) && !Objects.equals(st, STATUS_PENDING_DRIVER_CONFIRM)) {
+            throw new IllegalArgumentException("订单当前状态不允许拒单");
+        }
+        int fromStatus = st;
+        LocalDateTime now = LocalDateTime.now();
+        int updated = tripOrderEntityMapper.update(null,
+                Wrappers.<TripOrder>lambdaUpdate()
+                        .set(TripOrder::getStatus, STATUS_CREATED)
+                        .set(TripOrder::getDriverId, null)
+                        .set(TripOrder::getCarId, null)
+                        .set(TripOrder::getCompanyId, null)
+                        .set(TripOrder::getAssignedAt, null)
+                        .set(TripOrder::getOfferExpiresAt, null)
+                        .set(TripOrder::getOfferRound, 0)
+                        .set(TripOrder::getLastOfferAt, null)
+                        .set(TripOrder::getAcceptedAt, null)
+                        .set(TripOrder::getUpdatedAt, now)
+                        .eq(TripOrder::getOrderNo, orderNo)
+                        .eq(TripOrder::getIsDeleted, 0)
+                        .in(TripOrder::getStatus, STATUS_ASSIGNED, STATUS_PENDING_DRIVER_CONFIRM)
+                        .eq(TripOrder::getDriverId, driverId));
+        if (updated != 1) {
+            throw new IllegalArgumentException("拒单失败，请重试");
+        }
+        String payloadJson = driverReasonPayloadJson(code);
+        insertDriverEventWithReason(orderNo, driverId, "ORDER_DRIVER_REJECTED",
+                fromStatus, STATUS_CREATED, now, code, "司机拒单", payloadJson);
+        matchBlockService.block(driverId, existing.getPassengerId());
+        TripOrder after = loadActiveOrder(orderNo);
+        enqueueDispatchRequestedOutbox(after, now);
+        log.info("司机已拒单 orderNo={} driverId={} reasonCode={}", orderNo, driverId, code);
+    }
+
+    /**
+     * 司机取消（已接单、到达前）：{@code ACCEPTED → CREATED}，清空服务方并再次投递派单 Outbox。
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
+    public void driverCancelBeforeArrive(String orderNo, Long driverId, String reasonCode) {
+        String code = normalizeReasonCode(reasonCode);
+        TripOrder existing = loadActiveOrder(orderNo);
+        assertDriver(existing, driverId);
+        Integer st = existing.getStatus();
+        if (!Objects.equals(st, STATUS_ACCEPTED)) {
+            throw new IllegalArgumentException("订单当前状态不允许司机取消");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = tripOrderEntityMapper.update(null,
+                Wrappers.<TripOrder>lambdaUpdate()
+                        .set(TripOrder::getStatus, STATUS_CREATED)
+                        .set(TripOrder::getDriverId, null)
+                        .set(TripOrder::getCarId, null)
+                        .set(TripOrder::getCompanyId, null)
+                        .set(TripOrder::getAssignedAt, null)
+                        .set(TripOrder::getOfferExpiresAt, null)
+                        .set(TripOrder::getOfferRound, 0)
+                        .set(TripOrder::getLastOfferAt, null)
+                        .set(TripOrder::getAcceptedAt, null)
+                        .set(TripOrder::getUpdatedAt, now)
+                        .eq(TripOrder::getOrderNo, orderNo)
+                        .eq(TripOrder::getIsDeleted, 0)
+                        .eq(TripOrder::getStatus, STATUS_ACCEPTED)
+                        .eq(TripOrder::getDriverId, driverId));
+        if (updated != 1) {
+            throw new IllegalArgumentException("司机取消失败，请重试");
+        }
+        String payloadJson = driverReasonPayloadJson(code);
+        insertDriverEventWithReason(orderNo, driverId, "ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE",
+                STATUS_ACCEPTED, STATUS_CREATED, now, code, "司机到达前取消", payloadJson);
+        matchBlockService.block(driverId, existing.getPassengerId());
+        TripOrder after = loadActiveOrder(orderNo);
+        enqueueDispatchRequestedOutbox(after, now);
+        log.info("司机已取消订单（到达前） orderNo={} driverId={} reasonCode={}", orderNo, driverId, code);
+    }
+
+    private static String normalizeReasonCode(String reasonCode) {
+        if (reasonCode == null || reasonCode.isBlank()) {
+            throw new IllegalArgumentException("reasonCode不能为空");
+        }
+        return reasonCode.trim();
+    }
+
+    private String driverReasonPayloadJson(String reasonCode) {
+        try {
+            var m = new java.util.LinkedHashMap<String, Object>();
+            m.put("reasonCode", reasonCode);
+            return objectMapper.writeValueAsString(m);
+        } catch (JsonProcessingException e) {
+            return "{}";
+        }
+    }
+
+    /**
+     * 与 {@link #create} 一致：写入待发布的派单请求（新 eventId，避免 Kafka 幂等键冲突）。
+     */
+    private void enqueueDispatchRequestedOutbox(TripOrder orderRow, LocalDateTime now) {
+        OrderOutboxEvent outbox = new OrderOutboxEvent()
+                .setTopic("order.dispatch.requested.v1")
+                .setEventType("ORDER_CREATED_NEED_DISPATCH")
+                .setAggregateId(orderRow.getOrderNo())
+                .setPayload("{}")
+                .setStatus("PENDING")
+                .setRetryCount(0)
+                .setNextRetryAt(now)
+                .setCreatedAt(now)
+                .setUpdatedAt(now);
+        orderOutboxEventMapper.insert(outbox);
+        String payload = buildDispatchRequestedPayloadFromTripOrder(orderRow, outbox.getId(), now);
+        outbox.setPayload(payload);
+        orderOutboxEventMapper.updateById(outbox);
+    }
+
+    private String buildDispatchRequestedPayloadFromTripOrder(TripOrder o, Long outboxId, LocalDateTime now) {
+        try {
+            var root = new java.util.LinkedHashMap<String, Object>();
+            root.put("schemaVersion", 1);
+            root.put("eventId", outboxId == null ? null : String.valueOf(outboxId));
+            root.put("eventType", "ORDER_CREATED_NEED_DISPATCH");
+            root.put("orderNo", o.getOrderNo());
+            root.put("passengerId", o.getPassengerId());
+            root.put("cityCode", o.getCityCode());
+            root.put("productCode", o.getProductCode());
+            var origin = new java.util.LinkedHashMap<String, Object>();
+            origin.put("lat", o.getOriginLat() == null ? null : o.getOriginLat().doubleValue());
+            origin.put("lng", o.getOriginLng() == null ? null : o.getOriginLng().doubleValue());
+            root.put("origin", origin);
+            root.put("createdAt", now.toString());
+            return objectMapper.writeValueAsString(root);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("outbox payload json 序列化失败", e);
+        }
     }
 
     /**
@@ -909,7 +1058,14 @@ public class TripOrderWriteService {
 
     private void insertDriverEvent(String orderNo, Long driverId, String eventType,
                                    Integer fromStatus, Integer toStatus, LocalDateTime now) {
-        TripOrder after = tripOrderEntityMapper.selectOne(com.baomidou.mybatisplus.core.toolkit.Wrappers.<TripOrder>lambdaQuery()
+        insertDriverEventWithReason(orderNo, driverId, eventType, fromStatus, toStatus, now,
+                null, null, "{}");
+    }
+
+    private void insertDriverEventWithReason(String orderNo, Long driverId, String eventType,
+                                             Integer fromStatus, Integer toStatus, LocalDateTime now,
+                                             String reasonCode, String reasonDesc, String eventPayload) {
+        TripOrder after = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
                 .eq(TripOrder::getOrderNo, orderNo)
                 .eq(TripOrder::getIsDeleted, 0)
                 .last("LIMIT 1"));
@@ -924,9 +1080,9 @@ public class TripOrderWriteService {
                 .setToStatus(toStatus)
                 .setOperatorType(OPERATOR_DRIVER)
                 .setOperatorId(driverId)
-                .setReasonCode(null)
-                .setReasonDesc(null)
-                .setEventPayload("{}")
+                .setReasonCode(reasonCode)
+                .setReasonDesc(reasonDesc)
+                .setEventPayload(eventPayload == null || eventPayload.isBlank() ? "{}" : eventPayload)
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);

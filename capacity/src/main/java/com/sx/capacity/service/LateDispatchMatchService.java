@@ -27,6 +27,7 @@ public class LateDispatchMatchService {
     private final DriverGeoRedisPool driverGeoRedisPool;
     private final NearestDriverQueryService nearestDriverQueryService;
     private final DispatchOrderPoolService dispatchOrderPoolService;
+    private final DriverPassengerMatchBlockService matchBlockService;
     private final double matchRadiusMeters;
     private final int driverOfferSeconds;
     private final int scheduledScanBatchLimit;
@@ -35,6 +36,7 @@ public class LateDispatchMatchService {
                                     DriverGeoRedisPool driverGeoRedisPool,
                                     NearestDriverQueryService nearestDriverQueryService,
                                     DispatchOrderPoolService dispatchOrderPoolService,
+                                    DriverPassengerMatchBlockService matchBlockService,
                                     @Value("${capacity.dispatch.match-radius-meters:3000}") double matchRadiusMeters,
                                     @Value("${capacity.dispatch.driver-offer-seconds:10}") int driverOfferSeconds,
                                     @Value("${capacity.dispatch.late-match-batch-limit:50}") int scheduledScanBatchLimit) {
@@ -42,6 +44,7 @@ public class LateDispatchMatchService {
         this.driverGeoRedisPool = driverGeoRedisPool;
         this.nearestDriverQueryService = nearestDriverQueryService;
         this.dispatchOrderPoolService = dispatchOrderPoolService;
+        this.matchBlockService = matchBlockService;
         this.matchRadiusMeters = matchRadiusMeters;
         this.driverOfferSeconds = driverOfferSeconds;
         this.scheduledScanBatchLimit = scheduledScanBatchLimit;
@@ -73,6 +76,9 @@ public class LateDispatchMatchService {
             }
             var nearest = nearestDriverQueryService.buildEligibleForDriver(driverId, cityCode, order.getProductCode());
             if (nearest == null) {
+                continue;
+            }
+            if (matchBlockService.isBlocked(driverId, order.getPassengerId())) {
                 continue;
             }
             try {
@@ -117,6 +123,9 @@ public class LateDispatchMatchService {
             for (Long driverId : driverIds) {
                 var nearest = nearestDriverQueryService.buildEligibleForDriver(driverId, cityCode, order.getProductCode());
                 if (nearest == null) {
+                    continue;
+                }
+                if (matchBlockService.isBlocked(driverId, order.getPassengerId())) {
                     continue;
                 }
                 try {

@@ -9,6 +9,7 @@ import com.sx.driverapi.model.capacity.DriverListeningStatusVO;
 import com.sx.driverapi.model.capacity.DriverOnlineBody;
 import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
+import com.sx.driverapi.model.order.DriverOrderReasonBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
 import feign.FeignException;
@@ -94,6 +95,22 @@ public class DriverBffService {
         body.setDriverId(driverId);
         unwrap(orderClient.accept(orderNo, body), "确认接单");
         log.info("司机已接单 orderNo={} driverId={}", orderNo, driverId);
+    }
+
+    public void reject(String orderNo, Long driverId, String reasonCode) {
+        DriverOrderReasonBody body = new DriverOrderReasonBody();
+        body.setDriverId(driverId);
+        body.setReasonCode(reasonCode);
+        unwrap(orderClient.reject(orderNo, body), "拒单");
+        log.info("司机已拒单 orderNo={} driverId={} reasonCode={}", orderNo, driverId, reasonCode);
+    }
+
+    public void driverCancelBeforeArrive(String orderNo, Long driverId, String reasonCode) {
+        DriverOrderReasonBody body = new DriverOrderReasonBody();
+        body.setDriverId(driverId);
+        body.setReasonCode(reasonCode);
+        unwrap(orderClient.driverCancelBeforeArrive(orderNo, body), "司机取消");
+        log.info("司机已取消（到达前） orderNo={} driverId={} reasonCode={}", orderNo, driverId, reasonCode);
     }
 
     public void arrive(String orderNo, Long driverId) {

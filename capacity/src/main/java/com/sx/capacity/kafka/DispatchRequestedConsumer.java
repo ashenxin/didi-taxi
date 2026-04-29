@@ -5,6 +5,7 @@ import com.sx.capacity.client.order.OrderServiceResponseVo;
 import com.sx.capacity.client.order.dto.AssignOrderFeignBody;
 import com.sx.capacity.client.order.dto.OpenDriverOfferFeignBody;
 import com.sx.capacity.model.dto.NearestDriverResult;
+import com.sx.capacity.service.DriverPassengerMatchBlockService;
 import com.sx.capacity.service.NearestDriverQueryService;
 import com.sx.capacity.service.ProcessedEventService;
 import com.sx.capacity.client.order.OrderServiceClient;
@@ -27,6 +28,7 @@ public class DispatchRequestedConsumer {
     private final ProcessedEventService processedEventService;
     private final NearestDriverQueryService nearestDriverQueryService;
     private final OrderServiceClient orderServiceClient;
+    private final DriverPassengerMatchBlockService matchBlockService;
 
     @Value("${capacity.dispatch.kafka.consumer-group:capacity.order.dispatch.requested.v1}")
     private String consumerGroup;
@@ -40,11 +42,13 @@ public class DispatchRequestedConsumer {
     public DispatchRequestedConsumer(ObjectMapper objectMapper,
                                     ProcessedEventService processedEventService,
                                     NearestDriverQueryService nearestDriverQueryService,
-                                    OrderServiceClient orderServiceClient) {
+                                    OrderServiceClient orderServiceClient,
+                                    DriverPassengerMatchBlockService matchBlockService) {
         this.objectMapper = objectMapper;
         this.processedEventService = processedEventService;
         this.nearestDriverQueryService = nearestDriverQueryService;
         this.orderServiceClient = orderServiceClient;
+        this.matchBlockService = matchBlockService;
     }
 
     @KafkaListener(topics = "order.dispatch.requested.v1", groupId = "${spring.kafka.consumer.group-id}")
@@ -96,6 +100,11 @@ public class DispatchRequestedConsumer {
 
         for (NearestDriverResult nr : candidates) {
             if (nr == null || nr.getDriverId() == null) {
+                continue;
+            }
+            if (matchBlockService.isBlocked(nr.getDriverId(), msg.getPassengerId())) {
+                log.info("dispatch blocked by driver-passenger pair orderNo={} driverId={} passengerId={}",
+                        msg.getOrderNo(), nr.getDriverId(), msg.getPassengerId());
                 continue;
             }
             try {

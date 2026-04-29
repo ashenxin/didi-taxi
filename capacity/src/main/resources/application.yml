@@ -63,7 +63,7 @@ capacity:
       same-driver-max-offer-rounds: 2
     # 自测：指定司机上线时强制写入 GEO 的坐标（与 passenger-demo 东站起点一致，避免本机定位超 3km / 非最近邻）；生产请删除或置空
     geo-pin:
-      80004:
+      900006:
         lat: 30.2525
         lng: 120.2156
   app:

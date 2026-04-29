@@ -19,6 +19,8 @@ public class PassengerOrderDetailVO {
     /** 已指派/服务中的司机摘要（无司机时为 null） */
     private PassengerOrderDriverVO driver;
     private PassengerOrderTimestamps timestamps;
+    /** 是否处于“司机拒绝/取消后重新派单”阶段 */
+    private Boolean reDispatching;
 
     /**
      * 取消方：1 乘客、3 系统等，与 trip_order.cancel_by 一致；未取消为 null。
@@ -113,6 +115,14 @@ public class PassengerOrderDetailVO {
 
     public void setTimestamps(PassengerOrderTimestamps timestamps) {
         this.timestamps = timestamps;
+    }
+
+    public Boolean getReDispatching() {
+        return reDispatching;
+    }
+
+    public void setReDispatching(Boolean reDispatching) {
+        this.reDispatching = reDispatching;
     }
 
     public Integer getCancelBy() {

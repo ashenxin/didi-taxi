@@ -1,6 +1,7 @@
 package com.sx.driverapi.client;
 
 import com.sx.driverapi.model.order.DriverIdBody;
+import com.sx.driverapi.model.order.DriverOrderReasonBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -23,6 +24,12 @@ public interface OrderClient {
 
     @PostMapping("/api/v1/orders/{orderNo}/accept")
     CoreResponseVo<Void> accept(@PathVariable("orderNo") String orderNo, @RequestBody DriverIdBody body);
+
+    @PostMapping("/api/v1/orders/{orderNo}/reject")
+    CoreResponseVo<Void> reject(@PathVariable("orderNo") String orderNo, @RequestBody DriverOrderReasonBody body);
+
+    @PostMapping("/api/v1/orders/{orderNo}/driver/cancel")
+    CoreResponseVo<Void> driverCancelBeforeArrive(@PathVariable("orderNo") String orderNo, @RequestBody DriverOrderReasonBody body);
 
     @PostMapping("/api/v1/orders/{orderNo}/arrive")
     CoreResponseVo<Void> arrive(@PathVariable("orderNo") String orderNo, @RequestBody DriverIdBody body);

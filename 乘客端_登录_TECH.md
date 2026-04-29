@@ -40,11 +40,11 @@
 - 网关验签使用 `gateway.jwt.secret-app`，必须与 BFF 一致
 - 建议与 admin/driver 端密钥不同，避免跨端 token 复用风险
 
-### 3.3 过期策略
+### 3.3 过期策略与登出失效
 
 - 7 天（604800 秒）
-- 首期不做服务端即时失效（退出登录由客户端删除 token）
-- 二期可演进：`token_version`、refresh token 等（见后续演进）
+- JWT 含 `tv`，Redis 键 `passenger:tv:{customerId}`；登录、**`POST /app/api/v1/auth/logout`** 均递增 `tv`，使旧 token 在 `passenger-api` 侧立即失效（与司机端 `driver:tv:*` 思路一致）
+- 客户端仍应在登出成功后删除本机 token；详见《乘客端_登录_API.md》§4
 
 ---
 

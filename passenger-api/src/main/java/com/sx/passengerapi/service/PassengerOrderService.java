@@ -20,12 +20,15 @@ import com.sx.passengerapi.model.order.CreateOrderResultV1;
 import com.sx.passengerapi.model.order.OrderStatus;
 import com.sx.passengerapi.model.order.PassengerOrderDetailVO;
 import com.sx.passengerapi.model.order.PassengerOrderDriverVO;
+import com.sx.passengerapi.model.auth.PassengerLogoutResult;
 import com.sx.passengerapi.model.order.PassengerOrderTimestamps;
+import com.sx.passengerapi.model.ordercore.OrderPageData;
 import com.sx.passengerapi.model.ordercore.AssignOrderBody;
 import com.sx.passengerapi.model.ordercore.CancelOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderResult;
 import com.sx.passengerapi.model.ordercore.OpenDriverOfferBody;
+import com.sx.passengerapi.model.ordercore.OrderEventRow;
 import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.capacity.PendingOrderIndexBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
@@ -35,11 +38,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 @Slf4j
 public class PassengerOrderService {
+    private static final Set<String> REDISPATCH_EVENT_TYPES = Set.of(
+            "ORDER_DRIVER_REJECTED",
+            "ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE"
+    );
 
     /** cityCode → 高德 geocode 可选 city 参数（中文/全拼/adcode 等，见高德文档） */
     private static final Map<String, String> CITY_CODE_TO_GEOCODE_CITY = Map.of(
@@ -375,7 +384,28 @@ public class PassengerOrderService {
         if (!passengerId.equals(row.getPassengerId())) {
             throw new BizErrorException(403, "无权查看该订单");
         }
-        return toDetailVO(row);
+        PassengerOrderDetailVO vo = toDetailVO(row);
+        vo.setReDispatching(isRedispatching(orderNo, row.getStatus()));
+        return vo;
+    }
+
+    private boolean isRedispatching(String orderNo, Integer statusCode) {
+        // 仅在 CREATED 展示“正在重新派单”
+        if (statusCode == null || statusCode != 0) {
+            return false;
+        }
+        try {
+            var eventsResp = orderClient.listEvents(orderNo);
+            if (eventsResp == null || eventsResp.getCode() == null || eventsResp.getCode() != 200 || eventsResp.getData() == null) {
+                return false;
+            }
+            return eventsResp.getData().stream()
+                    .map(OrderEventRow::getEventType)
+                    .anyMatch(REDISPATCH_EVENT_TYPES::contains);
+        } catch (Exception e) {
+            log.warn("查询订单事件失败，按非重新派单处理 orderNo={}: {}", orderNo, e.toString());
+            return false;
+        }
     }
 
     /**
@@ -394,6 +424,71 @@ public class PassengerOrderService {
                     resp.getMsg() == null ? "取消订单失败" : resp.getMsg());
         }
         log.info("乘客取消订单 orderNo={} passengerId={}", orderNo, req.getPassengerId());
+    }
+
+    /**
+     * 乘客退出登录：若存在「司机到达前」在途单则逐单代取消；若存在已到达/行程中单则仅返回提示、不取消（PRD §5.6）。
+     */
+    public PassengerLogoutResult cancelInFlightOrdersOnPassengerLogout(long passengerId) {
+        PassengerLogoutResult out = new PassengerLogoutResult();
+        if (passengerId <= 0) {
+            return out;
+        }
+        var resp = orderClient.pageOrders(passengerId, 1, 50);
+        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+            log.warn("登出：查询乘客订单失败 passengerId={} code={} msg={}",
+                    passengerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+            return out;
+        }
+        OrderPageData data = resp.getData();
+        if (data == null) {
+            return out;
+        }
+        List<TripOrderRow> rows = data.getList();
+        if (rows == null || rows.isEmpty()) {
+            return out;
+        }
+        final int finished = 5;
+        final int cancelled = 6;
+        final int arrived = 3;
+        final int started = 4;
+        for (TripOrderRow row : rows) {
+            Integer st = row.getStatus();
+            if (st == null || st == finished || st == cancelled) {
+                continue;
+            }
+            if (st == arrived || st == started) {
+                out.setHint("司机已到达或行程已开始，无法通过退出登录取消订单；您已退出登录。");
+                return out;
+            }
+        }
+        int cancelledCount = 0;
+        for (TripOrderRow row : rows) {
+            Integer st = row.getStatus();
+            if (st == null || st == finished || st == cancelled) {
+                continue;
+            }
+            if (st != 0 && st != 1 && st != 2 && st != 7) {
+                continue;
+            }
+            String orderNo = row.getOrderNo();
+            if (orderNo == null || orderNo.isBlank()) {
+                continue;
+            }
+            try {
+                CancelOrderRequest req = new CancelOrderRequest();
+                req.setPassengerId(passengerId);
+                req.setCancelReason("乘客退出登录");
+                cancelOrder(orderNo, req);
+                cancelledCount++;
+            } catch (BizErrorException e) {
+                log.warn("登出代取消失败 orderNo={} passengerId={} msg={}", orderNo, passengerId, e.getMessage());
+            }
+        }
+        if (cancelledCount > 0) {
+            out.setHint("已为您取消进行中的订单（退出登录）。");
+        }
+        return out;
     }
 
     private static PassengerOrderDetailVO toDetailVO(TripOrderRow row) {

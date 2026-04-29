@@ -1,12 +1,15 @@
 package com.sx.passengerapi.controller;
 
+import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.util.ResultUtil;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
+import com.sx.passengerapi.model.auth.PassengerLogoutResult;
 import com.sx.passengerapi.service.PassengerAuthService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -17,6 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/app/api/v1/auth")
 public class PassengerAuthController {
+
+    private static final String USER_ID_HEADER = "X-User-Id";
 
     private final PassengerAuthService passengerAuthService;
 
@@ -50,6 +55,19 @@ public class PassengerAuthController {
     @PostMapping("/login-password")
     public ResponseVo<CustomerLoginResponse> loginPassword(@Valid @RequestBody com.sx.passengerapi.model.auth.PasswordLoginRequest body) {
         return ResultUtil.success(passengerAuthService.loginPassword(body.getPhone(), body.getPassword()));
+    }
+
+    /**
+     * 退出登录（须 Bearer）。
+     * {@code POST /app/api/v1/auth/logout}
+     */
+    @PostMapping("/logout")
+    public ResponseVo<PassengerLogoutResult> logout(
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId) {
+        if (passengerId == null) {
+            throw new BizErrorException(401, "未授权，请重新登录");
+        }
+        return ResultUtil.success(passengerAuthService.logout(passengerId));
     }
 }
 

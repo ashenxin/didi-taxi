@@ -1,6 +1,6 @@
 # 第一期 MVP：乘客派单司机闭环 API
 
-> 目标：按接口提供“请求参数/返回参数”表格，**已实现**与**未实现（本期计划）**都写全，便于联调与验收。
+> 目标：按接口提供“请求参数/返回参数”表格，**已实现**与**未实现（本期计划）**都写全，便于联调与验收。（司机 **拒单**、**到达前取消** 及 order **§4.2/4.3** 已与实现对齐。）
 >
 > 相关文档：
 > - PRD：`第一期MVP_乘客派单司机闭环_PRD.md`
@@ -136,28 +136,44 @@
 
 ---
 
-### 1.4 退出登录（未实现，本期计划）
+### 1.4 退出登录（已实现）
 
 **POST** `/app/api/v1/auth/logout`
 
+**请求头**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| Authorization | string | 是 | `Bearer <accessToken>`（须含 `tv` 的 JWT，与登录签发一致） |
+| X-User-Id | string | 网关注入 | 客户端不要传；直连联调时与 JWT `sub` 一致即可 |
+
 **说明**
 
-- 退出后 token 立即失效（访问业务接口应返回 401）
-- 若存在“司机到达前”的进行中订单：按 PRD §5.6 触发“本单取消”
-- 若司机已到达：退出登录不触发取消，应提示用户“司机已到达，无法通过退出登录取消”
+- 退出后递增服务端 token 版本，旧 JWT 立即失效（再访问业务接口应 401）
+- 若存在「司机到达前」的在途订单（状态为 CREATED / ASSIGNED / PENDING_DRIVER_CONFIRM / ACCEPTED）：按 PRD §5.6 代为乘客取消，取消原因记为「乘客退出登录」
+- 若存在已到达或行程中订单（ARRIVED / STARTED）：**不**代取消；`data.hint` 返回明确说明，仍完成登出使 token 失效
 
-**请求体**：无  
-**响应 data**：无
+**请求体**：无（可传 `{}`）
 
-**响应示例（期望）**
+**响应 data**（`PassengerLogoutResult`）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| hint | string | 否 | 可选提示：如已代取消、或到达后未取消等 |
+
+**响应示例**
 
 ```json
 {
   "code": 200,
   "msg": "success",
-  "data": null
+  "data": {
+    "hint": "已为您取消进行中的订单（退出登录）。"
+  }
 }
 ```
+
+无在途单或无可取消单时 `data` 可为 `{ "hint": null }`。
 
 ---
 
@@ -318,6 +334,7 @@
 | timestamps | object | 是 | 关键时间戳集合 |
 | cancelBy | number\|null | 否 | 取消方（与订单库一致；未取消为 null） |
 | cancelReason | string\|null | 否 | 取消原因文案 |
+| reDispatching | boolean | 否 | 是否“正在重新派单”（当前为 `CREATED` 且已发生过司机拒单/到达前取消） |
 
 **响应示例（等待态）**
 
@@ -338,10 +355,13 @@
     "driver": null,
     "timestamps": { "createdAt": "2026-04-28T16:30:00" },
     "cancelBy": null,
-    "cancelReason": null
+    "cancelReason": null,
+    "reDispatching": false
   }
 }
 ```
+
+> 展示口径：当 `reDispatching=true` 且状态仍为 `CREATED` 时，乘客端文案应显示“正在为您重新派单”；否则按常规 `status` 文案（如“派单中”）。
 
 **响应示例（系统取消：无人接单/超时兜底）**
 
@@ -503,11 +523,11 @@
 
 ---
 
-### 3.5 拒单（未实现，本期计划）
+### 3.5 拒单（已实现）
 
 **POST** `/driver/api/v1/orders/{orderNo}/reject`
 
-**请求体（建议）**
+**请求体**
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
@@ -515,9 +535,10 @@
 | reasonCode | string | 是 | 单选原因码（前端写死；无输入） |
 
 **响应 data**：无  
-**本期语义**：拒单后订单进入“重新派单/改派中”；原因不对乘客展示。
+**语义**：`order-service` 将订单从 **`ASSIGNED` / `PENDING_DRIVER_CONFIRM` → `CREATED`**，清空指派与确认窗口字段，写 **`ORDER_DRIVER_REJECTED`** 事件，并再次投递 **`ORDER_CREATED_NEED_DISPATCH`** Outbox，进入重新派单；**`reasonCode` 不对乘客展示**。
+同时写入 Redis 隔离键 `tx:dispatch:block:dp:{driverId}:{passengerId}`（TTL 30 分钟）：隔离期内 capacity 派单会跳过该司机-乘客组合，司机刷新指派单也会跳过该乘客订单。
 
-**请求示例（期望）**
+**请求示例**
 
 ```json
 {
@@ -528,11 +549,13 @@
 
 ---
 
-### 3.6 司机取消（已接单后、到达前，未实现，本期计划）
+### 3.6 司机取消（已接单后、到达前，已实现）
 
 **POST** `/driver/api/v1/orders/{orderNo}/cancel`
 
-**请求体（建议）**
+> 与乘客取消 **`POST /app/api/v1/orders/{orderNo}/cancel`** 路径语义不同：本接口为 **司机端 BFF**，到达前释放订单并改派。
+
+**请求体**
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
@@ -540,9 +563,10 @@
 | reasonCode | string | 是 | 单选原因码（前端写死；无输入） |
 
 **响应 data**：无  
-**本期语义**：到达前允许；到达后禁止；取消后订单进入“重新派单/改派中”。
+**语义**：`order-service` **`POST /api/v1/orders/{orderNo}/driver/cancel`** 将 **`ACCEPTED` → `CREATED`**（仅到达前；到达后应业务错误），清空服务方与确认相关字段，写 **`ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE`**，并再次投递派单 Outbox；**`reasonCode` 不对乘客展示**。
+同时写入 Redis 隔离键 `tx:dispatch:block:dp:{driverId}:{passengerId}`（TTL 30 分钟）：隔离期内 capacity 派单会跳过该司机-乘客组合，司机刷新指派单也会跳过该乘客订单。
 
-**请求示例（期望）**
+**请求示例**
 
 ```json
 {
@@ -601,11 +625,13 @@
 }
 ```
 
-### 4.2 司机拒单（状态机写接口，未实现，本期计划）
+### 4.2 司机拒单（状态机写接口，已实现）
 
 **POST** `/api/v1/orders/{orderNo}/reject`
 
-**请求体（建议）**
+**请求头**：与司机其它写接口一致，须带 **`X-User-Id`**（与 body `driverId` 一致）；BFF 经 Feign 转发时会透传。
+
+**请求体**
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
@@ -614,12 +640,44 @@
 
 **响应 data**：无
 
-**请求示例（期望）**
+**错误语义（节选）**：`403` 非指派司机；`404` 订单不存在；`409` 当前状态不允许拒单（含并发 CAS 失败）。
+
+**请求示例**
 
 ```json
 {
   "driverId": 80001,
   "reasonCode": "TOO_FAR"
+}
+```
+
+---
+
+### 4.3 司机取消（已接单、到达前，已实现）
+
+**POST** `/api/v1/orders/{orderNo}/driver/cancel`
+
+> 与 **`POST /api/v1/orders/{orderNo}/cancel`（乘客取消）** 路径不同；本接口仅处理 **司机**在 **`ACCEPTED`** 阶段的到达前释放。
+
+**请求头**：**`X-User-Id`** 与 body **`driverId`** 一致。
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| driverId | number | 是 | 当前服务司机 id |
+| reasonCode | string | 是 | 单选原因码（不对乘客展示） |
+
+**响应 data**：无
+
+**错误语义（节选）**：`403` 非本单司机；`404` 订单不存在；`409` 当前状态不允许司机取消（如已到达或已非 `ACCEPTED`）。
+
+**请求示例**
+
+```json
+{
+  "driverId": 80001,
+  "reasonCode": "TEMPORARILY_UNAVAILABLE"
 }
 ```
 
@@ -657,4 +715,5 @@
 ## 6. 备注
 
 - 本文档已包含接口的请求/响应字段表格与 JSON 示例，可直接用于联调与验收。
+- 司机拒单/司机取消后订单回到 **`CREATED`**（非 **`CANCELLED`**），乘客侧展示「重新派单」类等待态；**总体等待 180s** 仍以 **`created_at`** 起算、改派不重置。
 

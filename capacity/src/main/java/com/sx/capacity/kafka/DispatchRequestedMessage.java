@@ -8,6 +8,7 @@ public class DispatchRequestedMessage {
     private String eventId;
     private String eventType;
     private String orderNo;
+    private Long passengerId;
     private String cityCode;
     private String productCode;
     private Origin origin;

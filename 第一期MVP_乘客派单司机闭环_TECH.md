@@ -152,15 +152,16 @@ PRD 要求“3 分钟到期系统取消”的对外语义是：**附近暂无可
 
 触发来源：
 
-- **司机拒单**（driver-api → order/capacity）：立即收回该单，进入改派
+- **司机拒单**（`driver-api` → `order-service`）：已实现；**`ASSIGNED` / `PENDING_DRIVER_CONFIRM` → `CREATED`**，清空指派并再次写入 **`ORDER_CREATED_NEED_DISPATCH`** Outbox，由 capacity/Kafka/迟滞扫描推进下一轮派单
 - **司机超时未接**（order 或 capacity 扫描）：收回该单，进入改派
-- **司机已接单后取消（到达前）**：收回该司机，进入改派
+- **司机已接单后取消（到达前）**（`driver-api` → `order-service` **`/driver/cancel`**）：已实现；**`ACCEPTED` → `CREATED`**，同样再投递派单 Outbox
 - **互斥收敛**：司机接成一单后，其它单释放改派
 
 落地要点：
 
-- “收回/释放”是写操作，必须经 order 状态机 CAS
+- “收回/释放”是写操作，必须经 order 状态机 CAS（拒单/到达前取消与上述一致）
 - capacity 可负责“再找司机 + 再指派 + 再打开接单窗口”（迟滞匹配/改派推进）
+- passenger-api 在订单详情增加 `reDispatching` 字段：当订单当前为 `CREATED` 且事件流出现 `ORDER_DRIVER_REJECTED` 或 `ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE` 时置为 `true`；前端据此展示“正在为您重新派单”
 
 相关专项文档：
 - `乘客司机端_Redis与听单下线策略.md`
@@ -185,6 +186,18 @@ PRD 要求“3 分钟到期系统取消”的对外语义是：**附近暂无可
 优势：
 - 负载与乘客轮询解耦
 - 并发冲突由 order CAS 门闩兜底
+
+### 4.3 司机-乘客 30 分钟隔离匹配（已实现）
+
+规则目标：司机拒绝某单（或已接单到达前取消）后，30 分钟内不再把该司机与该乘客重新匹配，避免“刚拒绝又派回”。
+
+实现口径：
+
+- **写入时机（order）**：`rejectByDriver`、`driverCancelBeforeArrive` 成功后写 Redis 键  
+  `tx:dispatch:block:dp:{driverId}:{passengerId}`，TTL=30 分钟（配置项：`order.dispatch.driver-passenger-block-minutes`）。
+- **生效点 1（capacity 派单）**：Kafka 首派与迟滞匹配（司机上线触发/定时扫描）在候选司机循环中检查该键，命中则跳过当前候选。
+- **生效点 2（司机刷新指派单）**：`order-service` 的 `listAssignedToDriver` 返回前按同键过滤，隔离期内该乘客订单不出现在司机待接列表。
+- **权威口径**：该键仅作为派单约束索引，不改变订单状态机权威（仍以 order DB + CAS 为准）。
 
 ---
 

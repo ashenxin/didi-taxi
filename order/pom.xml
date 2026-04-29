@@ -43,6 +43,10 @@
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
         <!-- Zipkin / Brave：暂不接入时注释，避免无 Zipkin 进程时的上报异常；恢复接入时取消注释并启动 9411 -->
         <!--
         <dependency>
