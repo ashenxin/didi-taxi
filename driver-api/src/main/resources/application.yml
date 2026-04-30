@@ -46,3 +46,10 @@ services:
     base-url: http://127.0.0.1:8090
   calculate:
     base-url: http://127.0.0.1:8091
+
+driver:
+  ws:
+    # 司机端心跳超时阈值（ms）：超过该时长未收到 ping，则判离线并下线听单（≥ ping 间隔 × 2）
+    heartbeat-timeout-ms: 45000
+    # 服务端轮询 assigned 并推送：2s 偏密；3s 与 30s 确认窗、5s 改派扫描搭配更省负载
+    assigned-poll-interval-ms: 3000

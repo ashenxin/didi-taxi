@@ -15,13 +15,19 @@ spring:
 
 app:
   order:
-    # 指派成功后打开「待司机确认」窗口时长（秒），与 order-service offer/open 一致
-    driver-offer-seconds: 10
+    # 指派成功后打开「待司机确认」窗口时长（秒），与 capacity / order 一致
+    driver-offer-seconds: 30
   jwt:
     # 与网关 gateway.jwt.secret-app 保持一致（生产用 JWT_SECRET_APP）
     secret: ${JWT_SECRET_APP:${JWT_SECRET:dev-didi-app-jwt-secret-change-me-32b!!}}
     expiration-seconds: 604800
     audience: app-bff
+
+passenger:
+  ws:
+    # 运维总闸：false 时拒绝 ws-token / WS 握手
+    enabled: ${PASSENGER_WS_ENABLED:true}
+    heartbeat-timeout-ms: 90000
 
 logging:
   config: classpath:logback-spring.xml

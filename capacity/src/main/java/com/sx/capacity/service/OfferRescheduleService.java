@@ -38,7 +38,7 @@ public class OfferRescheduleService {
                                   NearestDriverQueryService nearestDriverQueryService,
                                   DispatchOrderPoolService dispatchOrderPoolService,
                                   @Value("${capacity.dispatch.match-radius-meters:3000}") double matchRadiusMeters,
-                                  @Value("${capacity.dispatch.driver-offer-seconds:10}") int driverOfferSeconds,
+                                  @Value("${capacity.dispatch.driver-offer-seconds:30}") int driverOfferSeconds,
                                   @Value("${capacity.dispatch.offer-reschedule.batch-limit:50}") int batchLimit,
                                   @Value("${capacity.dispatch.offer-reschedule.same-driver-max-offer-rounds:2}") int sameDriverMaxOfferRounds) {
         this.orderServiceClient = orderServiceClient;

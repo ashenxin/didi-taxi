@@ -22,12 +22,14 @@ spring:
       host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
       database: ${REDIS_DB:0}
-  Kafka:
+  kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
       group-id: capacity.order.dispatch.requested.v1
       enable-auto-commit: false
       auto-offset-reset: earliest
+    listener:
+      ack-mode: manual
 
 logging:
   config: classpath:logback-spring.xml
@@ -50,12 +52,14 @@ capacity:
   dispatch:
     # 司机与上车点直线距离上限（米），与《乘客司机端_Redis与听单下线策略》一致
     match-radius-meters: 3000
-    driver-geo-ttl-seconds: 600
-    driver-offer-seconds: 10
-    # 迟滞匹配定时兜底：间隔与每轮拉取的 CREATED 待派单条数（全城市、按创建时间升序）
-    late-match-scan-interval-ms: 30000
+    # 听单会话内 Redis GEO 点存活：过短会导致「库表仍听单但池里没人」；30min 与一次出车会话更匹配
+    driver-geo-ttl-seconds: 1800
+    # 司机确认接单窗口（秒）：10s 过易误杀；30s 兼顾体验与改派节奏
+    driver-offer-seconds: 30
+    # 迟滞匹配兜底：Kafka/首轮未命中时不宜等 30s 才捞 CREATED
+    late-match-scan-interval-ms: 15000
     late-match-batch-limit: 50
-    # offer 超时打回 ASSIGNED 后：改派 / 下一轮确认（与文档 §3 周期 5s 一致）
+    # offer 超时打回 ASSIGNED 后：再开窗 / GEO 改派（宜 ≤ 确认窗，略快于迟滞兜底）
     offer-reschedule:
       scan-interval-ms: 5000
       batch-limit: 50

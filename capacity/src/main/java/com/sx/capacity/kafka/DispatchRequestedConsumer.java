@@ -33,7 +33,7 @@ public class DispatchRequestedConsumer {
     @Value("${capacity.dispatch.kafka.consumer-group:capacity.order.dispatch.requested.v1}")
     private String consumerGroup;
 
-    @Value("${capacity.dispatch.driver-offer-seconds:10}")
+    @Value("${capacity.dispatch.driver-offer-seconds:30}")
     private int driverOfferSeconds;
 
     @Value("${capacity.dispatch.candidate-limit:3}")

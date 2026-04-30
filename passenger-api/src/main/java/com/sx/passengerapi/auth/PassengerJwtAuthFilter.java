@@ -85,6 +85,11 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
+        if (parsed.audit() != 1) {
+            writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "token 渠道不匹配，请重新登录或使用 WebSocket 专用令牌");
+            return;
+        }
+
         filterChain.doFilter(new PassengerAuthRequestWrapper(request, parsed.customerId()), response);
     }
 

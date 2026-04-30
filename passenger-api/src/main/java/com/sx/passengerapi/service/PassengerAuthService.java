@@ -12,6 +12,7 @@ import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
 import com.sx.passengerapi.model.auth.CustomerProfileVO;
 import com.sx.passengerapi.model.auth.PassengerLogoutResult;
+import com.sx.passengerapi.ws.PassengerWsProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -23,16 +24,19 @@ public class PassengerAuthService {
     private final AppJwtService jwtService;
     private final PassengerTokenVersionStore tokenVersionStore;
     private final PassengerOrderService passengerOrderService;
+    private final PassengerWsProperties passengerWsProperties;
 
     public PassengerAuthService(
             PassengerCoreAuthClient passengerCoreAuthClient,
             AppJwtService jwtService,
             PassengerTokenVersionStore tokenVersionStore,
-            PassengerOrderService passengerOrderService) {
+            PassengerOrderService passengerOrderService,
+            PassengerWsProperties passengerWsProperties) {
         this.passengerCoreAuthClient = passengerCoreAuthClient;
         this.jwtService = jwtService;
         this.tokenVersionStore = tokenVersionStore;
         this.passengerOrderService = passengerOrderService;
+        this.passengerWsProperties = passengerWsProperties;
     }
 
     public void sendSms(String phone) {
@@ -69,6 +73,31 @@ public class PassengerAuthService {
         return side;
     }
 
+    /**
+     * 用 HTTP API token（audit=1）换取 WebSocket 握手 token（audit=2），{@code tv} 不变。
+     */
+    public CustomerLoginResponse issueWsToken(long passengerId) {
+        if (!passengerWsProperties.isEnabled()) {
+            throw new BizErrorException(503, "实时通道暂未开放（WebSocket 已关闭）");
+        }
+        Long tv = tokenVersionStore.currentVersion(passengerId);
+        if (tv == null) {
+            throw new BizErrorException(401, "登录已失效，请重新登录");
+        }
+        String wsTok = jwtService.createPassengerToken(passengerId, "", tv, 2);
+        CustomerProfileVO profile = new CustomerProfileVO();
+        profile.setId(passengerId);
+        profile.setPhone(null);
+
+        CustomerLoginResponse out = new CustomerLoginResponse();
+        out.setAccessToken(wsTok);
+        out.setTokenType("Bearer");
+        out.setExpiresIn(jwtService.getExpirationSeconds());
+        out.setCustomer(profile);
+        log.info("乘客 WebSocket Token 已签发 customerId={}", passengerId);
+        return out;
+    }
+
     private AppAuthCustomerBrief unwrap(ResponseVo<AppAuthCustomerBrief> body) {
         if (body == null) {
             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
@@ -93,7 +122,7 @@ public class PassengerAuthService {
         profile.setNickname(brief.getNickname());
 
         long tv = tokenVersionStore.nextVersion(brief.getId());
-        String token = jwtService.createPassengerToken(brief.getId(), brief.getPhone(), tv);
+        String token = jwtService.createPassengerToken(brief.getId(), brief.getPhone(), tv, 1);
         CustomerLoginResponse resp = new CustomerLoginResponse();
         resp.setAccessToken(token);
         resp.setTokenType("Bearer");

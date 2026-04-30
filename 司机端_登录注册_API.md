@@ -156,7 +156,7 @@
 
 ## 7. 退出登录（需鉴权）
 
-> `driver-api` 负责 JWT 作废；`capacity` 内网接口不负责 JWT 作废。
+> `driver-api` 负责 **订单侧批量拒指派**、**运力下线**、**JWT 作废**；`capacity` 内网接口不负责 JWT 作废。
 
 - **POST** `/driver/api/v1/auth/logout`
 - Header：`Authorization: Bearer <accessToken>`
@@ -167,10 +167,21 @@
 { "code": 200, "msg": "success", "data": null }
 ```
 
-服务端语义（摘要）：
+### 7.1 服务端处理顺序（与实现对齐）
 
-- 从 JWT 解析 `sub`（driverId），对 Redis `driver:tv:{driverId}` 执行 `INCR`
-- 后续请求若 JWT 内 `tv` 与 Redis 不一致，视为登录失效（401）
+1. **批量拒掉当前司机名下「待接指派」**  
+   - 数据源：`order-service` **`GET .../assigned`**（实现上等价于「状态为 **`ASSIGNED`** 或 **`PENDING_DRIVER_CONFIRM`** 且 `driver_id` 为本司机」的列表，见 `TripOrderWriteService#listAssignedToDriver`）。  
+   - 对列表中每一单调用与手动拒单相同的 **`POST .../reject`**，**`reasonCode` = `DRIVER_LOGOUT`**（`DriverBffService#rejectAllPendingAssignsOnLogout`）。  
+   - **语义**：与司机在接单窗口内点「拒单」一致——订单通常 **`→ CREATED`** 并进入 **重新派单**（Outbox / 调度），**不是**乘客端登出那种 **`→ CANCELLED`**。单条失败**不打断**登出，仅打 warn。  
+   - **不在此列表中的单子**：尤其是已进入 **`ACCEPTED`（已接单、未到）** 的订单，**登出时不会自动调用** `reject` / `driver/cancel`；与《第一期 MVP…PRD》§5.6「到达前退出=取消本单」完整对齐仍属 **产品/实现缺口**（见《`TODO与差距总览.md`》）。
+
+2. **运力下线并清理听单态**  
+   - Feign：`POST /drivers/{driverId}/online`，body **`online: false`**（与显式下线一致）：落库 `monitor_status=0`、事务后从 Redis 司机 GEO 移除等（`cityCode` 为空时可能无法删 GEO，服务端打 warn）。
+
+3. **会话作废**  
+   - 对 Redis **`driver:tv:{driverId}`** 执行 **`INCR`**；此后 JWT 内 `tv` 与 Redis 不一致的请求一律 **401**。
+
+客户端建议：先 **关闭 WebSocket**，再调用本接口，避免断线后仍短暂显示「在线/可派单」。
 
 ---
 
@@ -193,6 +204,7 @@ curl "http://127.0.0.1:8080/driver/api/v1/orders/assigned?driverId=80001" \
 
 | 日期 | 说明 |
 |------|------|
+| 2026-04-29 | 登出 §7：补充 **批量拒指派**（`DRIVER_LOGOUT`）、运力下线顺序，及与乘客登出「代取消」语义差异 |
 | 2026-04-13 | 补充登出接口与 `token_version`（`driver:tv:*`）语义 |
 | 2026-04-11 | Access Token 自然过期调整为 8 小时（28800 秒） |
 

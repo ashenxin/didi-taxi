@@ -429,14 +429,18 @@
 
 统一前缀：`/driver/api/v1`
 
-### 3.1 司机登出（已实现；本期需补齐“到达前退出=取消本单”联动）
+### 3.1 司机登出（已实现：待接指派释放 + 下线 + token 作废）
 
 **POST** `/driver/api/v1/auth/logout`
 
-**说明**
+**说明（与 `driver-api` 实现对齐，2026-04）**
 
-- 当前已实现：token 立即失效（递增 token version）
-- 本期需补齐：到达前退出触发“本单取消/释放改派”；到达后退出不触发取消
+1. **待接指派批量释放**：对该司机在订单侧 **`listAssignedToDriver`** 范围内的单子——即 **`ASSIGNED`**、**`PENDING_DRIVER_CONFIRM`**——逐单调用 **`reject`**，`reasonCode` = **`DRIVER_LOGOUT`**；语义与手动拒单一致，订单通常 **`→ CREATED`** 并重新派单，**非** **`CANCELLED`**。单条失败不阻断登出。
+2. **已接单 `ACCEPTED`（到达前）**：**不在**上述列表内，登出 **不会** 自动 `reject` / `driver/cancel`；与 PRD §5.6「到达前退出按取消本单」若要求 **完全等同乘客登出**，仍为 **缺口**（见《`TODO与差距总览.md`》）。
+3. **运力下线**：`online:false`（与显式下线一致，删 GEO / `monitor_status=0` 等）。
+4. **登录态**：**`driver:tv:{driverId}` INCR**，旧 JWT 立即 401。
+
+**到达后**：登出 **不会** 对已到达/行程中单做自动取消（与乘客端「有 ARRIVED/STARTED 则不给代取消」的提示策略不同，司机端 HTTP 响应体暂无 `hint` 字段）。
 
 ---
 

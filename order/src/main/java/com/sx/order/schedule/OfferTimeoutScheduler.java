@@ -20,7 +20,7 @@ public class OfferTimeoutScheduler {
         this.tripOrderWriteService = tripOrderWriteService;
     }
 
-    @Scheduled(fixedDelay = 5000)
+    @Scheduled(fixedDelayString = "${order.dispatch.offer-timeout-scan-interval-ms:5000}")
     public void scanExpiredOffers() {
         int n = tripOrderWriteService.timeoutPendingDriverOffers(LocalDateTime.now());
         if (n > 0) {

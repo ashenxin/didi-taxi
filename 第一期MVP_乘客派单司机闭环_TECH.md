@@ -215,19 +215,36 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 关键点：
 - “是否到达”必须以 order 权威字段/状态为准（例如 ARRIVED 或 arrived_at 非空），不要用前端倒计时裁决
 
+**与当前实现对齐（司机侧）**：`driver-api` 登出对 **`ASSIGNED` / `PENDING_DRIVER_CONFIRM`** 走 **`reject(DRIVER_LOGOUT)`**（通常 **CREATED + 重派**），并对 **`ACCEPTED`** **不做**自动释单；与上段 PRD 字面「取消本单」及乘客侧 **代 `cancel→CANCELLED`** 仍可能不一致，详见《`司机端_登录注册_API.md`》§7、《`第一期MVP_乘客派单司机闭环_API.md`》§3.1。
+
 ---
 
 ## 6. 配置项（第一期关键参数）
 
-> 以当前仓库已有配置为基础，第一期重点关注“等待兜底”和“扫描周期”。
+> 以当前仓库 `application.yml` 为准；**若同时启用 Spring `@Scheduled` 与 XXL-JOB**，请勿对同一业务逻辑双跑两套任务（周期应一致或停用一侧），详见 `第一期MVP_乘客派单司机闭环_TEST.md` **§1.4.5**。
 
-- `order.dispatch.wait-timeout-seconds`：CREATED 等待超时（当前默认 180）
-- `order.dispatch.timeout-scan-interval-ms`：超时扫描频率（当前默认 30000）
+### 6.1 派单与确认窗（默认值）
 
-capacity 侧（示例，具体以实现为准）：
-- 迟滞匹配扫描间隔、批量大小
-- 改派/再开接单窗口扫描间隔
-- 匹配半径（如 3km）
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `capacity.dispatch.driver-offer-seconds` | **30** | 打开「待司机确认」窗口时长（秒）；与 `passenger-api` `app.order.driver-offer-seconds`、`order` `OpenDriverOfferBody` 默认对齐 |
+| `order.dispatch.offer-timeout-scan-interval-ms` | **5000** | `PENDING_DRIVER_CONFIRM` 过期打回 `ASSIGNED` 的扫描间隔 |
+| `capacity.dispatch.offer-reschedule.scan-interval-ms` | **5000** | offer 打回后再开窗口 / GEO 改派推进 |
+| `capacity.dispatch.late-match-scan-interval-ms` | **15000** | `CREATED` 迟滞匹配兜底扫描 |
+| `capacity.dispatch.driver-geo-ttl-seconds` | **1800** | 听单司机 Redis GEO 点 TTL（秒） |
+| `order.dispatch.wait-timeout-seconds` | **180** | `CREATED` 过久系统取消阈值 |
+| `order.dispatch.timeout-scan-interval-ms` | **30000** | 上述取消的扫描间隔 |
+| `driver.ws.assigned-poll-interval-ms` | **3000** | `driver-api` WS 侧拉指派并推送的间隔 |
+
+### 6.2 XXL-JOB（Handler 名 → 建议周期）
+
+| JobHandler | 建议周期 | 对应配置/逻辑 |
+|------------|----------|----------------|
+| `orderOfferTimeoutScan` | **5s** | 同 `order.dispatch.offer-timeout-scan-interval-ms` |
+| `orderCreatedDispatchTimeoutScan` | **30s** | 同 `order.dispatch.timeout-scan-interval-ms` |
+| `orderOutboxPublish` | **2～5s**（建议 **3s**） | Outbox 投递；无同名 Spring 定时 |
+| `capacityLateDispatchScan` | **15s** | 同 `late-match-scan-interval-ms` |
+| `capacityOfferRescheduleScan` | **5s** | 同 `offer-reschedule.scan-interval-ms` |
 
 ---
 

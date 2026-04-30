@@ -25,15 +25,18 @@ public class DriverAuthService {
 
     private final CapacityDriverAuthClient capacityDriverAuthClient;
     private final CapacityDriverClient capacityDriverClient;
+    private final DriverBffService driverBffService;
     private final DriverJwtService jwtService;
     private final DriverTokenVersionStore tokenVersionStore;
 
     public DriverAuthService(CapacityDriverAuthClient capacityDriverAuthClient,
                              CapacityDriverClient capacityDriverClient,
+                             DriverBffService driverBffService,
                              DriverJwtService jwtService,
                              DriverTokenVersionStore tokenVersionStore) {
         this.capacityDriverAuthClient = capacityDriverAuthClient;
         this.capacityDriverClient = capacityDriverClient;
+        this.driverBffService = driverBffService;
         this.jwtService = jwtService;
         this.tokenVersionStore = tokenVersionStore;
     }
@@ -70,12 +73,14 @@ public class DriverAuthService {
     }
 
     /**
-     * 登出：先通知运力下线听单并删除 Redis 司机池 GEO（与《乘客司机端_Redis与听单下线策略》§3 一致），再递增 token 版本使 JWT 失效。
+     * 登出：先拒掉名下全部待接指派（与乘客侧重新派单口径一致），再通知运力下线听单并删除 Redis 司机池 GEO，
+     * 最后递增 token 版本使 JWT 失效。
      */
     public void logout(long driverId) {
         if (driverId <= 0) {
             throw new BizErrorException(400, "driverId非法");
         }
+        driverBffService.rejectAllPendingAssignsOnLogout(driverId);
         try {
             DriverOnlineBody body = new DriverOnlineBody();
             body.setOnline(false);

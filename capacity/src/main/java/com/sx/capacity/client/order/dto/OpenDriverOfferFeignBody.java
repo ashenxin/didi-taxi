@@ -2,7 +2,7 @@ package com.sx.capacity.client.order.dto;
 
 public class OpenDriverOfferFeignBody {
 
-    private int offerSeconds = 10;
+    private int offerSeconds = 30;
 
     public int getOfferSeconds() {
         return offerSeconds;

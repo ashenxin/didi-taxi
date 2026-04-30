@@ -32,6 +32,7 @@ import com.sx.passengerapi.model.ordercore.OrderEventRow;
 import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.capacity.PendingOrderIndexBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
+import com.sx.passengerapi.ws.PassengerWsNotifyService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -61,17 +62,20 @@ public class PassengerOrderService {
     private final CapacityDispatchClient capacityDispatchClient;
 
     private final int driverOfferSeconds;
+    private final PassengerWsNotifyService passengerWsNotifyService;
 
     public PassengerOrderService(MapClient mapClient,
                                  CalculateClient calculateClient,
                                  OrderClient orderClient,
                                  CapacityDispatchClient capacityDispatchClient,
-                                 @Value("${app.order.driver-offer-seconds:10}") int driverOfferSeconds) {
+                                 @Value("${app.order.driver-offer-seconds:30}") int driverOfferSeconds,
+                                 PassengerWsNotifyService passengerWsNotifyService) {
         this.mapClient = mapClient;
         this.calculateClient = calculateClient;
         this.orderClient = orderClient;
         this.capacityDispatchClient = capacityDispatchClient;
         this.driverOfferSeconds = driverOfferSeconds;
+        this.passengerWsNotifyService = passengerWsNotifyService;
     }
 
     /**
@@ -334,6 +338,10 @@ public class PassengerOrderService {
         }
         log.info("创建并指派完成 orderNo={} passengerId={} assigned={}",
                 orderNo, body.getPassengerId(), nearest != null);
+        Long pid = body.getPassengerId();
+        if (pid != null) {
+            passengerWsNotifyService.notifyOrderChanged(pid, orderNo);
+        }
         return out;
     }
 
@@ -360,6 +368,10 @@ public class PassengerOrderService {
         out.setRoute(route);
         out.setEstimate(estimate);
         log.info("两段式下单完成 orderNo={} passengerId={}", orderNo, body.getPassengerId());
+        Long pid = body.getPassengerId();
+        if (pid != null) {
+            passengerWsNotifyService.notifyOrderChanged(pid, orderNo);
+        }
         return out;
     }
 
@@ -424,6 +436,7 @@ public class PassengerOrderService {
                     resp.getMsg() == null ? "取消订单失败" : resp.getMsg());
         }
         log.info("乘客取消订单 orderNo={} passengerId={}", orderNo, req.getPassengerId());
+        passengerWsNotifyService.notifyOrderChanged(req.getPassengerId(), orderNo);
     }
 
     /**

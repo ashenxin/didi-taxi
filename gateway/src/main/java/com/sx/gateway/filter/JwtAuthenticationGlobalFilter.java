@@ -113,8 +113,11 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
     }
 
     private boolean isPublic(String path, HttpMethod method) {
-        // WebSocket 握手常无法带 Authorization，由 driver-api 从 query token 校验
+        // WebSocket 握手常无法带 Authorization，由 BFF（query token）校验；须在此放行，否则会 401 永远无法建连。
         if (HttpMethod.GET.equals(method) && path.startsWith("/driver/ws/")) {
+            return true;
+        }
+        if (HttpMethod.GET.equals(method) && path.startsWith("/app/ws/")) {
             return true;
         }
         if (path.equals("/actuator/health") || path.startsWith("/actuator/health/")) {

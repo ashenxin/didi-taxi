@@ -10,6 +10,7 @@ import com.sx.driverapi.model.order.DriverOrderReasonBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
 import com.sx.driverapi.service.DriverBffService;
+import com.sx.driverapi.ws.DriverAssignedPushService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,9 +35,12 @@ public class DriverBffController {
     private static final String USER_ID_HEADER = "X-User-Id";
 
     private final DriverBffService driverBffService;
+    private final DriverAssignedPushService driverAssignedPushService;
 
-    public DriverBffController(DriverBffService driverBffService) {
+    public DriverBffController(DriverBffService driverBffService,
+                               DriverAssignedPushService driverAssignedPushService) {
         this.driverBffService = driverBffService;
+        this.driverAssignedPushService = driverAssignedPushService;
     }
 
     /**
@@ -103,6 +107,7 @@ public class DriverBffController {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
         driverBffService.accept(orderNo, authedDriverId);
+        driverAssignedPushService.pushAssignedIfChanged(authedDriverId, true);
         return ResultUtil.success();
     }
 
@@ -117,6 +122,7 @@ public class DriverBffController {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
         driverBffService.reject(orderNo, authedDriverId, body.getReasonCode());
+        driverAssignedPushService.pushAssignedIfChanged(authedDriverId, true);
         return ResultUtil.success();
     }
 
@@ -131,6 +137,7 @@ public class DriverBffController {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
         driverBffService.driverCancelBeforeArrive(orderNo, authedDriverId, body.getReasonCode());
+        driverAssignedPushService.pushAssignedIfChanged(authedDriverId, true);
         return ResultUtil.success();
     }
 

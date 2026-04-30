@@ -69,5 +69,17 @@ public class PassengerAuthController {
         }
         return ResultUtil.success(passengerAuthService.logout(passengerId));
     }
-}
 
+    /**
+     * 用 API token（audit=1）换取 WebSocket 握手 token（audit=2）。
+     * {@code POST /app/api/v1/auth/ws-token}
+     */
+    @PostMapping("/ws-token")
+    public ResponseVo<CustomerLoginResponse> wsToken(
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId) {
+        if (passengerId == null) {
+            throw new BizErrorException(401, "未授权，请重新登录");
+        }
+        return ResultUtil.success(passengerAuthService.issueWsToken(passengerId));
+    }
+}

@@ -67,6 +67,11 @@
 - 网关：验签/exp/aud（不校验 tv）
 - `driver-api`：在鉴权过滤器中比对 `tv` 与 Redis，不一致返回 401（登录失效）
 
+### 4.4 登出时的 BFF 编排（`POST .../auth/logout`）
+
+顺序固化为：`DriverAuthService#logout` → **先** `DriverBffService#rejectAllPendingAssignsOnLogout`（对 `listAssigned` 内每笔 `reject(..., DRIVER_LOGOUT)`），**再** Feign 运力 `online:false`，**最后** `driver:tv:*` **INCR**。  
+与 **乘客** `passenger-api` 登出时「代 `cancel` → **CANCELLED**」不同；司机侧当前对「待接指派」走的是 **拒单链路**（通常 **CREATED + 重派**）。**`ACCEPTED`** 不在 `listAssignedToDriver` 查询范围内，登出 **不会** 自动释放已接单行程。
+
 ---
 
 ## 5. Redis（OTP 与风控）

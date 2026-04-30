@@ -24,6 +24,9 @@ import java.util.Objects;
 @Slf4j
 public class DriverBffService {
 
+    /** 登出时批量拒单写入 order_event / 与手动拒单同链路（含司乘隔离匹配） */
+    public static final String REASON_DRIVER_LOGOUT = "DRIVER_LOGOUT";
+
     private static final int STATUS_ASSIGNED = 1;
     private static final int STATUS_PENDING_DRIVER_CONFIRM = 7;
     private static final int STATUS_FINISHED = 5;
@@ -59,7 +62,7 @@ public class DriverBffService {
     }
 
     public List<AssignedOrderItemVO> listAssigned(Long driverId) {
-        CoreResponseVo<List<TripOrderRow>> resp = orderClient.listAssigned(driverId);
+        CoreResponseVo<List<TripOrderRow>> resp = orderClient.listAssigned(driverId, String.valueOf(driverId));
         unwrap(resp, "拉取指派订单");
         List<TripOrderRow> rows = resp.getData();
         if (rows == null) {
@@ -93,7 +96,7 @@ public class DriverBffService {
         unwrap(capacityDriverClient.acceptReadiness(driverId), "接单资格校验");
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
-        unwrap(orderClient.accept(orderNo, body), "确认接单");
+        unwrap(orderClient.accept(orderNo, String.valueOf(driverId), body), "确认接单");
         log.info("司机已接单 orderNo={} driverId={}", orderNo, driverId);
     }
 
@@ -101,34 +104,57 @@ public class DriverBffService {
         DriverOrderReasonBody body = new DriverOrderReasonBody();
         body.setDriverId(driverId);
         body.setReasonCode(reasonCode);
-        unwrap(orderClient.reject(orderNo, body), "拒单");
+        unwrap(orderClient.reject(orderNo, String.valueOf(driverId), body), "拒单");
         log.info("司机已拒单 orderNo={} driverId={} reasonCode={}", orderNo, driverId, reasonCode);
+    }
+
+    /**
+     * 登出前：拒绝当前司机名下全部待接指派（{@code ASSIGNED/PENDING_DRIVER_CONFIRM}），与乘客侧「重新派单」联动。
+     * 单条失败不阻断登出，仅打日志。
+     */
+    public void rejectAllPendingAssignsOnLogout(long driverId) {
+        List<AssignedOrderItemVO> pending = listAssigned(driverId);
+        if (pending == null || pending.isEmpty()) {
+            return;
+        }
+        for (AssignedOrderItemVO vo : pending) {
+            if (vo == null || vo.getOrderNo() == null || vo.getOrderNo().isBlank()) {
+                continue;
+            }
+            try {
+                reject(vo.getOrderNo(), driverId, REASON_DRIVER_LOGOUT);
+            } catch (Exception e) {
+                log.warn("登出批量拒单跳过 orderNo={} driverId={} err={}", vo.getOrderNo(), driverId, e.toString());
+            }
+        }
+        log.info("登出批量拒单完成 driverId={} attempted={}", driverId, pending.size());
     }
 
     public void driverCancelBeforeArrive(String orderNo, Long driverId, String reasonCode) {
         DriverOrderReasonBody body = new DriverOrderReasonBody();
         body.setDriverId(driverId);
         body.setReasonCode(reasonCode);
-        unwrap(orderClient.driverCancelBeforeArrive(orderNo, body), "司机取消");
+        unwrap(orderClient.driverCancelBeforeArrive(orderNo, String.valueOf(driverId), body), "司机取消");
         log.info("司机已取消（到达前） orderNo={} driverId={} reasonCode={}", orderNo, driverId, reasonCode);
     }
 
     public void arrive(String orderNo, Long driverId) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
-        unwrap(orderClient.arrive(orderNo, body), "到达上报");
+        unwrap(orderClient.arrive(orderNo, String.valueOf(driverId), body), "到达上报");
         log.info("司机已到达 orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void start(String orderNo, Long driverId) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
-        unwrap(orderClient.start(orderNo, body), "开始行程");
+        unwrap(orderClient.start(orderNo, String.valueOf(driverId), body), "开始行程");
         log.info("司机已开始行程 orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void finish(String orderNo, FinishOrderBody body) {
-        unwrap(orderClient.finish(orderNo, body), "完单");
+        Long driverId = body == null ? null : body.getDriverId();
+        unwrap(orderClient.finish(orderNo, driverId == null ? "" : String.valueOf(driverId), body), "完单");
         log.info("司机已完单 orderNo={} driverId={}", orderNo, body != null ? body.getDriverId() : null);
     }
 

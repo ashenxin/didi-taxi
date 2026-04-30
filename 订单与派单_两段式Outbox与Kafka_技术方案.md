@@ -316,7 +316,7 @@ onMessage(event):
   for cand in candidates:
      r1 = order.assign(orderNo, cand.driverId, cand.carId, cand.companyId)
      if r1.success:
-        r2 = order.openOffer(orderNo, offerSeconds=10)
+        r2 = order.openOffer(orderNo, offerSeconds=30)
         if r2.success:
            metric.success++
            ack; return
@@ -577,9 +577,9 @@ onMessage(event):
   结果：可能重复发同一事件（同 `eventId`）  
 - 这属于 outbox 常见现象：靠 capacity `processed_event` 去重即可；建议监控 `outbox_publish_duplicate_suspect_total` 或从日志抽样观测重复 `eventId`
 
-### 14.4 配置一致性（避免 8 秒确认窗口、10 秒确认窗口各跑各的）
+### 14.4 配置一致性（确认窗单一真源）
 
-- `offerSeconds` 与 `openDriverOffer` 默认窗口必须 **单一真源**（建议统一在配置/常量层；避免 `order` 与 `capacity` 各自配置漂移）
+- `offerSeconds` 与 `openDriverOffer` 默认窗口必须 **单一真源**：当前仓库默认 **30s**（`capacity.dispatch.driver-offer-seconds`、`passenger-api` `app.order.driver-offer-seconds`、`order` `OpenDriverOfferBody` 等对齐）；避免各服务各自默认导致「8s / 10s / 30s」并存。
 - `radiusMeters` 与 `candidateLimit` 作为 capacity 的算法参数，放配置文件（不放进 Kafka 消息，避免“消息里藏配置”难治理）
 
 ### 14.5 Top3 与算法一致性
@@ -598,6 +598,6 @@ onMessage(event):
   - outbox 发布器 CAS + reclaim（`9.1a`）
   - `processed_event` 插入冲突即跳过
   - `order.assign` 以 DB CAS 为最终门闩
-- **配置**：`offerSeconds` 单点来源；`radiusMeters=3000`；`candidateLimit=3`
+- **配置**：`offerSeconds` 与仓库默认 **30s** 对齐（单点来源）；`radiusMeters=3000`；`candidateLimit=3`
 - **观测**：`malformed_message_total`、outbox 堆积、最老 PENDING 年龄、Kafka consumer lag
 - **回归**：`POST /app/api/v1/orders/create` 返回可 `CREATED` + 异步派单可推进到 `PENDING_DRIVER_CONFIRM`（以 DB 状态为准）

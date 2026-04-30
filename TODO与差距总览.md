@@ -100,22 +100,26 @@
 
 #### 2.1.1 已实现（与文档对齐要点，便于区分「未做」）
 
-- 一步下单、`createAndAssign`、订单详情轮询、`cancel`；**待派单超时系统取消**（`order.dispatch.wait-timeout-seconds`，默认 180s）+ **offer 超时** 扫描（`OfferTimeoutScheduler`）。
-- **司机池 GEO + 最近司机派单**（capacity）、**迟滞匹配**：司机上线触发（`LateDispatchMatchService.tryMatchAfterDriverOnline`）+ **定时兜底**（`LateDispatchScheduler` → `listPendingDispatchAll` / order `GET .../internal/pending-dispatch-all` → GEO 最近候选 `assign` + `openDriverOffer`）、**指派后订单池索引**（`pending-order-index`）。配置：`capacity.dispatch.late-match-scan-interval-ms`、`late-match-batch-limit`。
+- 一步下单、`createAndAssign`、订单详情轮询、`cancel`；**待派单超时系统取消**（`order.dispatch.wait-timeout-seconds`，默认 **180s**；扫描 **`timeout-scan-interval-ms` 默认 30s**）+ **offer 超时** 扫描（`OfferTimeoutScheduler`，默认间隔 **5s**，键 `order.dispatch.offer-timeout-scan-interval-ms`）。
+- **司机池 GEO + 最近司机派单**（capacity）、**迟滞匹配**：司机上线触发（`LateDispatchMatchService.tryMatchAfterDriverOnline`）+ **定时兜底**（`LateDispatchScheduler` → `listPendingDispatchAll` / order `GET .../internal/pending-dispatch-all` → GEO 最近候选 `assign` + `openDriverOffer`）、**指派后订单池索引**（`pending-order-index`）。配置：`**late-match-scan-interval-ms` 默认 15s**、`late-match-batch-limit`；**`driver-geo-ttl-seconds` 默认 1800s**。
 - **下线 / 登出删司机池**：听单开关 `online:false` 与 **`driver-api` `POST .../auth/logout`** 均 Feign 调用运力 `POST .../drivers/{id}/online`（`online:false`），`DriverStatusService` 落库 `monitor_status=0` 并在事务提交后 **`DriverGeoRedisPool.remove`**；司机 `cityCode` 为空时无法按 key 移除会打 warn。
-- 状态机含 **`PENDING_DRIVER_CONFIRM`**、`openDriverOffer`、`accept` 多笔待确认互斥系统取消等（以 `TripOrderWriteService` 为准）。
-- **改派 / 下一轮 offer**：`OfferTimeoutScheduler` 将超时单打回 `ASSIGNED` 后，**capacity** `OfferRescheduleScheduler`（默认 5s）拉取 order `GET .../internal/assigned-awaiting-reschedule`，按 **`offer_round` 与 `same-driver-max-offer-rounds`** 决定同司机再开窗口或 **`POST .../internal/reassign`** + `openDriverOffer`；Redis 订单池 `removePending` / `addPending`。
+- **司机登出批量拒指派**：`driver-api` 登出 **先** 对 **`listAssignedToDriver`**（**`ASSIGNED` / `PENDING_DRIVER_CONFIRM`**）逐单 **`reject`**，`reasonCode` **`DRIVER_LOGOUT`**（与手动拒单同链路，通常 **`CREATED` + 重派**），**再** 下线、**`driver:tv` INCR**。详见《`司机端_登录注册_API.md`》§7。
+- 状态机含 **`PENDING_DRIVER_CONFIRM`**、`openDriverOffer`、`accept` 多笔待确认互斥系统取消等（以 `TripOrderWriteService` 为准）；**确认窗时长默认 30s**（`capacity.dispatch.driver-offer-seconds` 等与 order/passenger-api 对齐）。
+- **改派 / 下一轮 offer**：`OfferTimeoutScheduler` 将超时单打回 `ASSIGNED` 后，**capacity** `OfferRescheduleScheduler`（**默认 5s**：`capacity.dispatch.offer-reschedule.scan-interval-ms`）拉取 order `GET .../internal/assigned-awaiting-reschedule`，按 **`offer_round` 与 `same-driver-max-offer-rounds`** 决定同司机再开窗口或 **`POST .../internal/reassign`** + `openDriverOffer`；Redis 订单池 `removePending` / `addPending`。
+- **司机-乘客隔离匹配（30 分钟）**：司机拒单/到达前取消后写 Redis 键 `tx:dispatch:block:dp:{driverId}:{passengerId}`（TTL 30m）；capacity 派单（Kafka 首派 + 迟滞匹配）与 order `assigned` 列表均跳过该组合。
+- **乘客重派中可见性**：`passenger-api` 订单详情新增 `reDispatching`；当状态为 `CREATED` 且事件流包含 `ORDER_DRIVER_REJECTED` / `ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE` 时置 `true`，用于前端展示“正在重新派单”。
 
 #### 2.1.2 未实现或仅部分落地（待办）
 
 | 优先级 | 项 | 说明（文档出处） |
 |--------|-----|------------------|
-| **中** | **乘客端 WebSocket** | 《最小闭环》**§1.2、§6**：目标形态为 WS；当前 **HTTP 轮询**。 |
+| **中** | **乘客端 WebSocket** | **`passenger-api` + gateway 白名单 + `didi-passenger-h5` 已与文档联调**：见《乘客端与司机端_WebSocket_对比.md》**§0**、《最小闭环》**§1.2a**；**Redis Pub** 跨实例仍属后续。 |
 | **中** | **接驾 ETA（司机位置 → 上车点）** | 《最小闭环》附录/表格：当前 ETA 多为占位或路线时长；**matrix + 实时坐标** 未接。 |
-| **中** | **`passenger_display_code` / 改派中展示** | 《Redis与听单下线策略》**§7.3**：建议字段与 `RE_DISPATCHING` 等；**表/接口未要求本期必做**。 |
+| **低** | **`passenger_display_code` 字段体系化** | 当前已通过详情 `reDispatching` 满足乘客端“重派中”展示；如需统一多端枚举仍可后续补标准 display_code。 |
 | **中** | **两段式异步指派 + Outbox + Kafka** | 《`乘客司机端_最小闭环接口调用文档.md`》**§3.0**；专项方案《`订单与派单_两段式Outbox与Kafka_技术方案.md`》；当前 **同步** `createAndAssign` 为主，后续切 `POST /app/api/v1/orders/create`。 |
 | **中** | **幂等键 `Idempotency-Key`** | 《最小闭环》**§3.0** 建议；见《订单服务幂等与并发方案说明》。 |
 | **低** | **轮询顺带触发匹配（限频）** | 《Redis》**§6.2**：可选；**默认不做**。 |
+| **中** | **司机登出与乘客登出 / PRD §5.6 完全同口径** | **已实现**：待接指派登出时 **`reject(DRIVER_LOGOUT)`** → 多为 **`CREATED` + 重派**。**仍差**：**`ACCEPTED`** 登出 **不会** 自动到达前释单；与乘客 **`cancel→CANCELLED`** 不一致。见《`司机端_登录注册_API.md`》§7、《`第一期MVP_乘客派单司机闭环_API.md`》§3.1。 |
 
 ### 2.2 Redis 司机池 / 订单池
 
@@ -129,17 +133,17 @@
 
 | 优先级 | 项 | 说明 |
 |--------|-----|------|
-| **高** | **业务 WebSocket + 派单推送** | 《司机端_上线听单与接单设计》**§5**、《WebSocket与实时协议入门》：握手鉴权、心跳、离线写库、消息 envelope；**仓库无默认 WS 业务通道**（H5 可有 demo 连接触发，非完整业务）。 |
+| **最高** | **业务 WebSocket + 派单推送（替代高频轮询）** | 《司机端_上线听单与接单设计》**§5**、《WebSocket与实时协议入门》：握手鉴权、心跳、离线写库、消息 envelope；当前 H5 仍以轮询为主，WS 仅 demo 能力。 |
 | **高** | **Presence 与断线裁决** | 同上与《登录注册设计》**§12**：与 HTTP 登出分期协同。 |
-| **中** | **登出后「待确认 offer 不再推送」** | 文档目标；依赖 WS + 订单规则，**分期**。 |
-| **中** | **网关 WebSocket 路由与多实例** | 《网关服务_技术》**§3.1**：规划；需路由、升级、Sticky/PubSub 等。 |
+| **中** | **登出后「待确认 offer 不再推送」** | HTTP 登出已 **批量拒指派**，列表不再含待确认单；**推送侧**（WS）仍依赖连接与订单规则，可分期加强。 |
+| **中** | **网关 WebSocket 路由与多实例** | 《网关服务_技术》**§3.1**：`/driver/**` 经网关至 `driver-api`；多副本 **Sticky / PubSub** 等（乘客侧跨实例已定 **Redis Pub**，可对照）。 |
 
 ### 2.4 网关
 
 | 优先级 | 项 | 说明 |
 |--------|-----|------|
 | **低** | **OAuth2 Resource Server 标准栈** | 《网关服务_技术》：可选与当前 jjwt 并存方案。 |
-| **中** | **WS 转发与生产级配置** | 与司机端 WS 同期。 |
+| **中** | **WS 转发与生产级配置** | **`/driver/**` / `/app/**` WebSocket Upgrade**；参见 **§3.1**。乘客已定经网关 **`/app/ws/**`**。 |
 
 ### 2.5 地图 / 计费 / 其他
 
@@ -155,4 +159,6 @@
 | 日期 | 说明 |
 |------|------|
 | 2026-04-25 | 合并两份清单为单一入口《TODO与差距总览.md》，并以后端更新更晚的后台核对状态为准（换队 POST / 车辆列表 / reviewedBy 已完成）。 |
+| 2026-04-29 | 更新乘客司机闭环状态：补记“30 分钟隔离匹配”“reDispatching 已实现”，并将 WebSocket+Presence 提升为下一阶段最高优先级。 |
+| 2026-04-30 | **乘客 WS 联调收口**：网关 **`GET /app/ws/`** JWT 白名单、`passenger-api` WS、H5 Demo；TODO **§2.1.2** 乘客 WS 条目更新为「已实现骨架/联调」；Redis 广播仍后续。 |
 

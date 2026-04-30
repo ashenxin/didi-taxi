@@ -54,7 +54,7 @@
 #### 1.4.3 本地/测试环境的“加速回归”建议（优先）
 
 - **缩短超时参数**：在测试环境把 `order.dispatch.wait-timeout-seconds` 临时改小（如 10~30s），把 `order.dispatch.timeout-scan-interval-ms` 改小（如 1000~5000ms），以便快速覆盖超时取消相关用例  
-  - 说明：改动仅用于测试环境；验证完成后需恢复默认值（如 180s / 30000ms）
+  - 说明：改动仅用于测试环境；验证完成后需恢复生产默认值（如 **`wait-timeout-seconds=180`**、**`timeout-scan-interval-ms=30000`**、确认窗 **`driver-offer-seconds=30`** 等，见 `第一期MVP_乘客派单司机闭环_TECH.md` **§6**）
 
 #### 1.4.4 若使用 XXL-JOB：如何“手动触发一次”
 
@@ -63,6 +63,23 @@
   - 执行后通过以下接口验证结果：
     - 乘客侧：`GET /app/api/v1/orders/{orderNo}`
     - 事件时间线：`GET /api/v1/orders/{orderNo}/events`
+
+#### 1.4.5 XXL-JOB 与 Spring 定时：建议周期（与仓库默认对齐）
+
+> 控制台里的 Cron/固定速度请按下表配置；**若与 Spring `@Scheduled` 跑同一逻辑，周期应一致或停用其中一侧**，避免重复扫描。
+
+| JobHandler（order-executor） | 建议周期 |
+|------------------------------|----------|
+| `orderOfferTimeoutScan` | **5s** |
+| `orderCreatedDispatchTimeoutScan` | **30s** |
+| `orderOutboxPublish` | **2～5s**（建议 **3s**） |
+
+| JobHandler（capacity-executor） | 建议周期 |
+|-----------------------------------|----------|
+| `capacityLateDispatchScan` | **15s** |
+| `capacityOfferRescheduleScan` | **5s** |
+
+更完整的配置键说明见 `第一期MVP_乘客派单司机闭环_TECH.md` **§6**。
 
 > 注意：不论是 XXL-JOB 还是 Spring `@Scheduled`，都必须保证“重复执行无害”（CAS/幂等），测试触发多次不应导致状态乱跳。
 
@@ -259,23 +276,26 @@
 - **步骤**：乘客登出后再次请求任意乘客业务接口（如 `GET /app/api/v1/orders/{orderNo}`）
 - **预期**：业务接口返回 401；`passenger-api` 校验 JWT `tv` 与 Redis `passenger:tv:{customerId}` 一致
 
-### T-LO-03 到达前退出登录触发取消本单
+### T-LO-03 到达前退出登录与在途单处理
 
-- **标记**：[✅乘客路径已实现可测] / [🟨司机路径-仍按计划补齐]
-- **步骤（两条路径都要覆盖）**：
+- **标记**：[✅乘客路径已实现可测] / [✅司机路径-待接指派已覆盖] / [🟨司机-已接单 `ACCEPTED` 与 PRD「取消」口径仍可能不一致]
+- **步骤（分场景）**：
   - **乘客**：等待态/已派单/已接单但未到达 → `POST /app/api/v1/auth/logout`
-  - **司机**：已接单但未到达 → `POST /driver/api/v1/auth/logout`（运力侧联动仍见 gap 总览）
+  - **司机 A — 仅有待接指派**：状态为 **`ASSIGNED` / `PENDING_DRIVER_CONFIRM`** → `POST /driver/api/v1/auth/logout`
+  - **司机 B — 已接单未到**：**`ACCEPTED`** → `POST /driver/api/v1/auth/logout`（当前实现 **不** 自动释放本单，见闭环 API §3.1）
 - **预期**：
-  - **乘客**：本单进入取消终态，取消原因含「乘客退出登录」语义；响应 `data.hint` 可含已代取消说明
-  - **司机**：本单进入取消终态（与运力/订单规则一致）
+  - **乘客**：本单进入 **`CANCELLED`**，取消原因含「乘客退出登录」语义；响应 `data.hint` 可含已代取消说明
+  - **司机 A**：待接指派经 **`reject(DRIVER_LOGOUT)`** 释放，订单通常为 **`CREATED` + 重派**，**不是** 乘客那种 **`CANCELLED`**
+  - **司机 B**：订单 **仍为 `ACCEPTED`**（除非另有手动 `cancel`）；与 PRD §5.6 若要求「与 passenger 完全一致」则记 **缺口**
 
 ### T-LO-04 到达后退出登录不触发取消
 
-- **标记**：[✅乘客路径已实现可测] / [🟨司机路径-仍按计划补齐]
+- **标记**：[✅乘客路径已实现可测] / [✅司机路径-登出不代取消已符合]
 - **步骤**：订单进入 ARRIVED 后，乘客/司机退出登录
 - **预期**：
   - 订单不被取消
   - **乘客**：`POST /app/api/v1/auth/logout` 仍成功登出；`data.hint` 提示无法通过退出登录取消（司机已到达或行程已开始）
+  - **司机**：`POST /driver/api/v1/auth/logout` 成功；**无** `hint`；订单状态不变
 
 ---
 
@@ -292,7 +312,7 @@
 
 ## 7. 与仓库现有测试清单的关系
 
-仓库已有 `功能测试清单.md` 覆盖全域模块；本文档仅聚焦“第一期乘客派单司机闭环”，并补齐 PRD 相关用例（**拒单/司机取消已可测**；登出联动、总体 180s 全等待态口径等待办项见各用例标记）。
+仓库已有 `功能测试清单.md` 覆盖全域模块；本文档仅聚焦“第一期乘客派单司机闭环”，并补齐 PRD 相关用例（**拒单/司机取消已可测**；**乘客登出代取消**、**司机登出批量拒指派+下线**已可测；司机 **`ACCEPTED`** 登出与 PRD 完全对齐仍见 **T-LO-03** 标记与《闭环 API》§3.1）。
 
 ---
 

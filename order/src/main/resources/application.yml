@@ -17,7 +17,7 @@ spring:
     druid:
       validation-query: SELECT 1
       test-while-idle: true
-  Kafka:
+  kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       properties:
@@ -47,11 +47,13 @@ mybatis-plus:
       id-type: auto
   mapper-locations: classpath*:mapper/**/*.xml
 
-# 待派单（CREATED）超时：仅由定时任务系统取消，不依赖乘客轮询
+# 派单相关定时：XXL 与下方 Spring 任务勿重复跑同一逻辑（控制台周期可与这里对齐或二选一）
 order:
   dispatch:
     wait-timeout-seconds: 180
     timeout-scan-interval-ms: 30000
+    # 待司机确认(7) 过期扫描：略小于确认窗，保证打回 ASSIGNED 的滞后可控（默认窗 30s + 本项 5s ≈ 最坏多等 5s）
+    offer-timeout-scan-interval-ms: 5000
 
 # XXL-JOB 执行器：需独立部署 xxl-job-admin，版本需与根 pom 中 xxl.job.version 对齐
 xxl:

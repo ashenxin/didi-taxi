@@ -38,7 +38,7 @@ public class LateDispatchMatchService {
                                     DispatchOrderPoolService dispatchOrderPoolService,
                                     DriverPassengerMatchBlockService matchBlockService,
                                     @Value("${capacity.dispatch.match-radius-meters:3000}") double matchRadiusMeters,
-                                    @Value("${capacity.dispatch.driver-offer-seconds:10}") int driverOfferSeconds,
+                                    @Value("${capacity.dispatch.driver-offer-seconds:30}") int driverOfferSeconds,
                                     @Value("${capacity.dispatch.late-match-batch-limit:50}") int scheduledScanBatchLimit) {
         this.orderServiceClient = orderServiceClient;
         this.driverGeoRedisPool = driverGeoRedisPool;

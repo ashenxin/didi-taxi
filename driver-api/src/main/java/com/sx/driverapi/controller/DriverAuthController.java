@@ -79,7 +79,7 @@ public class DriverAuthController {
     }
 
     /**
-     * 登出：递增服务端 token 版本，使 JWT 失效。
+     * 登出：递增服务端 token 版本，使 JWT 失效；登出前会拒掉名下全部待接指派单并下线听单。
      * {@code POST /driver/api/v1/auth/logout}
      */
     @PostMapping("/logout")

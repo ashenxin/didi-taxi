@@ -5,7 +5,7 @@ package com.sx.passengerapi.model.ordercore;
  */
 public class OpenDriverOfferBody {
 
-    private int offerSeconds = 10;
+    private int offerSeconds = 30;
 
     public int getOfferSeconds() {
         return offerSeconds;
