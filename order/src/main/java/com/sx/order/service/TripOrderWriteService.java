@@ -15,6 +15,7 @@ import com.sx.order.model.dto.FinishOrderBody;
 import com.sx.order.model.dto.OpenDriverOfferBody;
 import com.sx.order.model.dto.AssignedAwaitingRescheduleDto;
 import com.sx.order.model.dto.PendingDispatchOrderDto;
+import com.sx.order.notify.PassengerOrderChangedNotifier;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.stereotype.Service;
@@ -58,17 +59,20 @@ public class TripOrderWriteService {
     private final OrderOutboxEventMapper orderOutboxEventMapper;
     private final ObjectMapper objectMapper;
     private final DriverPassengerMatchBlockService matchBlockService;
+    private final PassengerOrderChangedNotifier passengerOrderChangedNotifier;
 
     public TripOrderWriteService(TripOrderEntityMapper tripOrderEntityMapper,
                                  OrderEventEntityMapper orderEventEntityMapper,
                                  OrderOutboxEventMapper orderOutboxEventMapper,
                                  ObjectMapper objectMapper,
-                                 DriverPassengerMatchBlockService matchBlockService) {
+                                 DriverPassengerMatchBlockService matchBlockService,
+                                 PassengerOrderChangedNotifier passengerOrderChangedNotifier) {
         this.tripOrderEntityMapper = tripOrderEntityMapper;
         this.orderEventEntityMapper = orderEventEntityMapper;
         this.orderOutboxEventMapper = orderOutboxEventMapper;
         this.objectMapper = objectMapper;
         this.matchBlockService = matchBlockService;
+        this.passengerOrderChangedNotifier = passengerOrderChangedNotifier;
     }
 
     /**
@@ -99,6 +103,7 @@ public class TripOrderWriteService {
                 .setEstimatedAmount(body.getEstimatedAmount())
                 .setFareRuleId(body.getFareRuleId())
                 .setFareRuleSnapshot(body.getFareRuleSnapshot())
+                .setOfferRound(0)
                 .setCreatedAt(now)
                 .setUpdatedAt(now)
                 .setIsDeleted(0);
@@ -280,7 +285,7 @@ public class TripOrderWriteService {
                         .set(body.getCarId() != null, TripOrder::getCarId, body.getCarId())
                         .set(body.getCompanyId() != null, TripOrder::getCompanyId, body.getCompanyId())
                         .set(TripOrder::getAssignedAt, now)
-                        .set(TripOrder::getOfferRound, null)
+                        .set(TripOrder::getOfferRound, 0)
                         .set(TripOrder::getUpdatedAt, now)
                         .eq(TripOrder::getOrderNo, orderNo)
                         .eq(TripOrder::getIsDeleted, 0)
@@ -397,11 +402,11 @@ public class TripOrderWriteService {
     }
 
     /**
-     * 查询「待派单超时」候选：{@code CREATED} 且创建时间早于 deadline。
+     * 查询「待派单/待确认超时」候选：尚未被司机接成且创建时间早于 deadline。
      */
     public List<TripOrder> listCreatedOlderThan(LocalDateTime deadline) {
         return tripOrderEntityMapper.selectList(Wrappers.<TripOrder>lambdaQuery()
-                .eq(TripOrder::getStatus, STATUS_CREATED)
+                .in(TripOrder::getStatus, STATUS_CREATED, STATUS_ASSIGNED, STATUS_PENDING_DRIVER_CONFIRM)
                 .eq(TripOrder::getIsDeleted, 0)
                 .lt(TripOrder::getCreatedAt, deadline)
                 .orderByAsc(TripOrder::getCreatedAt)
@@ -409,13 +414,24 @@ public class TripOrderWriteService {
     }
 
     /**
-     * 将单笔 {@code CREATED} 订单系统取消为 {@code CANCELLED}（待派单超时）；独立事务，供定时任务逐单调用。
+     * 将单笔等待派单/确认的订单系统取消为 {@code CANCELLED}；独立事务，供定时任务逐单调用。
      *
      * @return 是否本次成功更新一行
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean cancelCreatedDispatchTimeoutOne(String orderNo, LocalDateTime now) {
         if (orderNo == null || orderNo.isBlank()) {
+            return false;
+        }
+        TripOrder before = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getOrderNo, orderNo)
+                .eq(TripOrder::getIsDeleted, 0)
+                .last("LIMIT 1"));
+        if (before == null
+                || before.getStatus() == null
+                || (before.getStatus() != STATUS_CREATED
+                && before.getStatus() != STATUS_ASSIGNED
+                && before.getStatus() != STATUS_PENDING_DRIVER_CONFIRM)) {
             return false;
         }
         int updated = tripOrderEntityMapper.update(null,
@@ -427,7 +443,7 @@ public class TripOrderWriteService {
                         .set(TripOrder::getUpdatedAt, now)
                         .eq(TripOrder::getOrderNo, orderNo)
                         .eq(TripOrder::getIsDeleted, 0)
-                        .eq(TripOrder::getStatus, STATUS_CREATED));
+                        .in(TripOrder::getStatus, STATUS_CREATED, STATUS_ASSIGNED, STATUS_PENDING_DRIVER_CONFIRM));
         if (updated != 1) {
             return false;
         }
@@ -442,7 +458,7 @@ public class TripOrderWriteService {
                 .setOrderId(after.getId())
                 .setOrderNo(orderNo)
                 .setEventType("ORDER_CANCELLED")
-                .setFromStatus(STATUS_CREATED)
+                .setFromStatus(before.getStatus())
                 .setToStatus(STATUS_CANCELLED)
                 .setOperatorType(OPERATOR_SYSTEM)
                 .setOperatorId(null)
@@ -452,6 +468,7 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
+        passengerOrderChangedNotifier.notifyAfterCommit(after.getPassengerId(), orderNo, "待派单超时系统取消");
         log.info("系统已取消订单（待派单超时） orderNo={}", orderNo);
         return true;
     }
@@ -515,7 +532,7 @@ public class TripOrderWriteService {
     }
 
     /**
-     * 待调度队列：{@code ASSIGNED}、无进行中的确认窗口、曾发起过 offer（通常为确认超时打回），按 {@code updated_at} 升序。
+     * 历史兼容待调度队列：{@code ASSIGNED}、无进行中的确认窗口、曾发起过 offer，按 {@code updated_at} 升序。
      */
     public List<AssignedAwaitingRescheduleDto> listAssignedAwaitingReschedule(int limit) {
         int lim = (limit <= 0 || limit > 200) ? 50 : limit;
@@ -620,7 +637,7 @@ public class TripOrderWriteService {
     }
 
     /**
-     * 调度扫描：确认窗口超时 → 回到 {@code ASSIGNED}，保留 {@code driver_id}。
+     * 调度扫描：确认窗口超时 → 释放本轮指派并回到 {@code CREATED}，进入重新派单。
      */
     @Transactional(propagation = Propagation.REQUIRED)
     public int timeoutPendingDriverOffers(LocalDateTime now) {
@@ -655,8 +672,14 @@ public class TripOrderWriteService {
 
         int updated = tripOrderEntityMapper.update(null,
                 com.baomidou.mybatisplus.core.toolkit.Wrappers.<TripOrder>lambdaUpdate()
-                        .set(TripOrder::getStatus, STATUS_ASSIGNED)
+                        .set(TripOrder::getStatus, STATUS_CREATED)
+                        .set(TripOrder::getDriverId, null)
+                        .set(TripOrder::getCarId, null)
+                        .set(TripOrder::getCompanyId, null)
+                        .set(TripOrder::getAssignedAt, null)
                         .set(TripOrder::getOfferExpiresAt, null)
+                        .set(TripOrder::getOfferRound, 0)
+                        .set(TripOrder::getLastOfferAt, null)
                         .set(TripOrder::getUpdatedAt, now)
                         .eq(TripOrder::getOrderNo, orderNo)
                         .eq(TripOrder::getIsDeleted, 0)
@@ -677,16 +700,18 @@ public class TripOrderWriteService {
                 .setOrderNo(orderNo)
                 .setEventType("ORDER_OFFER_TIMED_OUT")
                 .setFromStatus(STATUS_PENDING_DRIVER_CONFIRM)
-                .setToStatus(STATUS_ASSIGNED)
+                .setToStatus(STATUS_CREATED)
                 .setOperatorType(OPERATOR_SYSTEM)
                 .setOperatorId(null)
                 .setReasonCode("OFFER_TIMEOUT")
-                .setReasonDesc("确认窗口超时，保留指派司机待改派或下一轮确认")
-                .setEventPayload("{\"driverId\":" + after.getDriverId() + "}")
+                .setReasonDesc("司机确认窗口超时，释放本轮指派并重新派单")
+                .setEventPayload("{\"driverId\":" + existing.getDriverId() + "}")
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
-        log.info("司机确认窗口已超时 orderNo={} driverId={}", orderNo, after.getDriverId());
+        enqueueDispatchRequestedOutbox(after, now);
+        passengerOrderChangedNotifier.notifyAfterCommit(after.getPassengerId(), orderNo, "司机确认窗口超时释放指派");
+        log.info("司机确认窗口已超时并释放指派 orderNo={} driverId={}", orderNo, existing.getDriverId());
     }
 
     private TripOrder loadActiveOrder(String orderNo) {
@@ -1088,4 +1113,3 @@ public class TripOrderWriteService {
         orderEventEntityMapper.insert(event);
     }
 }
-

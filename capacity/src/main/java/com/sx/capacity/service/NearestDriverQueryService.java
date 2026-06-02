@@ -18,7 +18,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * 派单候选：优先 Redis GEO（上车点 + 半径）；无坐标或池为空时回退为 DB 首条（与旧 MVP 一致）。
+ * 派单候选：提供上车点坐标时以 Redis GEO 司机池为准；仅无坐标时回退 DB 首条（与旧 MVP 一致）。
  */
 @Service
 @Slf4j
@@ -27,33 +27,51 @@ public class NearestDriverQueryService {
     private final DriverEntityMapper driverEntityMapper;
     private final CarEntityMapper carEntityMapper;
     private final DriverGeoRedisPool driverGeoRedisPool;
+    private final DriverPassengerMatchBlockService matchBlockService;
     private final double matchRadiusMeters;
 
     public NearestDriverQueryService(DriverEntityMapper driverEntityMapper,
                                      CarEntityMapper carEntityMapper,
                                      DriverGeoRedisPool driverGeoRedisPool,
+                                     DriverPassengerMatchBlockService matchBlockService,
                                      @Value("${capacity.dispatch.match-radius-meters:3000}") double matchRadiusMeters) {
         this.driverEntityMapper = driverEntityMapper;
         this.carEntityMapper = carEntityMapper;
         this.driverGeoRedisPool = driverGeoRedisPool;
+        this.matchBlockService = matchBlockService;
         this.matchRadiusMeters = matchRadiusMeters;
     }
 
     public NearestDriverResult findNearest(String cityCode, String productCode, Double originLat, Double originLng) {
+        return findNearest(cityCode, productCode, originLat, originLng, null);
+    }
+
+    public NearestDriverResult findNearest(String cityCode, String productCode, Double originLat, Double originLng, Long passengerId) {
         if (cityCode == null || cityCode.isBlank()) {
             return null;
         }
         if (originLat != null && originLng != null) {
             List<Long> ids = driverGeoRedisPool.listNearestDriverIds(cityCode, originLat, originLng, matchRadiusMeters, 32);
+            boolean geoHasCandidates = ids != null && !ids.isEmpty();
+            if (!geoHasCandidates) {
+                log.info("最近司机：GEO 无候选，不回退 DB cityCode={} passengerId={}", cityCode, passengerId);
+                return null;
+            }
             for (Long driverId : ids) {
+                if (matchBlockService.isBlocked(driverId, passengerId)) {
+                    log.info("最近司机：跳过司乘隔离 driverId={} passengerId={}", driverId, passengerId);
+                    continue;
+                }
                 NearestDriverResult r = buildEligible(driverId, cityCode, productCode);
                 if (r != null) {
                     log.info("最近司机：Redis GEO 命中 driverId={} cityCode={}", driverId, cityCode);
                     return r;
                 }
             }
+            log.info("最近司机：GEO 候选均不可用，不回退 DB cityCode={} passengerId={}", cityCode, passengerId);
+            return null;
         }
-        return findNearestDbFallback(cityCode, productCode);
+        return findNearestDbFallback(cityCode, productCode, passengerId);
     }
 
     /**
@@ -86,7 +104,7 @@ public class NearestDriverQueryService {
             }
             return out;
         }
-        NearestDriverResult one = findNearestDbFallback(cityCode, productCode);
+        NearestDriverResult one = findNearestDbFallback(cityCode, productCode, null);
         return one == null ? List.of() : List.of(one);
     }
 
@@ -137,7 +155,7 @@ public class NearestDriverQueryService {
         return resp;
     }
 
-    private NearestDriverResult findNearestDbFallback(String cityCode, String productCode) {
+    private NearestDriverResult findNearestDbFallback(String cityCode, String productCode, Long passengerId) {
         var carQw = Wrappers.<Car>lambdaQuery()
                 .eq(Car::getIsDeleted, 0)
                 .eq(Car::getCarState, 0)
@@ -160,6 +178,10 @@ public class NearestDriverQueryService {
         for (Car car : cars) {
             Driver d = driverMap.get(car.getDriverId());
             if (d == null) {
+                continue;
+            }
+            if (matchBlockService.isBlocked(d.getId(), passengerId)) {
+                log.info("最近司机：数据库回退跳过司乘隔离 driverId={} passengerId={}", d.getId(), passengerId);
                 continue;
             }
             if (!Objects.equals(d.getIsDeleted(), 0)) {

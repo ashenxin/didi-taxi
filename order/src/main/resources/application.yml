@@ -52,8 +52,13 @@ order:
   dispatch:
     wait-timeout-seconds: 180
     timeout-scan-interval-ms: 30000
-    # 待司机确认(7) 过期扫描：略小于确认窗，保证打回 ASSIGNED 的滞后可控（默认窗 30s + 本项 5s ≈ 最坏多等 5s）
+    # 待司机确认(7) 过期扫描：略小于确认窗，保证释放指派并重新派单的滞后可控（默认窗 30s + 本项 5s ≈ 最坏多等 5s）
     offer-timeout-scan-interval-ms: 5000
+
+services:
+  passenger-api:
+    # 走网关，由 passenger-api 内部通知入口推送乘客 WS。
+    base-url: http://127.0.0.1:18080
 
 # XXL-JOB 执行器：需独立部署 xxl-job-admin，版本需与根 pom 中 xxl.job.version 对齐
 xxl:
@@ -61,7 +66,7 @@ xxl:
     enabled: true
     access-token: ${XXL_JOB_ACCESS_TOKEN:default_token}
     admin:
-      addresses: http://127.0.0.1:8080/xxl-job-admin
+      addresses: http://127.0.0.1:8081/xxl-job-admin
     executor:
       app name: order-executor
       address: ${XXL_JOB_EXECUTOR_ADDRESS:http://127.0.0.1:9998}

@@ -123,6 +123,9 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
         if (path.equals("/actuator/health") || path.startsWith("/actuator/health/")) {
             return true;
         }
+        if (HttpMethod.POST.equals(method) && path.startsWith("/app/internal/v1/")) {
+            return true;
+        }
         if (HttpMethod.POST.equals(method) && "/admin/api/v1/auth/login".equals(path)) {
             return true;
         }

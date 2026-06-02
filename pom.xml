@@ -28,6 +28,7 @@
         <module>passenger-api</module>
         <module>driver-api</module>
         <module>gateway</module>
+        <module>xxl-job-admin</module>
     </modules>
 
     <properties>
@@ -36,7 +37,7 @@
         <maven.compiler.target>21</maven.compiler.target>
         <spring-cloud.version>2023.0.5</spring-cloud.version>
         <!-- 与 xxl-job-admin 需保持大版本协议兼容；子模块统一引用 -->
-        <xxl-job.version>2.4.2</xxl-job.version>
+        <xxl-job.version>3.1.0</xxl-job.version>
     </properties>
 
     <dependencyManagement>

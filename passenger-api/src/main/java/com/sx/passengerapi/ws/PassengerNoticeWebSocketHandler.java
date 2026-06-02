@@ -1,7 +1,8 @@
 package com.sx.passengerapi.ws;
 
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -9,6 +10,9 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.time.Instant;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 乘客订单通知通道：握手后仅维护心跳；业务推送见 {@link PassengerWsNotifyService}。
@@ -19,10 +23,25 @@ public class PassengerNoticeWebSocketHandler extends TextWebSocketHandler {
 
     private final PassengerWsSessionRegistry registry;
     private final PassengerWsProperties props;
+    private final ScheduledExecutorService wsMaintenanceExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "passenger-ws-maintenance");
+        t.setDaemon(true);
+        return t;
+    });
 
     public PassengerNoticeWebSocketHandler(PassengerWsSessionRegistry registry, PassengerWsProperties props) {
         this.registry = registry;
         this.props = props;
+    }
+
+    @PostConstruct
+    public void startWsMaintenance() {
+        wsMaintenanceExecutor.scheduleWithFixedDelay(this::safeHeartbeatSweep, 5_000, 5_000, TimeUnit.MILLISECONDS);
+    }
+
+    @PreDestroy
+    public void stopWsMaintenance() {
+        wsMaintenanceExecutor.shutdownNow();
     }
 
     @Override
@@ -63,7 +82,6 @@ public class PassengerNoticeWebSocketHandler extends TextWebSocketHandler {
         registry.removeBySession(session);
     }
 
-    @Scheduled(fixedDelay = 5000)
     public void heartbeatSweep() {
         if (!props.isEnabled()) {
             return;
@@ -80,6 +98,14 @@ public class PassengerNoticeWebSocketHandler extends TextWebSocketHandler {
                 registry.safeClose(ps.getSession(), CloseStatus.SESSION_NOT_RELIABLE);
                 registry.removeBySession(ps.getSession());
             }
+        }
+    }
+
+    private void safeHeartbeatSweep() {
+        try {
+            heartbeatSweep();
+        } catch (Exception e) {
+            log.warn("passenger ws heartbeat sweep failed: {}", e.toString());
         }
     }
 }

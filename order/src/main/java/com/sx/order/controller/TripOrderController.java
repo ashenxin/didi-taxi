@@ -140,7 +140,7 @@ public class TripOrderController {
     }
 
     /**
-     * 内部：确认超时打回后、待下一轮 offer 或 GEO 改派的 {@code ASSIGNED} 订单列表。
+     * 内部：历史兼容，处理旧确认超时路径遗留的 {@code ASSIGNED} 待改派订单列表。
      * {@code GET /api/v1/orders/internal/assigned-awaiting-reschedule?limit=}
      */
     @GetMapping("/internal/assigned-awaiting-reschedule")

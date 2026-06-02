@@ -16,8 +16,7 @@ public class DriverWsProperties {
     private long heartbeatTimeoutMs = 45_000;
 
     /**
-     * 服务端对已连接司机轮询 assigned 并推送的间隔（过渡期替代前端轮询）。
+     * 服务端对已连接司机检查 assigned 并通过 WS 推送的间隔（过渡期替代前端高频 HTTP 轮询）。
      */
-    private long assignedPollIntervalMs = 2_000;
+    private long assignedPollIntervalMs = 3_000;
 }
-

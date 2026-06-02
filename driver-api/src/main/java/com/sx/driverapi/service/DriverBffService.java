@@ -3,6 +3,7 @@ package com.sx.driverapi.service;
 import com.sx.driverapi.client.CapacityDriverClient;
 import com.sx.driverapi.client.CoreResponseVo;
 import com.sx.driverapi.client.OrderClient;
+import com.sx.driverapi.client.PassengerNotifyClient;
 import com.sx.driverapi.common.exception.BizErrorException;
 import com.sx.driverapi.model.capacity.CapacityDriverDetail;
 import com.sx.driverapi.model.capacity.DriverListeningStatusVO;
@@ -12,6 +13,7 @@ import com.sx.driverapi.model.order.DriverIdBody;
 import com.sx.driverapi.model.order.DriverOrderReasonBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
+import com.sx.driverapi.model.passenger.OrderChangedNotifyBody;
 import feign.FeignException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,10 +36,14 @@ public class DriverBffService {
 
     private final CapacityDriverClient capacityDriverClient;
     private final OrderClient orderClient;
+    private final PassengerNotifyClient passengerNotifyClient;
 
-    public DriverBffService(CapacityDriverClient capacityDriverClient, OrderClient orderClient) {
+    public DriverBffService(CapacityDriverClient capacityDriverClient,
+                            OrderClient orderClient,
+                            PassengerNotifyClient passengerNotifyClient) {
         this.capacityDriverClient = capacityDriverClient;
         this.orderClient = orderClient;
+        this.passengerNotifyClient = passengerNotifyClient;
     }
 
     public void setOnline(Long driverId, boolean online, Double lat, Double lng) {
@@ -97,6 +103,7 @@ public class DriverBffService {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.accept(orderNo, String.valueOf(driverId), body), "确认接单");
+        notifyPassengerOrderChanged(orderNo, "司机接单");
         log.info("司机已接单 orderNo={} driverId={}", orderNo, driverId);
     }
 
@@ -105,6 +112,7 @@ public class DriverBffService {
         body.setDriverId(driverId);
         body.setReasonCode(reasonCode);
         unwrap(orderClient.reject(orderNo, String.valueOf(driverId), body), "拒单");
+        notifyPassengerOrderChanged(orderNo, "司机拒单");
         log.info("司机已拒单 orderNo={} driverId={} reasonCode={}", orderNo, driverId, reasonCode);
     }
 
@@ -135,6 +143,7 @@ public class DriverBffService {
         body.setDriverId(driverId);
         body.setReasonCode(reasonCode);
         unwrap(orderClient.driverCancelBeforeArrive(orderNo, String.valueOf(driverId), body), "司机取消");
+        notifyPassengerOrderChanged(orderNo, "司机取消");
         log.info("司机已取消（到达前） orderNo={} driverId={} reasonCode={}", orderNo, driverId, reasonCode);
     }
 
@@ -142,6 +151,7 @@ public class DriverBffService {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.arrive(orderNo, String.valueOf(driverId), body), "到达上报");
+        notifyPassengerOrderChanged(orderNo, "司机到达");
         log.info("司机已到达 orderNo={} driverId={}", orderNo, driverId);
     }
 
@@ -149,12 +159,14 @@ public class DriverBffService {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
         unwrap(orderClient.start(orderNo, String.valueOf(driverId), body), "开始行程");
+        notifyPassengerOrderChanged(orderNo, "开始行程");
         log.info("司机已开始行程 orderNo={} driverId={}", orderNo, driverId);
     }
 
     public void finish(String orderNo, FinishOrderBody body) {
         Long driverId = body == null ? null : body.getDriverId();
         unwrap(orderClient.finish(orderNo, driverId == null ? "" : String.valueOf(driverId), body), "完单");
+        notifyPassengerOrderChanged(orderNo, "司机完单");
         log.info("司机已完单 orderNo={} driverId={}", orderNo, body != null ? body.getDriverId() : null);
     }
 
@@ -193,6 +205,30 @@ public class DriverBffService {
             return "PENDING_DRIVER_CONFIRM";
         }
         return "STATUS_" + code;
+    }
+
+    private void notifyPassengerOrderChanged(String orderNo, String action) {
+        if (orderNo == null || orderNo.isBlank()) {
+            return;
+        }
+        try {
+            CoreResponseVo<TripOrderRow> detail = orderClient.getByOrderNo(orderNo);
+            unwrap(detail, action + "后查询订单");
+            TripOrderRow row = detail.getData();
+            Long passengerId = row == null ? null : row.getPassengerId();
+            if (passengerId == null) {
+                log.warn("{}后无法通知乘客：订单缺少 passengerId orderNo={}", action, orderNo);
+                return;
+            }
+            OrderChangedNotifyBody body = new OrderChangedNotifyBody();
+            body.setPassengerId(passengerId);
+            body.setOrderNo(orderNo);
+            CoreResponseVo<Void> resp = passengerNotifyClient.orderChanged(body);
+            unwrap(resp, action + "后通知乘客");
+        } catch (Exception e) {
+            // 司机侧写操作已成功，乘客 WS 通知失败不能回滚订单状态；前端仍可手动查详情兜底。
+            log.warn("{}后通知乘客失败 orderNo={} err={}", action, orderNo, e.toString());
+        }
     }
 
     private static void unwrap(CoreResponseVo<?> resp, String action) {

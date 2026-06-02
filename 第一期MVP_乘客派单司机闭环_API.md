@@ -271,9 +271,11 @@
 
 ---
 
-### 2.2 两段式下单（仅创建订单，已实现）
+### 2.2 两段式下单（仅创建订单，兼容/演进入口）
 
 **POST** `/app/api/v1/orders/create`
+
+> 当前 H5/MVP 推荐入口仍为 **`POST /app/api/v1/orders`**（见 §2.1）。本接口即使保留，也只作为历史兼容或后续两段式 Outbox/Kafka 演进入口，不作为当前乘客端 H5 默认调用。
 
 **请求头**：同上  
 **请求体**：同 `CreateAndAssignOrderBody`  
@@ -301,7 +303,7 @@
 
 ---
 
-### 2.3 订单详情（轮询，已实现）
+### 2.3 订单详情（展示权威，已实现）
 
 **GET** `/app/api/v1/orders/{orderNo}`
 
@@ -334,7 +336,7 @@
 | timestamps | object | 是 | 关键时间戳集合 |
 | cancelBy | number\|null | 否 | 取消方（与订单库一致；未取消为 null） |
 | cancelReason | string\|null | 否 | 取消原因文案 |
-| reDispatching | boolean | 否 | 是否“正在重新派单”（当前为 `CREATED` 且已发生过司机拒单/到达前取消） |
+| reDispatching | boolean | 否 | 是否“正在重新派单”（当前为 `CREATED` 且已发生过司机拒单、到达前取消或确认窗超时释放） |
 
 **响应示例（等待态）**
 
@@ -362,6 +364,40 @@
 ```
 
 > 展示口径：当 `reDispatching=true` 且状态仍为 `CREATED` 时，乘客端文案应显示“正在为您重新派单”；否则按常规 `status` 文案（如“派单中”）。
+
+### 2.3a 乘客订单变化通知（内部接口 + WS，已实现）
+
+乘客端实时状态采用 **WS 事件触发 + HTTP 详情对齐**：`ORDER_CHANGED` 只提示“该订单变了”，不承载业务裁决；前端收到后调用 §2.3 订单详情接口。
+
+**内部接口**：`POST /app/internal/v1/orders/changed`
+
+**调用方**：`driver-api` 在司机接单、拒单、到达前取消、到达、开始、完单成功后调用。
+
+**请求 body**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| passengerId | number | 是 | 订单所属乘客 id |
+| orderNo | string | 是 | 订单号 |
+
+**WS 下行 envelope**
+
+```json
+{
+  "type": "ORDER_CHANGED",
+  "ts": 1780300000000,
+  "data": {
+    "orderNo": "OD202604280003",
+    "seq": 12
+  }
+}
+```
+
+说明：
+
+- `passenger-api` 由 `PassengerInternalNotifyController` 调用 `PassengerWsNotifyService.notifyOrderChanged(...)` 推送。
+- 客户端按 `orderNo + seq` 去重/抗乱序，随后拉一次 `GET /app/api/v1/orders/{orderNo}`。
+- WS 正常时不需要常驻订单详情短轮询；WS 不可用时可降级轮询。
 
 **响应示例（系统取消：无人接单/超时兜底）**
 
@@ -719,5 +755,6 @@
 ## 6. 备注
 
 - 本文档已包含接口的请求/响应字段表格与 JSON 示例，可直接用于联调与验收。
-- 司机拒单/司机取消后订单回到 **`CREATED`**（非 **`CANCELLED`**），乘客侧展示「重新派单」类等待态；**总体等待 180s** 仍以 **`created_at`** 起算、改派不重置。
-
+- 司机拒单、司机到达前取消、司机确认窗超时后订单回到 **`CREATED`**（非 **`CANCELLED`**），乘客侧展示「重新派单」类等待态；**总体等待 180s** 仍以 **`created_at`** 起算、改派不重置。确认窗超时不写司机-乘客隔离键，下一轮仍可重新派给该司机；主动拒单/到达前取消才写 30 分钟隔离键。
+- 司机接单、拒单、到达前取消、到达、开始、完单成功后，`driver-api` 会通过 `POST /app/internal/v1/orders/changed` 触发乘客 WS `ORDER_CHANGED`；确认窗超时释放与总体 180s 系统取消由 `order-service` 在事务提交后经网关通知 passenger-api，再触发乘客 WS；乘客端据此拉取 §2.3 订单详情，不依赖稳态短轮询。
+- 订单/运力业务扫描统一由 XXL-JOB 触发；后端不保留同逻辑 Spring `@Scheduled`。

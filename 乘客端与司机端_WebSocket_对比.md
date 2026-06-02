@@ -5,13 +5,15 @@
 
 ---
 
-## 0. 乘客端 WebSocket — 已定稿结论（2026-04-30）
+## 0. 乘客端 WebSocket — 已落地结论（2026-06-01）
 
-> 下列为产品/架构讨论结论，**实现仍以代码为准**；落地后可将本节「规划」改为「现状」并回补类名与配置键名。
+> 本节记录当前仓库实现口径：`passenger-api` 负责乘客 WS 连接与 `ORDER_CHANGED` 下行，`didi-passenger-h5` 收到通知后再拉一次订单详情。
 
 ### 0.1 推送与数据权威
 
 - **阶段 1（轻量）**：下行只带 **`orderNo` + 单调序号 `seq`**（及与司机端一致的 **`type` / `ts` / `data` envelope**）；客户端据 `seq` 去重/抗乱序后，再 **`GET` 订单详情**；**业务展示以详情 HTTP 为准**，WS 不替代裁决。
+- **司机动作触发来源**：`driver-api` 在接单、拒单、到达前取消、到达、开始、完单成功后，通过 `PassengerNotifyClient` 调用 `passenger-api` 内部接口 **`POST /app/internal/v1/orders/changed`**；`PassengerInternalNotifyController` 再调用 `PassengerWsNotifyService.notifyOrderChanged(...)` 推送 `ORDER_CHANGED`。
+- **客户端稳态**：WS 连接成功后停止常驻订单详情短轮询；仅在收到 `ORDER_CHANGED` 时拉取一次详情。WS 断开或不可用时再降级为 HTTP 详情轮询。
 - **多单并行**：本期**不考虑**；后续若需要，仍可在消息内带 `orderNo` 扩展，无需推翻本方案。
 
 ### 0.2 鉴权与单会话
@@ -29,17 +31,18 @@
 
 - **与司机侧一致**：生产/联调主干为 **浏览器 → 网关（WebSocket Upgrade）→ `passenger-api`**，`Path=/app/**` 与现有 REST 同域同源（参见《`网关服务_技术.md`》**§3.1**）。
 - **本地排障**：可直连 `passenger-api:8100`，环境变量类比司机 `VITE_PASSENGER_WS_BASE_URL`（仅 dev）。
-- **`GATEWAY_JWT_REQUIRE_AUTH=true`（默认）时必备**：网关 `JwtAuthenticationGlobalFilter` 须将 **`GET /app/ws/**`** 与 **`GET /driver/ws/**`** 一样列入**握手白名单**（仅 Query `token=`、无 `Authorization`）；否则握手 **401**，浏览器端表现为 **WS 永连不上、狂刷 `ws-token`、仅 2s 轮询兜底**。实现见 `gateway/.../JwtAuthenticationGlobalFilter.java` 的 `isPublic`。
+- **`GATEWAY_JWT_REQUIRE_AUTH=true`（默认）时必备**：网关 `JwtAuthenticationGlobalFilter` 须将 **`GET /app/ws/**`** 与 **`GET /driver/ws/**`** 一样列入**握手白名单**（仅 Query `token=`、无 `Authorization`）；否则握手 **401**，浏览器端表现为 **WS 永连不上、反复申请 `ws-token`、只能退回 HTTP 轮询兜底**。实现见 `gateway/.../JwtAuthenticationGlobalFilter.java` 的 `isPublic`。
 
 ### 0.5 降级与运维总闸
 
-- **客户端**：WS 不可用（握手失败、反复断链、服务端关闭等）时**自动退回**订单详情 **HTTP 轮询**，保证闭环。
+- **客户端**：WS 不可用（握手失败、反复断链、服务端关闭等）时**自动退回**订单详情 **HTTP 轮询**，保证闭环；WS 正常时不做常驻短轮询。
 - **服务端「开关」**：配置 **`passenger.ws.enabled`**（或与拒签 ws-token / 网关路由组合）作为**运维总闸**；关闭时全员无 WS，仅依赖轮询，便于故障止血（与客户端自动降级**并列**）。
 
 ### 0.6 多实例（后续）
 
 - **已定选型 B**：**Redis Pub/Sub**（或等价 MQ）。发布侧仅投递 **`passengerId` + `orderNo` + `seq`** 等极小字段；**每台 `passenger-api`** 订阅，**仅本机存在该乘客 WS 会话时**向连接下行。
 - **单机阶段**：可直接内存注册表推送；建议将「通知乘客」收口为 **`notifyPassenger(...)`**，单机直接发送、多机改为先 Pub 再本地发送，降低改造量。
+- **本机 WS 维护**：乘客/司机 WS 心跳清理、司机已连接会话的指派列表对账属于“本 JVM 连接维护”，可由本机轻量调度器执行；订单超时、迟滞匹配、重新派单等**业务调度只走 XXL-JOB**。
 
 ### 0.7 乘客端弱网（客户端行为建议）
 
@@ -106,11 +109,11 @@
 
 ## 6. 消息类型（现状 vs 建议）
 
-| 维度 | 司机端（现状） | 乘客端（规划建议） |
+| 维度 | 司机端（现状） | 乘客端（现状） |
 |------|----------------|-------------------|
-| **已落地类型示例** | `ASSIGNED_LIST`、`ASSIGNED_ERROR`、`PONG` | 可分阶段：`ORDER_SNAPSHOT` / `ORDER_CHANGED` / 或 **「请刷新」型 `REFRESH_ORDER`** |
-| ** payload 形态** | `type` + `ts` + `data`（JSON） | **建议同一套 envelope**：`type`、`ts`、可选 `messageId`、`data` |
-| **推送内容** | 指派 **列表 VO**（过渡：服务端轮询 order 再推） | **已定 阶段 1**：**`orderNo` + 单调序号 `seq`**，客户端 **HTTP GET 详情**；**阶段 2** 再考虑嵌全量 `PassengerOrderDetailVO` |
+| **已落地类型示例** | `ASSIGNED_LIST`、`ASSIGNED_ERROR`、`PONG` | `ORDER_CHANGED` |
+| **payload 形态** | `type` + `ts` + `data`（JSON） | 同一套 envelope：`type`、`ts`、`data` |
+| **推送内容** | 指派 **列表 VO**（过渡：服务端轮询 order 再推） | **`orderNo` + 单调序号 `seq`**，客户端 **HTTP GET 详情**；后续再考虑嵌全量 `PassengerOrderDetailVO` |
 | **错误可见性** | `ASSIGNED_ERROR` 便于联调 | 可对齐 `..._ERROR`，避免静默失败 |
 | **去重** | 司机列表用 **hash** 去重推送 | **已定**：**`seq` 单调递增**去重/抗乱序（与 `messageId` 二选一亦可，团队对齐即可） |
 
@@ -182,9 +185,9 @@
 | 端 | 参考 |
 |----|------|
 | 司机 | `driver-api`：`DriverWebSocketConfig`、`DriverWsHandshakeInterceptor`、`DriverNoticeWebSocketHandler`、`DriverAssignedPushService`、`DriverAuthController` `/auth/ws-token` |
-| 乘客 | `passenger-api`：`PassengerWebSocketConfig`、`PassengerWsHandshakeInterceptor`、`PassengerNoticeWebSocketHandler`、`PassengerWsNotifyService`、`PassengerAuthController` `/auth/ws-token`；配置 `passenger.ws.*` |
+| 乘客 | `passenger-api`：`PassengerWebSocketConfig`、`PassengerWsHandshakeInterceptor`、`PassengerNoticeWebSocketHandler`、`PassengerWsNotifyService`、`PassengerInternalNotifyController` `/app/internal/v1/orders/changed`、`PassengerAuthController` `/auth/ws-token`；配置 `passenger.ws.*` |
 | 网关 | `gateway`：`JwtAuthenticationGlobalFilter#isPublic` — **`GET /app/ws/**`、**`GET /driver/ws/**`** 握手放行 |
 
 ---
 
-*版本：2026-04-30：§0.4 增补网关 **`GET /app/ws/`** 与 **`/driver/ws/`** 对称 JWT 握手白名单说明（防 401 刷 `ws-token`）。此前已含 §0 已定稿、§13 代码锚点。*
+*版本：2026-06-01：§0 更新为已落地口径，补充 `driver-api → passenger-api` 内部通知接口与乘客端“WS 事件触发详情刷新、非稳态轮询”行为；§13 增加 `PassengerInternalNotifyController` 锚点。*

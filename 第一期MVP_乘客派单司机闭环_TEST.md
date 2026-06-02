@@ -59,14 +59,15 @@
 #### 1.4.4 若使用 XXL-JOB：如何“手动触发一次”
 
 - 若项目将超时取消/改派推进做成 XXL-JOB 任务：
+  - 本仓已内置调度中心子模块，可用 `mvn -pl xxl-job-admin spring-boot:run` 启动，默认控制台：`http://127.0.0.1:8080/xxl-job-admin`
   - 测试同学可在 XXL-JOB 控制台对对应任务执行一次 **“手动触发/执行一次”**，以便立刻推进状态，减少等待
   - 执行后通过以下接口验证结果：
     - 乘客侧：`GET /app/api/v1/orders/{orderNo}`
     - 事件时间线：`GET /api/v1/orders/{orderNo}/events`
 
-#### 1.4.5 XXL-JOB 与 Spring 定时：建议周期（与仓库默认对齐）
+#### 1.4.5 XXL-JOB：建议周期（与仓库默认对齐）
 
-> 控制台里的 Cron/固定速度请按下表配置；**若与 Spring `@Scheduled` 跑同一逻辑，周期应一致或停用其中一侧**，避免重复扫描。
+> 当前业务扫描统一由 XXL-JOB 触发；仓库中已移除同逻辑 Spring `@Scheduled`。控制台里的 Cron/固定速度请按下表配置。
 
 | JobHandler（order-executor） | 建议周期 |
 |------------------------------|----------|
@@ -77,11 +78,11 @@
 | JobHandler（capacity-executor） | 建议周期 |
 |-----------------------------------|----------|
 | `capacityLateDispatchScan` | **15s** |
-| `capacityOfferRescheduleScan` | **5s** |
+| `capacityOfferRescheduleScan` | **5s**（历史 `ASSIGNED` 待改派兜底） |
 
 更完整的配置键说明见 `第一期MVP_乘客派单司机闭环_TECH.md` **§6**。
 
-> 注意：不论是 XXL-JOB 还是 Spring `@Scheduled`，都必须保证“重复执行无害”（CAS/幂等），测试触发多次不应导致状态乱跳。
+> 注意：XXL-JOB 手动触发也必须“重复执行无害”（CAS/幂等），测试触发多次不应导致状态乱跳。
 
 ---
 
@@ -117,15 +118,17 @@
 
 ## 3. 乘客端用例
 
-### T-PA-01 下单 → 订单详情轮询可读
+### T-PA-01 下单 → 订单详情可读 / WS 触发刷新
 
 - **标记**：[✅已实现可测]
 - **接口**：
   - `POST /app/api/v1/orders`
   - `GET /app/api/v1/orders/{orderNo}`
+  - `GET /app/ws/v1/stream?token=...`
 - **步骤**：
   1. 下单获取 `orderNo`
-  2. 轮询订单详情 5~10 次
+  2. 建立乘客 WS，确认收到状态变化时触发一次订单详情查询
+  3. 可在关闭 WS 后验证 HTTP 轮询兜底
 - **预期**：
   - 始终 `code=200`
   - 状态可从 `CREATED/ASSIGNED` 推进到后续状态（若司机配合接单）
@@ -147,7 +150,7 @@
 
 ### T-PA-03 总体等待 180 秒兜底系统取消（无人接单）
 
-- **标记**：[🟨本期计划-未实现]（当前仓库已实现 CREATED 超时取消；但 PRD 要求“全等待态累计 180s”）
+- **标记**：[✅已实现可测]
 - **前置**：保证无人接单（无司机上线/司机拒单/司机不接）
 - **接口**：
   - `POST /app/api/v1/orders`
@@ -157,6 +160,7 @@
 - **预期**：
   - 超时后订单进入系统取消终态
   - 原因语义为“暂无车辆/无人接单”
+  - 覆盖 `CREATED / ASSIGNED / PENDING_DRIVER_CONFIRM` 等等待态；中途重新派单不重置 180 秒
 
 ### T-PA-04 “重新派单/改派中”展示触发（司机拒单/取消/超时收回）
 
@@ -171,7 +175,7 @@
 - **预期**：
   - 订单回到 **`CREATED`** 后再次进入派单链路；乘客侧表现为“等待态继续 + 正在重新派单”语义（不需要用户操作；展示以 passenger-api 为准）
   - 总等待 180s 不重置
-  - 细化校验：订单详情 `reDispatching=true` 时，乘客端文案显示“正在为您重新派单”；`reDispatching=false` 时显示常规等待文案（如“派单中”）
+  - 细化校验：司机拒单、到达前取消、确认窗超时释放都会让订单详情 `reDispatching=true`，乘客端文案显示“正在为您重新派单”；`reDispatching=false` 时显示常规等待文案（如“派单中”）
 
 ---
 
@@ -187,10 +191,11 @@
 - **步骤**：
   1. 司机拉取指派单
   2. 对其中一单接单
-  3. 乘客侧轮询确认状态变为“司机已接单”
+  3. 乘客侧 WS 收到 `ORDER_CHANGED` 后拉取订单详情，确认状态变为“司机已接单”
 - **预期**：
   - 接单成功 `code=200`
   - 乘客详情状态进入 `ACCEPTED`
+  - 乘客端不依赖常驻短轮询；WS 不可用时才退回轮询兜底
 
 ### T-DR-02 到达/开始/完单状态推进
 
@@ -199,9 +204,10 @@
   - `POST /driver/api/v1/orders/{orderNo}/arrive`
   - `POST /driver/api/v1/orders/{orderNo}/start`
   - `POST /driver/api/v1/orders/{orderNo}/finish`
-- **步骤**：按顺序调用
+- **步骤**：按顺序调用；每次司机动作成功后观察乘客侧 `ORDER_CHANGED` 和订单详情刷新。
 - **预期**：
   - 状态依次进入 `ARRIVED → STARTED → FINISHED`
+  - 乘客端每次收到 `ORDER_CHANGED` 后拉一次详情并展示对应状态
   - 非法顺序应失败并提示（视当前实现返回码/文案）
 
 ### T-DR-03 司机拒单（未接单阶段）
@@ -213,10 +219,11 @@
 - **步骤**：
   1. 司机看到待接单
   2. 拒单（reasonCode 单选）
-  3. 乘客侧轮询
+  3. 乘客侧 WS 收到 `ORDER_CHANGED` 后刷新详情
 - **预期**：
   - 该单对该司机失效（不再可接）；`order_event` 含 **`ORDER_DRIVER_REJECTED`**
   - 订单 **`CREATED`** 后重新派单；乘客进入重新派单等待态（不展示原因）
+  - 乘客端通过 `ORDER_CHANGED` 触发详情刷新，`reDispatching=true` 时展示“正在重新派单”
   - 新增校验：30 分钟隔离期内，不应再次派给同一司机（司机刷新指派单不应再看到该乘客该单）
 
 ### T-DR-04 司机取消（已接单后、到达前）
@@ -228,9 +235,10 @@
 - **步骤**：
   1. 司机接单成功
   2. 到达前取消（reasonCode 单选）
-  3. 乘客侧轮询
+  3. 乘客侧 WS 收到 `ORDER_CHANGED` 后刷新详情
 - **预期**：
   - 订单 **`CREATED`** 后重新派单（不展示原因）；`order_event` 含 **`ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE`**
+  - 乘客端通过 `ORDER_CHANGED` 触发详情刷新，`reDispatching=true` 时展示“正在重新派单”
   - 司机不可继续推进该单（`GET .../orders/{orderNo}` 对原司机应 **403**；`arrive`/`start`/`finish` 应失败）
   - 新增校验：30 分钟隔离期内，不应再次派给同一司机（司机刷新指派单不应再看到该乘客该单）
 
@@ -319,11 +327,12 @@
 ## 8. 联调 Checklist（司机-乘客 30 分钟隔离）
 
 - [ ] 准备 1 名乘客 A、2 名司机（D1/D2），确认 D1/D2 都在线听单且可接单。
+- [ ] 乘客端登录后下单并建立 `/app/ws/v1/stream`，DevTools 中可见 WS 101；后续状态变更以 `ORDER_CHANGED` 触发详情刷新为主。
 - [ ] A 下单并确认先派给 D1（记录 `orderNo`、`driverId`、`passengerId`）。
 - [ ] D1 执行拒单（或接单后到达前取消），确认 `order_event` 出现对应事件。
+- [ ] 乘客端收到 `ORDER_CHANGED`，随后 `GET /app/api/v1/orders/{orderNo}` 返回 `CREATED + reDispatching=true`。
 - [ ] 立即触发重新派单，确认订单继续流转，但不会再次派到 D1。
 - [ ] 在 30 分钟内重复刷新 D1 指派单，确认看不到该乘客该单。
 - [ ] 检查 Redis 存在键 `tx:dispatch:block:dp:D1:A`，且 TTL 在倒计时。
 - [ ] 30 分钟后再次触发派单，确认 D1 恢复候选资格（命中与否由距离/状态决定）。
-- [ ] 回归普通链路：D2 可正常接单并推进 `ACCEPTED → ARRIVED → STARTED → FINISHED`。
-
+- [ ] 回归普通链路：D2 可正常接单并推进 `ACCEPTED → ARRIVED → STARTED → FINISHED`；每次司机动作后乘客端均收到 `ORDER_CHANGED` 并刷新到对应状态。

@@ -42,6 +42,8 @@ services:
     base-url: http://127.0.0.1:8093
   passenger:
     base-url: http://127.0.0.1:8092
+  passenger-api:
+    base-url: http://127.0.0.1:18080
   capacity:
     base-url: http://127.0.0.1:8090
   calculate:

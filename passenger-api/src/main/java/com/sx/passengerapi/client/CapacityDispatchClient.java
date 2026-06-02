@@ -16,9 +16,9 @@ public interface CapacityDispatchClient {
     ResponseVo<NearestDriverResult> nearestDriver(@RequestParam("cityCode") String cityCode,
                                                   @RequestParam(value = "productCode", required = false) String productCode,
                                                   @RequestParam(value = "originLat", required = false) Double originLat,
-                                                  @RequestParam(value = "originLng", required = false) Double originLng);
+                                                  @RequestParam(value = "originLng", required = false) Double originLng,
+                                                  @RequestParam(value = "passengerId", required = false) Long passengerId);
 
     @PostMapping("/api/v1/dispatch/pending-order-index")
     ResponseVo<Void> addPendingOrderIndex(@RequestBody PendingOrderIndexBody body);
 }
-

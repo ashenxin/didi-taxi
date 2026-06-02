@@ -1,9 +1,8 @@
 package com.sx.driverapi.ws;
 
-import com.sx.driverapi.client.CapacityDriverClient;
-import com.sx.driverapi.model.capacity.DriverOnlineBody;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -11,6 +10,9 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.time.Instant;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 司机长连接骨架：后续在此推送派单/订单状态（仅 WebSocket）。
@@ -22,16 +24,39 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
     private final DriverWsSessionRegistry registry;
     private final DriverWsProperties props;
     private final DriverAssignedPushService assignedPushService;
-    private final CapacityDriverClient capacityDriverClient;
+    private final ScheduledExecutorService wsMaintenanceExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "driver-ws-maintenance");
+        t.setDaemon(true);
+        return t;
+    });
 
     public DriverNoticeWebSocketHandler(DriverWsSessionRegistry registry,
                                         DriverWsProperties props,
-                                        DriverAssignedPushService assignedPushService,
-                                        CapacityDriverClient capacityDriverClient) {
+                                        DriverAssignedPushService assignedPushService) {
         this.registry = registry;
         this.props = props;
         this.assignedPushService = assignedPushService;
-        this.capacityDriverClient = capacityDriverClient;
+    }
+
+    @PostConstruct
+    public void startWsMaintenance() {
+        wsMaintenanceExecutor.scheduleWithFixedDelay(
+                this::safeScheduledPushAssigned,
+                props.getAssignedPollIntervalMs(),
+                props.getAssignedPollIntervalMs(),
+                TimeUnit.MILLISECONDS
+        );
+        wsMaintenanceExecutor.scheduleWithFixedDelay(
+                this::safeHeartbeatSweep,
+                5_000,
+                5_000,
+                TimeUnit.MILLISECONDS
+        );
+    }
+
+    @PreDestroy
+    public void stopWsMaintenance() {
+        wsMaintenanceExecutor.shutdownNow();
     }
 
     @Override
@@ -74,12 +99,11 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         var ds = registry.getBySessionId(session.getId());
         if (ds != null) {
-            markOffline(ds.getDriverId(), "ws-closed");
+            markPresenceDisconnected(ds.getDriverId(), "ws-closed");
         }
         registry.removeBySession(session);
     }
 
-    @Scheduled(fixedDelayString = "${driver.ws.assigned-poll-interval-ms:2000}")
     public void scheduledPushAssigned() {
         for (var ds : registry.allSessions()) {
             if (ds == null) continue;
@@ -87,7 +111,6 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    @Scheduled(fixedDelay = 5_000)
     public void scheduledHeartbeatSweep() {
         long now = System.currentTimeMillis();
         long timeout = props.getHeartbeatTimeoutMs();
@@ -96,21 +119,30 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
             if (now - ds.lastSeenAtMs() > timeout) {
                 log.info("WS heartbeat timeout driverId={} lastSeen={} now={}",
                         ds.getDriverId(), Instant.ofEpochMilli(ds.lastSeenAtMs()), Instant.ofEpochMilli(now));
-                markOffline(ds.getDriverId(), "heartbeat-timeout");
+                markPresenceDisconnected(ds.getDriverId(), "heartbeat-timeout");
                 registry.safeClose(ds.getSession(), CloseStatus.SESSION_NOT_RELIABLE);
                 registry.removeBySession(ds.getSession());
             }
         }
     }
 
-    private void markOffline(long driverId, String reason) {
+    private void markPresenceDisconnected(long driverId, String reason) {
+        log.info("driver ws disconnected driverId={} reason={}", driverId, reason);
+    }
+
+    private void safeScheduledPushAssigned() {
         try {
-            DriverOnlineBody body = new DriverOnlineBody();
-            body.setOnline(false);
-            capacityDriverClient.setOnline(driverId, body);
+            scheduledPushAssigned();
         } catch (Exception e) {
-            log.debug("presence offline call ignored driverId={} err={}", driverId, e.toString());
+            log.warn("driver ws assigned push failed: {}", e.toString());
         }
-        log.info("presence offline driverId={} reason={}", driverId, reason);
+    }
+
+    private void safeHeartbeatSweep() {
+        try {
+            scheduledHeartbeatSweep();
+        } catch (Exception e) {
+            log.warn("driver ws heartbeat sweep failed: {}", e.toString());
+        }
     }
 }

@@ -91,22 +91,22 @@ PRD 口径：从“下单成功”开始累计 180 秒，到期仍未形成“�
 - **计时起点**：`created_at`
 - **判定未接单**：订单状态仍处于“等待态集合”（例如 CREATED/ASSIGNED/PENDING_DRIVER_CONFIRM），且未进入 ACCEPTED
 - **取消动作**：状态推进到 CANCELLED，`cancel_by=系统`，`cancel_reason` 写“暂无车辆/无人接单”语义
-- **执行方式**：order-service 定时扫描（XXL-JOB/Scheduled 皆可，但多实例需避免重复执行副作用）
+- **执行方式**：order-service 通过 XXL-JOB 定时扫描；业务扫描不再使用 Spring `@Scheduled`
 
-> 注意：当前仓库已存在 `order.dispatch.wait-timeout-seconds`（默认 180）用于 CREATED 超时取消。若要严格满足 PRD “总体等待”口径，需要把“改派中仍计入 180s”纳入扫描条件（TECH 先写口径，API/实现阶段再对齐）。
+> 当前仓库已将 `order.dispatch.wait-timeout-seconds`（默认 180）升级为“全等待态总体 180s 兜底”：扫描 `CREATED / ASSIGNED / PENDING_DRIVER_CONFIRM`，以 `created_at` 为唯一计时起点，改派不重置。
 
 #### 3.2.1 与现有实现对齐：把“CREATED 超时取消”升级为“全等待态总体 180s 兜底”
 
 现状（从仓库配置/代码可见）：
 
 - 已有配置：`order.dispatch.wait-timeout-seconds=180`
-- 已有扫描：主要针对 **CREATED** 状态的超时系统取消（“待派单超时”）
+- 已有扫描：通过 XXL Handler `orderCreatedDispatchTimeoutScan` 覆盖 **CREATED / ASSIGNED / PENDING_DRIVER_CONFIRM** 等等待态
 
-PRD 的差异点：
+PRD 的关键点：
 
 - PRD 要求“**总体等待** 180 秒”：即使中途派到司机、又因拒单/取消/超时收回进入改派，**也仍计入同一个 180 秒**，到期仍未接单则系统取消。
 
-建议落地方案（第一期可选其一，优先推荐 A）：
+落地方案：
 
 - **方案 A（推荐：一套兜底扫描覆盖所有等待态）**
   - **兜底时钟**：固定使用 `created_at` 作为唯一真源（不会被改派重置）
@@ -123,10 +123,9 @@ PRD 的差异点：
     - `cancel_reason` 统一为“暂无车辆/无人接单”语义（PRD 口径）
   - **幂等与并发**：用 CAS 更新（`where status in WAITING_SET`）保证多次扫描不会重复取消。
 
-- **方案 B（过渡：保留 CREATED 超时取消 + 新增“非 CREATED 等待态兜底”扫描）**
-  - 保留现有 CREATED 扫描逻辑不动
-  - 新增一个兜底扫描，仅处理 `ASSIGNED/PENDING_DRIVER_CONFIRM/...` 且 `created_at` 超时的订单
-  - 该方案便于小步上线，但要保证“两个扫描任务”不会写出冲突结果（仍需 CAS）。
+- **历史过渡方案（已不作为当前实现）**
+  - 早期可保留 CREATED 扫描并新增“非 CREATED 等待态兜底”扫描。
+  - 当前仓库已收口为一套 XXL Handler `orderCreatedDispatchTimeoutScan` 覆盖全部等待态，避免两套扫描写出冲突结果。
 
 #### 3.2.2 取消原因与事件记录（与 PRD 对齐）
 
@@ -153,7 +152,7 @@ PRD 要求“3 分钟到期系统取消”的对外语义是：**附近暂无可
 触发来源：
 
 - **司机拒单**（`driver-api` → `order-service`）：已实现；**`ASSIGNED` / `PENDING_DRIVER_CONFIRM` → `CREATED`**，清空指派并再次写入 **`ORDER_CREATED_NEED_DISPATCH`** Outbox，由 capacity/Kafka/迟滞扫描推进下一轮派单
-- **司机超时未接**（order 或 capacity 扫描）：收回该单，进入改派
+- **司机超时未接**（order XXL 扫描）：释放本轮指派，订单退回 `CREATED` 并进入改派；不写司机-乘客隔离键，下一轮仍可重新派给该司机
 - **司机已接单后取消（到达前）**（`driver-api` → `order-service` **`/driver/cancel`**）：已实现；**`ACCEPTED` → `CREATED`**，同样再投递派单 Outbox
 - **互斥收敛**：司机接成一单后，其它单释放改派
 
@@ -161,7 +160,7 @@ PRD 要求“3 分钟到期系统取消”的对外语义是：**附近暂无可
 
 - “收回/释放”是写操作，必须经 order 状态机 CAS（拒单/到达前取消与上述一致）
 - capacity 可负责“再找司机 + 再指派 + 再打开接单窗口”（迟滞匹配/改派推进）
-- passenger-api 在订单详情增加 `reDispatching` 字段：当订单当前为 `CREATED` 且事件流出现 `ORDER_DRIVER_REJECTED` 或 `ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE` 时置为 `true`；前端据此展示“正在为您重新派单”
+- passenger-api 在订单详情增加 `reDispatching` 字段：当订单当前为 `CREATED` 且事件流出现 `ORDER_DRIVER_REJECTED`、`ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE` 或 `ORDER_OFFER_TIMED_OUT` 时置为 `true`；前端据此展示“正在为您重新派单”
 
 相关专项文档：
 - `乘客司机端_Redis与听单下线策略.md`
@@ -194,7 +193,8 @@ PRD 要求“3 分钟到期系统取消”的对外语义是：**附近暂无可
 实现口径：
 
 - **写入时机（order）**：`rejectByDriver`、`driverCancelBeforeArrive` 成功后写 Redis 键  
-  `tx:dispatch:block:dp:{driverId}:{passengerId}`，TTL=30 分钟（配置项：`order.dispatch.driver-passenger-block-minutes`）。
+ `tx:dispatch:block:dp:{driverId}:{passengerId}`，TTL=30 分钟（配置项：`order.dispatch.driver-passenger-block-minutes`）。
+- **不写入场景**：司机确认窗口超时（30s 未操作）只释放本轮指派并重新派单，不写隔离键；下一轮匹配仍允许再次派给该司机。
 - **生效点 1（capacity 派单）**：Kafka 首派与迟滞匹配（司机上线触发/定时扫描）在候选司机循环中检查该键，命中则跳过当前候选。
 - **生效点 2（司机刷新指派单）**：`order-service` 的 `listAssignedToDriver` 返回前按同键过滤，隔离期内该乘客订单不出现在司机待接列表。
 - **权威口径**：该键仅作为派单约束索引，不改变订单状态机权威（仍以 order DB + CAS 为准）。
@@ -221,18 +221,18 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 
 ## 6. 配置项（第一期关键参数）
 
-> 以当前仓库 `application.yml` 为准；**若同时启用 Spring `@Scheduled` 与 XXL-JOB**，请勿对同一业务逻辑双跑两套任务（周期应一致或停用一侧），详见 `第一期MVP_乘客派单司机闭环_TEST.md` **§1.4.5**。
+> 以当前仓库 `application.yml` 与 XXL 控制台为准；业务扫描统一由 XXL-JOB 触发，仓库中不再保留同逻辑 Spring `@Scheduled`。
 
 ### 6.1 派单与确认窗（默认值）
 
 | 键 | 默认 | 说明 |
 |----|------|------|
 | `capacity.dispatch.driver-offer-seconds` | **30** | 打开「待司机确认」窗口时长（秒）；与 `passenger-api` `app.order.driver-offer-seconds`、`order` `OpenDriverOfferBody` 默认对齐 |
-| `order.dispatch.offer-timeout-scan-interval-ms` | **5000** | `PENDING_DRIVER_CONFIRM` 过期打回 `ASSIGNED` 的扫描间隔 |
-| `capacity.dispatch.offer-reschedule.scan-interval-ms` | **5000** | offer 打回后再开窗口 / GEO 改派推进 |
+| `order.dispatch.offer-timeout-scan-interval-ms` | **5000** | `PENDING_DRIVER_CONFIRM` 过期释放指派、退回 `CREATED` 并重新派单的扫描间隔 |
+| `capacity.dispatch.offer-reschedule.scan-interval-ms` | **5000** | 历史 `ASSIGNED` 待改派兜底推进 |
 | `capacity.dispatch.late-match-scan-interval-ms` | **15000** | `CREATED` 迟滞匹配兜底扫描 |
 | `capacity.dispatch.driver-geo-ttl-seconds` | **1800** | 听单司机 Redis GEO 点 TTL（秒） |
-| `order.dispatch.wait-timeout-seconds` | **180** | `CREATED` 过久系统取消阈值 |
+| `order.dispatch.wait-timeout-seconds` | **180** | 等待态累计过久系统取消阈值（`CREATED / ASSIGNED / PENDING_DRIVER_CONFIRM`，从 `created_at` 起算） |
 | `order.dispatch.timeout-scan-interval-ms` | **30000** | 上述取消的扫描间隔 |
 | `driver.ws.assigned-poll-interval-ms` | **3000** | `driver-api` WS 侧拉指派并推送的间隔 |
 
@@ -240,11 +240,11 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 
 | JobHandler | 建议周期 | 对应配置/逻辑 |
 |------------|----------|----------------|
-| `orderOfferTimeoutScan` | **5s** | 同 `order.dispatch.offer-timeout-scan-interval-ms` |
+| `orderOfferTimeoutScan` | **5s** | 同 `order.dispatch.offer-timeout-scan-interval-ms`；释放指派回 `CREATED` |
 | `orderCreatedDispatchTimeoutScan` | **30s** | 同 `order.dispatch.timeout-scan-interval-ms` |
 | `orderOutboxPublish` | **2～5s**（建议 **3s**） | Outbox 投递；无同名 Spring 定时 |
 | `capacityLateDispatchScan` | **15s** | 同 `late-match-scan-interval-ms` |
-| `capacityOfferRescheduleScan` | **5s** | 同 `offer-reschedule.scan-interval-ms` |
+| `capacityOfferRescheduleScan` | **5s** | 同 `offer-reschedule.scan-interval-ms`；历史 `ASSIGNED` 待改派兜底 |
 
 ---
 
@@ -281,4 +281,3 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 - **Redis/听单/迟滞匹配**：`乘客司机端_Redis与听单下线策略.md`
 - **Outbox/Kafka（二期方案）**：`订单与派单_两段式Outbox与Kafka_技术方案.md`
 - **回归测试细节**：`功能测试清单.md`
-

@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 将原本的 @Scheduled 任务迁移为 XXL-JOB Handler。
+ * 订单域 XXL-JOB Handler。
  */
 @Component
 @Slf4j
@@ -68,7 +68,7 @@ public class OrderJobHandlers {
     }
 
     /**
-     * 派单确认窗口超时：将 PENDING_DRIVER_CONFIRM 打回 ASSIGNED（保留 driver_id）。
+     * 派单确认窗口超时：释放 PENDING_DRIVER_CONFIRM 的本轮司机指派，并退回 CREATED 重新派单。
      */
     @XxlJob("orderOfferTimeoutScan")
     public void offerTimeoutScan() {
@@ -79,11 +79,10 @@ public class OrderJobHandlers {
             n = tripOrderWriteService.timeoutPendingDriverOffers(LocalDateTime.now());
             XxlJobHelper.log("timeout pending driver offers: {}", n);
             if (n > 0) {
-                log.info("司机确认窗口超时扫描：本轮打回 {} 笔待确认订单", n);
+                log.info("司机确认窗口超时扫描：本轮释放 {} 笔待确认指派", n);
             }
         } finally {
             XxlJobHelper.log("[END] job=orderOfferTimeoutScan affected={} elapsedMs={}", n, (System.currentTimeMillis() - startMs));
         }
     }
 }
-

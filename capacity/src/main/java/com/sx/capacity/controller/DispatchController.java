@@ -35,18 +35,19 @@ public class DispatchController {
 
     /**
      * 查询「可派单」司机：若提供上车点经纬度则按 Redis GEO 最近 + 业务过滤；否则回退 MVP 逻辑。
-     * {@code GET /api/v1/dispatch/nearest-driver?cityCode=&productCode=&originLat=&originLng=}
+     * {@code GET /api/v1/dispatch/nearest-driver?cityCode=&productCode=&originLat=&originLng=&passengerId=}
      */
     @GetMapping("/nearest-driver")
     public ResponseVo<NearestDriverResult> searchNearestDriver(@RequestParam String cityCode,
                                                               @RequestParam(required = false) String productCode,
                                                               @RequestParam(required = false) Double originLat,
-                                                              @RequestParam(required = false) Double originLng) {
+                                                              @RequestParam(required = false) Double originLng,
+                                                              @RequestParam(required = false) Long passengerId) {
         if (cityCode == null || cityCode.isBlank()) {
             return ResultUtil.requestError("cityCode不能为空");
         }
 
-        NearestDriverResult hit = nearestDriverQueryService.findNearest(cityCode, productCode, originLat, originLng);
+        NearestDriverResult hit = nearestDriverQueryService.findNearest(cityCode, productCode, originLat, originLng, passengerId);
         if (hit == null) {
             return ResultUtil.error(404, "无可接单在线司机");
         }

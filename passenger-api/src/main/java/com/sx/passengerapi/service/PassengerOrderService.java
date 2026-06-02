@@ -48,7 +48,8 @@ import java.util.Set;
 public class PassengerOrderService {
     private static final Set<String> REDISPATCH_EVENT_TYPES = Set.of(
             "ORDER_DRIVER_REJECTED",
-            "ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE"
+            "ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE",
+            "ORDER_OFFER_TIMED_OUT"
     );
 
     /** cityCode → 高德 geocode 可选 city 参数（中文/全拼/adcode 等，见高德文档） */
@@ -228,7 +229,7 @@ public class PassengerOrderService {
     public NearestDriverResult searchNearestDriver(CreateAndAssignOrderBody body) {
         Double olat = body.getOrigin() == null ? null : body.getOrigin().getLat();
         Double olng = body.getOrigin() == null ? null : body.getOrigin().getLng();
-        var resp = capacityDispatchClient.nearestDriver(body.getCityCode(), body.getProductCode(), olat, olng);
+        var resp = capacityDispatchClient.nearestDriver(body.getCityCode(), body.getProductCode(), olat, olng, body.getPassengerId());
         if (resp == null) {
             throw new BizErrorException(502, "运力服务响应为空");
         }
@@ -578,4 +579,3 @@ public class PassengerOrderService {
         }
     }
 }
-
