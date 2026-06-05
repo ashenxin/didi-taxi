@@ -112,3 +112,22 @@ CREATE TABLE IF NOT EXISTS `order_outbox_event` (
     KEY `idx_outbox_status_next` (`status`, `next_retry_at`, `id`),
     KEY `idx_outbox_agg` (`aggregate_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单 Outbox 事件表';
+
+-- =============================================================================
+-- 请求级幂等（Idempotency-Key）
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS `order_idempotent_record` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `request_id` VARCHAR(128) NOT NULL COMMENT '客户端幂等键 Idempotency-Key',
+    `action_type` VARCHAR(64) NOT NULL COMMENT '动作类型，本期为 CREATE_ORDER',
+    `passenger_id` BIGINT NOT NULL COMMENT '乘客ID',
+    `order_no` VARCHAR(64) NULL COMMENT '成功创建的订单号',
+    `status` VARCHAR(32) NOT NULL COMMENT 'PROCESSING/SUCCESS/FAILED',
+    `request_hash` VARCHAR(64) NOT NULL COMMENT '请求关键字段 SHA-256',
+    `response_snapshot` JSON NULL COMMENT '成功响应快照，至少包含 orderNo',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_order_idem_request_id` (`request_id`),
+    KEY `idx_order_idem_passenger` (`passenger_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单写接口幂等记录';

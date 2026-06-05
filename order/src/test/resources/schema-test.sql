@@ -70,3 +70,19 @@ CREATE TABLE IF NOT EXISTS order_outbox_event (
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_status_next ON order_outbox_event (status, next_retry_at, id);
+
+CREATE TABLE IF NOT EXISTS order_idempotent_record (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    request_id VARCHAR(128) NOT NULL,
+    action_type VARCHAR(64) NOT NULL,
+    passenger_id BIGINT NOT NULL,
+    order_no VARCHAR(64) NULL,
+    status VARCHAR(32) NOT NULL,
+    request_hash VARCHAR(64) NOT NULL,
+    response_snapshot VARCHAR(4000) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_order_idem_request_id ON order_idempotent_record (request_id);
+CREATE INDEX IF NOT EXISTS idx_order_idem_passenger ON order_idempotent_record (passenger_id, created_at);

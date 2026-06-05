@@ -53,6 +53,13 @@ public class DriverWsSessionRegistry {
         if (driverId <= 0 || session == null) {
             return;
         }
+        DriverSession old = byDriverId.remove(driverId);
+        if (old != null && old.getSession() != null) {
+            driverIdBySessionId.remove(old.getSession().getId());
+            safeClose(old.getSession(), CloseStatus.NORMAL.withReason("replaced-by-new-driver-ws"));
+            log.info("WS old session replaced driverId={} oldSessionId={} newSessionId={}",
+                    driverId, old.getSession().getId(), session.getId());
+        }
         DriverSession ds = new DriverSession(driverId, session);
         byDriverId.put(driverId, ds);
         driverIdBySessionId.put(session.getId(), driverId);
@@ -73,13 +80,15 @@ public class DriverWsSessionRegistry {
         return byDriverId.values();
     }
 
-    public void removeBySession(WebSocketSession session) {
-        if (session == null) return;
+    public DriverSession removeBySession(WebSocketSession session) {
+        if (session == null) return null;
         Long driverId = driverIdBySessionId.remove(session.getId());
         if (driverId != null) {
-            byDriverId.remove(driverId);
+            DriverSession removed = byDriverId.remove(driverId);
             log.info("WS session removed driverId={} sessionId={}", driverId, session.getId());
+            return removed;
         }
+        return null;
     }
 
     public void safeClose(WebSocketSession session, CloseStatus status) {
@@ -104,4 +113,3 @@ public class DriverWsSessionRegistry {
         }
     }
 }
-

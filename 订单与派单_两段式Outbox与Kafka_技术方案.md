@@ -3,7 +3,7 @@
 > 文档文件名：`订单与派单_两段式Outbox与Kafka_技术方案.md`  
 > 范围：本方案用于将“下单同步派单”演进为“两段式：先创建订单、后异步派单”，并引入 Transactional Outbox + Kafka，消费者落在 `capacity-service`。  
 > 约束：Kafka 消息 JSON；“无司机时不重试”（不让 Kafka 层反复投递该订单的派单请求）。  
-> 代码现状：`order-service` 已有 `trip_order` 状态机与 `order_event` 流水；派单确认窗口（`PENDING_DRIVER_CONFIRM`）、超时扫描、改派调度等已实现；`passenger-api` 仍是同步 `createAndAssign` 编排。
+> 代码现状：`order-service` 已有 `trip_order` 状态机与 `order_event` 流水；派单确认窗口（`PENDING_DRIVER_CONFIRM`）、超时扫描、改派调度等已实现；`POST /app/api/v1/orders` 已切换为两段式主路径，`passenger-api` 创建订单后不再同步 `assign/openOffer`，派单由 Outbox + Kafka + `capacity-service` consumer 异步推进。
 
 ---
 
@@ -17,14 +17,14 @@
 
 ## 1. 背景与问题
 
-当前 `passenger-api` 下单链路是同步编排（路线/估价/找司机/创建订单/指派/打开确认窗口）。同步链路的问题：
+历史上 `passenger-api` 下单链路是同步编排（路线/估价/找司机/创建订单/指派/打开确认窗口）。同步链路的问题：
 
 - **时延不可控**：依赖多个下游，用户请求容易超时。
 - **失败语义差**：部分成功/部分失败时不易补偿（例如订单创建成功但派单失败）。
 - **重试危险**：客户端/网关重试可能造成重复创建/重复指派。
 - **多实例扫描问题**：未来若引入定时扫描/补偿，`@Scheduled` 在多实例下可能重复执行。
 
-目标是把“订单创建成功”与“派单任务产生”绑定为同一事务，再通过 Kafka 异步驱动派单。
+当前目标已落地到主路径：把“订单创建成功”与“派单任务产生”绑定为同一事务，再通过 Kafka 异步驱动派单。
 
 ---
 

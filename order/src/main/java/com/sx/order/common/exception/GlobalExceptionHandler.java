@@ -58,6 +58,12 @@ public class GlobalExceptionHandler {
         return ResultUtil.error(ExceptionCode.CONFLICT.getValue(), e.getMessage());
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseVo<?> illegalArgumentExceptionHandler(IllegalArgumentException e) {
+        log.warn("非法参数：{}", e.getMessage());
+        return ResultUtil.requestError(e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseVo<?> exceptionHandler(Exception e) {
         log.error("未处理异常 type={} msg={}", e.getClass().getName(), e.getMessage(), e);

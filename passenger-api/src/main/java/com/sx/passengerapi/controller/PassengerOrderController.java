@@ -28,6 +28,7 @@ public class PassengerOrderController {
 
     private final PassengerOrderService passengerOrderService;
     private static final String USER_ID_HEADER = "X-User-Id";
+    private static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 
     public PassengerOrderController(PassengerOrderService passengerOrderService) {
         this.passengerOrderService = passengerOrderService;
@@ -40,13 +41,15 @@ public class PassengerOrderController {
     @PostMapping("/orders")
     public ResponseVo<CreateAndAssignOrderResult> createAndAssign(
             @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
             @RequestBody @Valid CreateAndAssignOrderBody body) {
         if (passengerId == null) {
             throw new BizErrorException(401, "未授权，请重新登录");
         }
+        rejectBlankIdempotencyKey(idempotencyKey);
         rejectPassengerIdBodyMismatch(passengerId, body.getPassengerId());
         body.setPassengerId(passengerId);
-        return ResultUtil.success(passengerOrderService.createAndAssign(body));
+        return ResultUtil.success(passengerOrderService.createAndAssign(body, idempotencyKey));
     }
 
     /**
@@ -56,13 +59,15 @@ public class PassengerOrderController {
     @PostMapping("/orders/create")
     public ResponseVo<CreateOrderResultV1> createTwoPhase(
             @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
             @RequestBody @Valid CreateAndAssignOrderBody body) {
         if (passengerId == null) {
             throw new BizErrorException(401, "未授权，请重新登录");
         }
+        rejectBlankIdempotencyKey(idempotencyKey);
         rejectPassengerIdBodyMismatch(passengerId, body.getPassengerId());
         body.setPassengerId(passengerId);
-        return ResultUtil.success(passengerOrderService.createTwoPhase(body));
+        return ResultUtil.success(passengerOrderService.createTwoPhase(body, idempotencyKey));
     }
 
     /**
@@ -104,5 +109,13 @@ public class PassengerOrderController {
             throw new BizErrorException(400, "请求体中的乘客信息与当前登录身份不一致，请勿填写 passengerId");
         }
     }
-}
 
+    private static void rejectBlankIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new BizErrorException(400, "Idempotency-Key不能为空");
+        }
+        if (idempotencyKey.trim().length() > 128) {
+            throw new BizErrorException(400, "Idempotency-Key长度不能超过128");
+        }
+    }
+}

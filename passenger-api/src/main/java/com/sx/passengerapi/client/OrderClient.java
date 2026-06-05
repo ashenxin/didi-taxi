@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
@@ -22,7 +23,8 @@ import java.util.List;
 public interface OrderClient {
 
     @PostMapping("/api/v1/orders")
-    ResponseVo<CreateOrderResult> create(@RequestBody CreateOrderBody body);
+    ResponseVo<CreateOrderResult> create(@RequestHeader("Idempotency-Key") String idempotencyKey,
+                                         @RequestBody CreateOrderBody body);
 
     @PostMapping("/api/v1/orders/{orderNo}/assign")
     ResponseVo<Void> assign(@PathVariable("orderNo") String orderNo, @RequestBody AssignOrderBody body);
@@ -48,4 +50,3 @@ public interface OrderClient {
     @PostMapping("/api/v1/orders/{orderNo}/cancel")
     ResponseVo<Void> cancel(@PathVariable("orderNo") String orderNo, @RequestBody CancelOrderBody body);
 }
-

@@ -117,8 +117,8 @@
 | **中** | **乘客 WS 多实例广播** | 单机内存会话 + `ORDER_CHANGED` 已支持；**Redis Pub** 跨实例仍属后续，见《乘客端与司机端_WebSocket_对比.md》**§0**。 |
 | **中** | **接驾 ETA（司机位置 → 上车点）** | 《最小闭环》附录/表格：当前 ETA 多为占位或路线时长；**matrix + 实时坐标** 未接。 |
 | **低** | **`passenger_display_code` 字段体系化** | 当前已通过详情 `reDispatching` 满足乘客端“重派中”展示；如需统一多端枚举仍可后续补标准 display_code。 |
-| **中** | **两段式异步指派 + Outbox + Kafka** | 《`乘客司机端_最小闭环接口调用文档.md`》**§3.0**；专项方案《`订单与派单_两段式Outbox与Kafka_技术方案.md`》；当前 H5/MVP 仍以 **`POST /app/api/v1/orders`** 一步下单为权威入口，后续两段式/Outbox 演进需重新统一对外入口，不影响当前 H5 调用。 |
-| **中** | **幂等键 `Idempotency-Key`** | 《最小闭环》**§3.0** 建议；见《订单服务幂等与并发方案说明》。 |
+| **已完成（主路径）/ 中（运维增强）** | **两段式异步指派 + Outbox + Kafka** | `POST /app/api/v1/orders` 已切换为两段式主路径：`passenger-api` 只做 geocode/route/estimate + 创建订单，`order-service` 同事务写 `order_outbox_event`，`orderOutboxPublish` 投 Kafka，`capacity-service` 消费后 `assign + openOffer`。后续增强：Outbox/Kafka 指标、DLQ、运维告警与生产参数。 |
+| **已完成（下单）/ 中（扩展）** | **幂等键 `Idempotency-Key`** | 乘客下单 `POST /app/api/v1/orders` 与 `/orders/create` 已要求 Header 并透传 order-service；order 侧 `order_idempotent_record` 已覆盖 `CREATE_ORDER`，同 key 同请求体返回同一 `orderNo`，同 key 不同请求体返回 409。取消、接单、拒单等其它写接口后续再扩展。 |
 | **低** | **轮询顺带触发匹配（限频）** | 《Redis》**§6.2**：可选；**默认不做**。 |
 | **中** | **司机登出与乘客登出 / PRD §5.6 完全同口径** | **已实现**：待接指派登出时 **`reject(DRIVER_LOGOUT)`** → 多为 **`CREATED` + 重派**。**仍差**：**`ACCEPTED`** 登出 **不会** 自动到达前释单；与乘客 **`cancel→CANCELLED`** 不一致。见《`司机端_登录注册_API.md`》§7、《`第一期MVP_乘客派单司机闭环_API.md`》§3.1。 |
 
@@ -134,9 +134,9 @@
 
 | 优先级 | 项 | 说明 |
 |--------|-----|------|
-| **最高** | **业务 WebSocket + 派单推送（替代高频轮询）** | 《司机端_上线听单与接单设计》**§5**、《WebSocket与实时协议入门》：握手鉴权、心跳、离线写库、消息 envelope；WS 应替代待确认指派的高频轮询，HTTP 只做首次/手动/关键操作对账和低频兜底，兜底持续约 30s 时前端需给司机可感知异常提示。 |
-| **高** | **Presence 与断线裁决** | 同上与《登录注册设计》**§12**：与 HTTP 登出分期协同。 |
-| **中** | **登出后「待确认 offer 不再推送」** | HTTP 登出已 **批量拒指派**，列表不再含待确认单；**推送侧**（WS）仍依赖连接与订单规则，可分期加强。 |
+| **已完成（单实例）** | **业务 WebSocket + 派单推送（替代高频轮询）** | `driver-api` 已支持 `/driver/ws/v1/stream`、`ws-token(audit=2)` 握手、`PING/PONG`、建连/变更推 `ASSIGNED_LIST`、接单/拒单/取消后强制刷新；司机 H5 现有逻辑在 WS 已连时不做 assigned 高频轮询，HTTP 仅手动/关键操作/断链兜底。 |
+| **已完成（单实例）** | **Presence 与断线裁决** | WS 正常关闭、心跳超时会调用 `DriverBffService.setOnline(false)`，复用 capacity 下线链路落库并清理司机池；同司机新 WS 连接会顶旧连接且不误触发下线。已补 `driver-api` 单元测试。 |
+| **低** | **登出后「待确认 offer 不再推送」** | HTTP 登出已 **批量拒指派**，列表不再含待确认单；WS 单连接与下线裁决已收口，后续只需继续关注多实例推送一致性。 |
 | **中** | **网关 WebSocket 路由与多实例** | 《网关服务_技术》**§3.1**：`/driver/**` 经网关至 `driver-api`；多副本 **Sticky / PubSub** 等（乘客侧跨实例已定 **Redis Pub**，可对照）。 |
 
 ### 2.4 网关
@@ -162,3 +162,6 @@
 | 2026-04-25 | 合并两份清单为单一入口《TODO与差距总览.md》，并以后端更新更晚的后台核对状态为准（换队 POST / 车辆列表 / reviewedBy 已完成）。 |
 | 2026-04-29 | 更新乘客司机闭环状态：补记“30 分钟隔离匹配”“reDispatching 已实现”，并将 WebSocket+Presence 提升为下一阶段最高优先级。 |
 | 2026-04-30 | **乘客 WS 联调收口**：网关 **`GET /app/ws/`** JWT 白名单、`passenger-api` WS、H5 Demo；TODO **§2.1.2** 乘客 WS 条目更新为「已实现骨架/联调」；Redis 广播仍后续。 |
+| 2026-06-03 | **司机 WS 单实例主路径收口**：`driver-api` WS 握手鉴权、`ASSIGNED_LIST` 推送、`PING/PONG`、心跳超时/关闭下线、同司机新连接顶旧连接已落地并通过 `mvn -pl driver-api test`；多实例 Sticky/PubSub 仍后续。 |
+| 2026-06-03 | **下单 Idempotency-Key 落地**：乘客下单两个入口强制 Header，`passenger-api` 透传至 `order-service`，`order_idempotent_record` 覆盖 `CREATE_ORDER` 请求级幂等；其它写接口幂等仍后续。 |
+| 2026-06-03 | **两段式异步指派主路径落地**：`POST /app/api/v1/orders` 不再同步 assign/openOffer，创建订单后由 Outbox + Kafka + capacity consumer 异步推进派单；`mvn -pl passenger-api test`、`mvn -pl order test` 已通过。 |

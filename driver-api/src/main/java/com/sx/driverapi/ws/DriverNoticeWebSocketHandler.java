@@ -1,5 +1,6 @@
 package com.sx.driverapi.ws;
 
+import com.sx.driverapi.service.DriverBffService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,7 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
     private final DriverWsSessionRegistry registry;
     private final DriverWsProperties props;
     private final DriverAssignedPushService assignedPushService;
+    private final DriverBffService driverBffService;
     private final ScheduledExecutorService wsMaintenanceExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "driver-ws-maintenance");
         t.setDaemon(true);
@@ -32,10 +34,12 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
 
     public DriverNoticeWebSocketHandler(DriverWsSessionRegistry registry,
                                         DriverWsProperties props,
-                                        DriverAssignedPushService assignedPushService) {
+                                        DriverAssignedPushService assignedPushService,
+                                        DriverBffService driverBffService) {
         this.registry = registry;
         this.props = props;
         this.assignedPushService = assignedPushService;
+        this.driverBffService = driverBffService;
     }
 
     @PostConstruct
@@ -97,11 +101,10 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        var ds = registry.getBySessionId(session.getId());
+        var ds = registry.removeBySession(session);
         if (ds != null) {
             markPresenceDisconnected(ds.getDriverId(), "ws-closed");
         }
-        registry.removeBySession(session);
     }
 
     public void scheduledPushAssigned() {
@@ -119,15 +122,23 @@ public class DriverNoticeWebSocketHandler extends TextWebSocketHandler {
             if (now - ds.lastSeenAtMs() > timeout) {
                 log.info("WS heartbeat timeout driverId={} lastSeen={} now={}",
                         ds.getDriverId(), Instant.ofEpochMilli(ds.lastSeenAtMs()), Instant.ofEpochMilli(now));
-                markPresenceDisconnected(ds.getDriverId(), "heartbeat-timeout");
-                registry.safeClose(ds.getSession(), CloseStatus.SESSION_NOT_RELIABLE);
-                registry.removeBySession(ds.getSession());
+                var removed = registry.removeBySession(ds.getSession());
+                if (removed != null) {
+                    markPresenceDisconnected(removed.getDriverId(), "heartbeat-timeout");
+                    registry.safeClose(removed.getSession(), CloseStatus.SESSION_NOT_RELIABLE);
+                }
             }
         }
     }
 
     private void markPresenceDisconnected(long driverId, String reason) {
         log.info("driver ws disconnected driverId={} reason={}", driverId, reason);
+        try {
+            driverBffService.setOnline(driverId, false, null, null);
+        } catch (Exception e) {
+            log.warn("driver ws offline sync failed driverId={} reason={} err={}",
+                    driverId, reason, e.toString());
+        }
     }
 
     private void safeScheduledPushAssigned() {

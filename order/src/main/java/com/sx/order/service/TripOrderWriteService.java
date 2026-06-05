@@ -2,10 +2,12 @@ package com.sx.order.service;
 
 import com.sx.order.common.exception.OrderConflictException;
 import com.sx.order.common.util.OrderNoUtil;
+import com.sx.order.dao.OrderIdempotentRecordMapper;
 import com.sx.order.dao.OrderOutboxEventMapper;
 import com.sx.order.dao.OrderEventEntityMapper;
 import com.sx.order.dao.TripOrderEntityMapper;
 import com.sx.order.model.OrderEvent;
+import com.sx.order.model.OrderIdempotentRecord;
 import com.sx.order.model.OrderOutboxEvent;
 import com.sx.order.model.TripOrder;
 import com.sx.order.model.dto.AssignOrderBody;
@@ -24,10 +26,16 @@ import org.springframework.transaction.annotation.Transactional;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 @Service
 @Slf4j
@@ -48,6 +56,10 @@ public class TripOrderWriteService {
     private static final int CANCEL_BY_PASSENGER = 1;
     /** 与表注释一致：系统取消（如司机已接其他单） */
     private static final int CANCEL_BY_SYSTEM = 3;
+    private static final String IDEMPOTENT_ACTION_CREATE_ORDER = "CREATE_ORDER";
+    private static final String IDEMPOTENT_STATUS_PROCESSING = "PROCESSING";
+    private static final String IDEMPOTENT_STATUS_SUCCESS = "SUCCESS";
+    private static final String IDEMPOTENT_STATUS_FAILED = "FAILED";
 
     /**
      * 系统取消原因：待派单超时（order-service 定时任务），与 passenger 提示一致。
@@ -57,6 +69,7 @@ public class TripOrderWriteService {
     private final TripOrderEntityMapper tripOrderEntityMapper;
     private final OrderEventEntityMapper orderEventEntityMapper;
     private final OrderOutboxEventMapper orderOutboxEventMapper;
+    private final OrderIdempotentRecordMapper orderIdempotentRecordMapper;
     private final ObjectMapper objectMapper;
     private final DriverPassengerMatchBlockService matchBlockService;
     private final PassengerOrderChangedNotifier passengerOrderChangedNotifier;
@@ -64,12 +77,14 @@ public class TripOrderWriteService {
     public TripOrderWriteService(TripOrderEntityMapper tripOrderEntityMapper,
                                  OrderEventEntityMapper orderEventEntityMapper,
                                  OrderOutboxEventMapper orderOutboxEventMapper,
+                                 OrderIdempotentRecordMapper orderIdempotentRecordMapper,
                                  ObjectMapper objectMapper,
                                  DriverPassengerMatchBlockService matchBlockService,
                                  PassengerOrderChangedNotifier passengerOrderChangedNotifier) {
         this.tripOrderEntityMapper = tripOrderEntityMapper;
         this.orderEventEntityMapper = orderEventEntityMapper;
         this.orderOutboxEventMapper = orderOutboxEventMapper;
+        this.orderIdempotentRecordMapper = orderIdempotentRecordMapper;
         this.objectMapper = objectMapper;
         this.matchBlockService = matchBlockService;
         this.passengerOrderChangedNotifier = passengerOrderChangedNotifier;
@@ -81,6 +96,56 @@ public class TripOrderWriteService {
      */
     @Transactional
     public String create(CreateOrderBody body) {
+        return createInternal(body);
+    }
+
+    @Transactional
+    public String create(CreateOrderBody body, String idempotencyKey) {
+        String requestId = normalizeIdempotencyKey(idempotencyKey);
+        String requestHash = requestHash(body);
+        OrderIdempotentRecord existing = selectIdempotentRecord(requestId);
+        if (existing != null) {
+            return resolveExistingCreateRequest(existing, requestHash);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        OrderIdempotentRecord record = new OrderIdempotentRecord()
+                .setRequestId(requestId)
+                .setActionType(IDEMPOTENT_ACTION_CREATE_ORDER)
+                .setPassengerId(body.getPassengerId())
+                .setOrderNo(null)
+                .setStatus(IDEMPOTENT_STATUS_PROCESSING)
+                .setRequestHash(requestHash)
+                .setResponseSnapshot(null)
+                .setCreatedAt(now)
+                .setUpdatedAt(now);
+        try {
+            orderIdempotentRecordMapper.insert(record);
+        } catch (DuplicateKeyException e) {
+            OrderIdempotentRecord raced = selectIdempotentRecord(requestId);
+            if (raced != null) {
+                return resolveExistingCreateRequest(raced, requestHash);
+            }
+            throw e;
+        }
+
+        try {
+            String orderNo = createInternal(body);
+            record.setOrderNo(orderNo)
+                    .setStatus(IDEMPOTENT_STATUS_SUCCESS)
+                    .setResponseSnapshot(buildCreateResponseSnapshot(orderNo))
+                    .setUpdatedAt(LocalDateTime.now());
+            orderIdempotentRecordMapper.updateById(record);
+            return orderNo;
+        } catch (RuntimeException e) {
+            record.setStatus(IDEMPOTENT_STATUS_FAILED)
+                    .setUpdatedAt(LocalDateTime.now());
+            orderIdempotentRecordMapper.updateById(record);
+            throw e;
+        }
+    }
+
+    private String createInternal(CreateOrderBody body) {
         //查看是否有进行中的订单
         assertNoActiveOrderForPassenger(body.getPassengerId());
 
@@ -144,6 +209,96 @@ public class TripOrderWriteService {
 
         log.info("订单已创建 orderNo={} passengerId={} cityCode={}", orderNo, body.getPassengerId(), body.getCityCode());
         return orderNo;
+    }
+
+    private OrderIdempotentRecord selectIdempotentRecord(String requestId) {
+        return orderIdempotentRecordMapper.selectOne(Wrappers.<OrderIdempotentRecord>lambdaQuery()
+                .eq(OrderIdempotentRecord::getRequestId, requestId)
+                .last("LIMIT 1"));
+    }
+
+    private String resolveExistingCreateRequest(OrderIdempotentRecord existing, String requestHash) {
+        if (!IDEMPOTENT_ACTION_CREATE_ORDER.equals(existing.getActionType())) {
+            throw new OrderConflictException("同一 Idempotency-Key 已用于其它操作");
+        }
+        if (!Objects.equals(existing.getRequestHash(), requestHash)) {
+            throw new OrderConflictException("同一 Idempotency-Key 不能用于不同下单内容");
+        }
+        if (IDEMPOTENT_STATUS_SUCCESS.equals(existing.getStatus()) && StringUtils.hasText(existing.getOrderNo())) {
+            log.info("下单幂等命中 requestId={} orderNo={}", existing.getRequestId(), existing.getOrderNo());
+            return existing.getOrderNo();
+        }
+        if (IDEMPOTENT_STATUS_PROCESSING.equals(existing.getStatus())) {
+            throw new OrderConflictException("请求处理中，请稍后重试");
+        }
+        if (IDEMPOTENT_STATUS_FAILED.equals(existing.getStatus())) {
+            throw new OrderConflictException("该 Idempotency-Key 对应的下单请求已失败，请重新发起下单");
+        }
+        throw new OrderConflictException("该 Idempotency-Key 状态异常，请重新发起下单");
+    }
+
+    private String normalizeIdempotencyKey(String idempotencyKey) {
+        if (!StringUtils.hasText(idempotencyKey)) {
+            throw new IllegalArgumentException("Idempotency-Key不能为空");
+        }
+        String key = idempotencyKey.trim();
+        if (key.length() > 128) {
+            throw new IllegalArgumentException("Idempotency-Key长度不能超过128");
+        }
+        return key;
+    }
+
+    private String requestHash(CreateOrderBody body) {
+        try {
+            Map<String, Object> root = new LinkedHashMap<>();
+            root.put("passengerId", body.getPassengerId());
+            root.put("provinceCode", body.getProvinceCode());
+            root.put("cityCode", body.getCityCode());
+            root.put("productCode", body.getProductCode());
+            root.put("origin", placeHashMap(body.getOrigin()));
+            root.put("dest", placeHashMap(body.getDest()));
+            root.put("estimatedAmount", decimalText(body.getEstimatedAmount()));
+            root.put("fareRuleId", body.getFareRuleId());
+            root.put("fareRuleSnapshot", body.getFareRuleSnapshot());
+            String json = objectMapper.writeValueAsString(root);
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = md.digest(json.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("下单幂等请求哈希生成失败", e);
+        }
+    }
+
+    private static Map<String, Object> placeHashMap(com.sx.order.model.dto.Place place) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("lat", place == null ? null : decimalText(place.getLat()));
+        out.put("lng", place == null ? null : decimalText(place.getLng()));
+        out.put("address", place == null ? null : trimToNull(place.getAddress()));
+        return out;
+    }
+
+    private static String decimalText(BigDecimal value) {
+        return value == null ? null : value.stripTrailingZeros().toPlainString();
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String t = value.trim();
+        return t.isEmpty() ? null : t;
+    }
+
+    private String buildCreateResponseSnapshot(String orderNo) {
+        try {
+            return objectMapper.writeValueAsString(Map.of("orderNo", orderNo));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("下单幂等响应快照序列化失败", e);
+        }
     }
 
     private String buildDispatchRequestedPayload(CreateOrderBody body, String orderNo, Long outboxId, LocalDateTime now) {

@@ -45,6 +45,7 @@ import java.util.Map;
 public class TripOrderController {
 
     private static final String USER_ID_HEADER = "X-User-Id";
+    private static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 
     private final TripOrderEntityMapper tripOrderEntityMapper;
     private final TripOrderWriteService tripOrderWriteService;
@@ -60,8 +61,12 @@ public class TripOrderController {
      * {@code POST /api/v1/orders}
      */
     @PostMapping
-    public ResponseVo<CreateOrderResult> create(@RequestBody @Valid CreateOrderBody body) {
-        String orderNo = tripOrderWriteService.create(body);
+    public ResponseVo<CreateOrderResult> create(@RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
+                                                @RequestBody @Valid CreateOrderBody body) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return ResultUtil.requestError("Idempotency-Key不能为空");
+        }
+        String orderNo = tripOrderWriteService.create(body, idempotencyKey);
         return ResultUtil.success(new CreateOrderResult(orderNo));
     }
 

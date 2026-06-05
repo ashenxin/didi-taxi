@@ -12,7 +12,6 @@ import com.sx.passengerapi.model.map.GeocodeDemoResponse;
 import com.sx.passengerapi.model.map.Point;
 import com.sx.passengerapi.model.map.RouteRequest;
 import com.sx.passengerapi.model.map.RouteResponse;
-import com.sx.passengerapi.model.order.AssignedDriver;
 import com.sx.passengerapi.model.order.CancelOrderRequest;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderBody;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderResult;
@@ -193,7 +192,7 @@ public class PassengerOrderService {
      * 当前实现会把 estimate 的 {@code estimatedAmount/ruleId} 透传给 order-service，
      * 便于订单侧留痕与后续对账。
      */
-    public CreateOrderResult createOrder(CreateAndAssignOrderBody body, EstimateFareResult estimate) {
+    public CreateOrderResult createOrder(CreateAndAssignOrderBody body, EstimateFareResult estimate, String idempotencyKey) {
         CreateOrderBody req = new CreateOrderBody();
         req.setPassengerId(body.getPassengerId());
         req.setProvinceCode(body.getProvinceCode());
@@ -205,7 +204,7 @@ public class PassengerOrderService {
         req.setFareRuleId(estimate == null ? null : estimate.getRuleId());
         req.setFareRuleSnapshot(null);
 
-        var resp = orderClient.create(req);
+        var resp = orderClient.create(idempotencyKey, req);
         if (resp == null) {
             throw new BizErrorException(502, "订单服务响应为空");
         }
@@ -287,62 +286,19 @@ public class PassengerOrderService {
     }
 
     /**
-     * 对外“一步 createAndAssign”的同步编排实现（当前版本）。
+     * 对外“一步下单”入口：HTTP 请求只保证订单创建成功，派单由 order Outbox + Kafka + capacity 异步推进。
      *
-     * 同步链路：地理编码补坐标（如需）→ route → nearestDriver（取 companyId）→ estimate → order.create → assign。
-     *
-     * 后续推荐演进为“对内两段式”：
-     * 先落库创建订单 + 写 outbox/event，再由调度器异步执行找司机与指派，避免分布式事务与长耗时链路。
+     * 返回结构沿用 {@link CreateAndAssignOrderResult}，但主路径不再同步执行 assign/openOffer。
      */
-    public CreateAndAssignOrderResult createAndAssign(CreateAndAssignOrderBody body) {
-        resolveCoordinatesByGeocodeIfNeeded(body);//缺经纬度调map补齐
-        RouteResponse route = route(body);//路线预估（高德驾车）
-        NearestDriverResult nearest = searchNearestDriver(body);//最近司机（用于 company 维度估价）
-        Long companyId = nearest == null ? null : nearest.getCompanyId();
-        EstimateFareResult estimate = estimate(body, route, companyId);//费用预估（无候选司机则跳过）
-        CreateOrderResult created = createOrder(body, estimate);//创建订单
-        String orderNo = created == null ? null : created.getOrderNo();
-        if (orderNo == null || orderNo.isBlank()) {
-            throw new BizErrorException(502, "订单创建失败：orderNo为空");
-        }
-
-        // ETA 暂时用 route 的 duration 做占位（真实 ETA 后续接 map.matrix）
-        Long etaSeconds = route == null ? null : route.getDurationSeconds();
-        if (nearest != null) {
-            assignOrder(orderNo, nearest, etaSeconds);//指派司机
-            openDriverOffer(orderNo);
-            registerPendingOrderIndex(nearest.getDriverId(), orderNo);
-        }
-
+    public CreateAndAssignOrderResult createAndAssign(CreateAndAssignOrderBody body, String idempotencyKey) {
+        CreateOrderResultV1 created = createTwoPhase(body, idempotencyKey);
         CreateAndAssignOrderResult out = new CreateAndAssignOrderResult();
-        out.setOrderNo(orderNo);
-        out.setRoute(route);
-        out.setEstimate(estimate);
-
-        if (nearest == null) {
-            out.setStatus(OrderStatus.CREATED);
-            out.setAssignedDriver(null);
-        } else {
-            var detail = orderClient.getByOrderNo(orderNo);
-            if (detail == null || detail.getCode() == null || detail.getCode() != 200 || detail.getData() == null) {
-                throw new BizErrorException(502, "订单状态刷新失败");
-            }
-            TripOrderRow row = detail.getData();
-            out.setStatus(OrderStatus.fromCode(row.getStatus()));
-            AssignedDriver ad = new AssignedDriver();
-            ad.setDriverId(nearest.getDriverId());
-            ad.setCarId(nearest.getCarId());
-            ad.setCompanyId(nearest.getCompanyId());
-            ad.setCarNo(nearest.getCarNo());
-            ad.setEtaSeconds(etaSeconds);
-            out.setAssignedDriver(ad);
-        }
-        log.info("创建并指派完成 orderNo={} passengerId={} assigned={}",
-                orderNo, body.getPassengerId(), nearest != null);
-        Long pid = body.getPassengerId();
-        if (pid != null) {
-            passengerWsNotifyService.notifyOrderChanged(pid, orderNo);
-        }
+        out.setOrderNo(created.getOrderNo());
+        out.setStatus(created.getStatus());
+        out.setAssignedDriver(created.getAssignedDriver());
+        out.setRoute(created.getRoute());
+        out.setEstimate(created.getEstimate());
+        log.info("一步下单已创建，派单异步推进 orderNo={} passengerId={}", out.getOrderNo(), body.getPassengerId());
         return out;
     }
 
@@ -350,13 +306,13 @@ public class PassengerOrderService {
      * 对外“两段式 create”：路线预估 →（可选）最近司机用于 company 维度估价 → 创建订单；
      * 不做同步指派与打开确认窗口。
      */
-    public CreateOrderResultV1 createTwoPhase(CreateAndAssignOrderBody body) {
+    public CreateOrderResultV1 createTwoPhase(CreateAndAssignOrderBody body, String idempotencyKey) {
         resolveCoordinatesByGeocodeIfNeeded(body);
         RouteResponse route = route(body);
         NearestDriverResult nearest = searchNearestDriver(body);
         Long companyId = nearest == null ? null : nearest.getCompanyId();
         EstimateFareResult estimate = estimate(body, route, companyId);
-        CreateOrderResult created = createOrder(body, estimate);
+        CreateOrderResult created = createOrder(body, estimate, idempotencyKey);
         String orderNo = created == null ? null : created.getOrderNo();
         if (orderNo == null || orderNo.isBlank()) {
             throw new BizErrorException(502, "订单创建失败：orderNo为空");
