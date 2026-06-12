@@ -1,7 +1,6 @@
 package com.sx.capacity.service.geo;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.geo.Circle;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
@@ -12,7 +11,6 @@ import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -27,12 +25,8 @@ public class DriverGeoRedisPool {
     private static final String KEY_PREFIX = "tx:driver:geo:";
 
     private final StringRedisTemplate redis;
-    private final int geoTtlSeconds;
-
-    public DriverGeoRedisPool(StringRedisTemplate redis,
-                              @Value("${capacity.dispatch.driver-geo-ttl-seconds:600}") int geoTtlSeconds) {
+    public DriverGeoRedisPool(StringRedisTemplate redis) {
         this.redis = redis;
-        this.geoTtlSeconds = geoTtlSeconds;
     }
 
     public void add(String cityCode, Long driverId, double lat, double lng) {
@@ -43,7 +37,6 @@ public class DriverGeoRedisPool {
         Point point = new Point(lng, lat);
         try {
             redis.opsForGeo().add(key, point, String.valueOf(driverId));
-            redis.expire(key, Duration.ofSeconds(Math.max(60, geoTtlSeconds)));
         } catch (Exception e) {
             log.warn("司机地理位置写入失败 cityCode={} driverId={}: {}", cityCode, driverId, e.toString());
         }

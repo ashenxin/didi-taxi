@@ -7,6 +7,7 @@ import com.sx.capacity.common.vo.PageVo;
 import com.sx.capacity.common.vo.ResponseVo;
 import com.sx.capacity.model.Driver;
 import com.sx.capacity.model.dto.DriverOnlineBody;
+import com.sx.capacity.model.dto.DriverHeartbeatBody;
 import com.sx.capacity.service.DriverStatusService;
 import jakarta.validation.Valid;
 
@@ -37,6 +38,16 @@ public class DriverController {
     public DriverController(DriverEntityMapper driverEntityMapper, DriverStatusService driverStatusService) {
         this.driverEntityMapper = driverEntityMapper;
         this.driverStatusService = driverStatusService;
+    }
+
+    @PostMapping("/{driverId}/heartbeat")
+    public ResponseVo<Void> heartbeat(@PathVariable Long driverId, @RequestBody DriverHeartbeatBody body) {
+        try {
+            driverStatusService.heartbeat(driverId, body == null ? null : body.getLat(), body == null ? null : body.getLng());
+            return ResultUtil.success(null);
+        } catch (IllegalArgumentException ex) {
+            return ResultUtil.requestError(ex.getMessage());
+        }
     }
 
     /**

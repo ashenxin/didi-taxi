@@ -101,9 +101,9 @@
 #### 2.1.1 已实现（与文档对齐要点，便于区分「未做」）
 
 - 一步下单、`createAndAssign`、订单详情、`cancel`；乘客端稳态通过 WS `ORDER_CHANGED` 触发拉取一次 HTTP 详情，WS 不可用时才降级轮询；**等待态累计 180s 系统取消**覆盖 `CREATED / ASSIGNED / PENDING_DRIVER_CONFIRM`（XXL `orderCreatedDispatchTimeoutScan`，建议 **30s**）+ **offer 30s 超时释放指派**（XXL `orderOfferTimeoutScan`，建议 **5s**，释放回 `CREATED` 并重派）。
-- **司机池 GEO + 最近司机派单**（capacity）、**迟滞匹配**：司机上线触发（`LateDispatchMatchService.tryMatchAfterDriverOnline`）+ **XXL 定时兜底**（`capacityLateDispatchScan` → `listPendingDispatchAll` / order `GET .../internal/pending-dispatch-all` → GEO 最近候选 `assign` + `openDriverOffer`）、**指派后订单池索引**（`pending-order-index`）。配置：`late-match-scan-interval-ms` 默认 15s、`late-match-batch-limit`；**`driver-geo-ttl-seconds` 默认 1800s**。
+- **司机池 GEO + 司机级 Presence + 最近司机派单**（capacity）、**迟滞匹配**：司机上线/心跳更新 GEO 与 `tx:driver:presence:{cityCode}`；匹配过滤超时 Presence；XXL `capacityDriverPresenceCleanup` 清理超时司机并下线。迟滞匹配仍由司机入池触发 + `capacityLateDispatchScan` 定时兜底。
 - **下线 / 登出删司机池**：听单开关 `online:false` 与 **`driver-api` `POST .../auth/logout`** 均 Feign 调用运力 `POST .../drivers/{id}/online`（`online:false`），`DriverStatusService` 落库 `monitor_status=0` 并在事务提交后 **`DriverGeoRedisPool.remove`**；司机 `cityCode` 为空时无法按 key 移除会打 warn。
-- **司机登出批量拒指派**：`driver-api` 登出 **先** 对 **`listAssignedToDriver`**（**`ASSIGNED` / `PENDING_DRIVER_CONFIRM`**）逐单 **`reject`**，`reasonCode` **`DRIVER_LOGOUT`**（与手动拒单同链路，通常 **`CREATED` + 重派**），**再** 下线、**`driver:tv` INCR**。详见《`司机端_登录注册_API.md`》§7。
+- **司机登出批量释放/释单**：`driver-api` 登出 **先** 对 **`listAssignedToDriver`**（**`ASSIGNED` / `PENDING_DRIVER_CONFIRM`**）逐单 **`reject`**，`reasonCode` **`DRIVER_LOGOUT`**（与手动拒单同链路，通常 **`CREATED + 重派`**）；随后对司机 **`ACCEPTED` 且未到达** 订单复用到达前取消链路释单，回到 **`CREATED`** 并重派；再下线、**`driver:tv` INCR**。详见《`司机端_登录注册_API.md`》§7。
 - 状态机含 **`PENDING_DRIVER_CONFIRM`**、`openDriverOffer`、`accept` 多笔待确认互斥系统取消等（以 `TripOrderWriteService` 为准）；**确认窗时长默认 30s**（`capacity.dispatch.driver-offer-seconds` 等与 order/passenger-api 对齐）。
 - **改派 / 下一轮 offer**：新主路径由 `orderOfferTimeoutScan` 将超时单释放回 `CREATED` 并再次投递派单 Outbox；**capacity** `capacityOfferRescheduleScan`（默认 5s）保留为历史 `ASSIGNED` 待改派兜底，拉取 order `GET .../internal/assigned-awaiting-reschedule` 后推进下一轮 offer/改派。
 - **司机-乘客隔离匹配（30 分钟）**：司机拒单/到达前取消后写 Redis 键 `tx:dispatch:block:dp:{driverId}:{passengerId}`（TTL 30m）；capacity 派单（Kafka 首派 + 迟滞匹配）与 order `assigned` 列表均跳过该组合。确认窗超时不写隔离键，下一轮仍可再次派给该司机。
@@ -114,19 +114,19 @@
 
 | 优先级 | 项 | 说明（文档出处） |
 |--------|-----|------------------|
-| **中** | **乘客 WS 多实例广播** | 单机内存会话 + `ORDER_CHANGED` 已支持；**Redis Pub** 跨实例仍属后续，见《乘客端与司机端_WebSocket_对比.md》**§0**。 |
+| **不开发（本阶段）** | **乘客 WS 多实例广播** | 单机内存会话 + `ORDER_CHANGED` 已支持；当前项目按单实例/本地联调验收，**不开发 Redis Pub/Sub 跨实例广播**；相关设计仅作为未来扩展资料保留。 |
 | **中** | **接驾 ETA（司机位置 → 上车点）** | 《最小闭环》附录/表格：当前 ETA 多为占位或路线时长；**matrix + 实时坐标** 未接。 |
 | **低** | **`passenger_display_code` 字段体系化** | 当前已通过详情 `reDispatching` 满足乘客端“重派中”展示；如需统一多端枚举仍可后续补标准 display_code。 |
 | **已完成（主路径）/ 中（运维增强）** | **两段式异步指派 + Outbox + Kafka** | `POST /app/api/v1/orders` 已切换为两段式主路径：`passenger-api` 只做 geocode/route/estimate + 创建订单，`order-service` 同事务写 `order_outbox_event`，`orderOutboxPublish` 投 Kafka，`capacity-service` 消费后 `assign + openOffer`。后续增强：Outbox/Kafka 指标、DLQ、运维告警与生产参数。 |
 | **已完成（下单）/ 中（扩展）** | **幂等键 `Idempotency-Key`** | 乘客下单 `POST /app/api/v1/orders` 与 `/orders/create` 已要求 Header 并透传 order-service；order 侧 `order_idempotent_record` 已覆盖 `CREATE_ORDER`，同 key 同请求体返回同一 `orderNo`，同 key 不同请求体返回 409。取消、接单、拒单等其它写接口后续再扩展。 |
 | **低** | **轮询顺带触发匹配（限频）** | 《Redis》**§6.2**：可选；**默认不做**。 |
-| **中** | **司机登出与乘客登出 / PRD §5.6 完全同口径** | **已实现**：待接指派登出时 **`reject(DRIVER_LOGOUT)`** → 多为 **`CREATED` + 重派**。**仍差**：**`ACCEPTED`** 登出 **不会** 自动到达前释单；与乘客 **`cancel→CANCELLED`** 不一致。见《`司机端_登录注册_API.md`》§7、《`第一期MVP_乘客派单司机闭环_API.md`》§3.1。 |
+| **已完成** | **司机 `ACCEPTED` 登出自动释单** | 待接指派登出时 **`reject(DRIVER_LOGOUT)`** → **`CREATED + 重派`**；司机 **`ACCEPTED` 且未到达** 登出自动 **释放改派 / 释单**，复用司机到达前取消链路 **`ACCEPTED → CREATED`**，不生成乘客侧 **`CANCELLED`** 终态。 |
 
 ### 2.2 Redis 司机池 / 订单池
 
 | 优先级 | 项 | 说明 |
 |--------|-----|------|
-| **中** | **司机心跳续 GEO + TTL 策略** | 文档要求听单期 **心跳更新坐标**、防僵尸；当前以 **上线写 GEO + key TTL** 为主，**无**独立心跳接口周期。 |
+| **已完成（单实例）** | **司机心跳续 GEO + Presence 过期策略** | 司机 H5 听单期间约 15s 调用 `POST /driver/api/v1/drivers/{driverId}/heartbeat`；capacity 使用按城市 Presence ZSET 保存司机级最后心跳，匹配过滤超时司机，XXL `capacityDriverPresenceCleanup` 清理并下线；城市 GEO key 不再使用整体 TTL。 |
 | **低** | **订单池与 DB 对账** | 《Redis》**§8.6**：可选对账；**未强制实现**。 |
 | **低** | **乘客 GET 顺带迟滞匹配** | 《Redis》流程图 **§8.5**：标注「可选须限频」；**未作为默认实现**。 |
 
@@ -136,8 +136,8 @@
 |--------|-----|------|
 | **已完成（单实例）** | **业务 WebSocket + 派单推送（替代高频轮询）** | `driver-api` 已支持 `/driver/ws/v1/stream`、`ws-token(audit=2)` 握手、`PING/PONG`、建连/变更推 `ASSIGNED_LIST`、接单/拒单/取消后强制刷新；司机 H5 现有逻辑在 WS 已连时不做 assigned 高频轮询，HTTP 仅手动/关键操作/断链兜底。 |
 | **已完成（单实例）** | **Presence 与断线裁决** | WS 正常关闭、心跳超时会调用 `DriverBffService.setOnline(false)`，复用 capacity 下线链路落库并清理司机池；同司机新 WS 连接会顶旧连接且不误触发下线。已补 `driver-api` 单元测试。 |
-| **低** | **登出后「待确认 offer 不再推送」** | HTTP 登出已 **批量拒指派**，列表不再含待确认单；WS 单连接与下线裁决已收口，后续只需继续关注多实例推送一致性。 |
-| **中** | **网关 WebSocket 路由与多实例** | 《网关服务_技术》**§3.1**：`/driver/**` 经网关至 `driver-api`；多副本 **Sticky / PubSub** 等（乘客侧跨实例已定 **Redis Pub**，可对照）。 |
+| **低** | **登出后「待确认 offer 不再推送」** | HTTP 登出已 **批量拒指派**，列表不再含待确认单；WS 单连接与下线裁决已收口。本阶段不再追加多实例推送一致性建设。 |
+| **不开发（本阶段）** | **乘客/司机 WS 多实例能力** | 本阶段只验收单实例内存 session + 网关 Upgrade 转发；**不开发 Sticky / Redis Pub/Sub / MQ 广播**。多实例资料保留在《网关服务_技术》《乘客端与司机端_WebSocket_对比.md》中，不列入近期开发计划。 |
 
 ### 2.4 网关
 
@@ -161,7 +161,9 @@
 |------|------|
 | 2026-04-25 | 合并两份清单为单一入口《TODO与差距总览.md》，并以后端更新更晚的后台核对状态为准（换队 POST / 车辆列表 / reviewedBy 已完成）。 |
 | 2026-04-29 | 更新乘客司机闭环状态：补记“30 分钟隔离匹配”“reDispatching 已实现”，并将 WebSocket+Presence 提升为下一阶段最高优先级。 |
-| 2026-04-30 | **乘客 WS 联调收口**：网关 **`GET /app/ws/`** JWT 白名单、`passenger-api` WS、H5 Demo；TODO **§2.1.2** 乘客 WS 条目更新为「已实现骨架/联调」；Redis 广播仍后续。 |
-| 2026-06-03 | **司机 WS 单实例主路径收口**：`driver-api` WS 握手鉴权、`ASSIGNED_LIST` 推送、`PING/PONG`、心跳超时/关闭下线、同司机新连接顶旧连接已落地并通过 `mvn -pl driver-api test`；多实例 Sticky/PubSub 仍后续。 |
+| 2026-04-30 | **乘客 WS 联调收口**：网关 **`GET /app/ws/`** JWT 白名单、`passenger-api` WS、H5 Demo；TODO **§2.1.2** 乘客 WS 条目更新为「已实现骨架/联调」（后续已在 2026-06-11 明确多实例广播本阶段不开发）。 |
+| 2026-06-03 | **司机 WS 单实例主路径收口**：`driver-api` WS 握手鉴权、`ASSIGNED_LIST` 推送、`PING/PONG`、心跳超时/关闭下线、同司机新连接顶旧连接已落地并通过 `mvn -pl driver-api test`；乘客/司机 WS 多实例能力本阶段不开发。 |
+| 2026-06-11 | **WS 多实例能力降级为不开发项**：乘客/司机 WS 保持单实例主路径验收，网关仅要求 Upgrade 转发；Sticky、Redis Pub/Sub、MQ 广播不列入近期开发计划。 |
 | 2026-06-03 | **下单 Idempotency-Key 落地**：乘客下单两个入口强制 Header，`passenger-api` 透传至 `order-service`，`order_idempotent_record` 覆盖 `CREATE_ORDER` 请求级幂等；其它写接口幂等仍后续。 |
 | 2026-06-03 | **两段式异步指派主路径落地**：`POST /app/api/v1/orders` 不再同步 assign/openOffer，创建订单后由 Outbox + Kafka + capacity consumer 异步推进派单；`mvn -pl passenger-api test`、`mvn -pl order test` 已通过。 |
+| 2026-06-05 | **司机级 Presence 与位置心跳落地**：新增司机心跳接口、Presence ZSET、匹配新鲜度过滤和 XXL 过期清理；修复城市 GEO key 整体 TTL 无法独立淘汰失联司机的问题。 |

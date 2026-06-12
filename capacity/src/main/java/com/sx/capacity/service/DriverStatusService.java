@@ -5,6 +5,7 @@ import com.sx.capacity.config.CapacityDispatchProperties;
 import com.sx.capacity.dao.DriverEntityMapper;
 import com.sx.capacity.model.Driver;
 import com.sx.capacity.service.geo.DriverGeoRedisPool;
+import com.sx.capacity.service.geo.DriverPresenceRedisPool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,15 +21,18 @@ public class DriverStatusService {
 
     private final DriverEntityMapper driverEntityMapper;
     private final DriverGeoRedisPool driverGeoRedisPool;
+    private final DriverPresenceRedisPool driverPresenceRedisPool;
     private final LateDispatchMatchService lateDispatchMatchService;
     private final CapacityDispatchProperties dispatchProperties;
 
     public DriverStatusService(DriverEntityMapper driverEntityMapper,
                                DriverGeoRedisPool driverGeoRedisPool,
+                               DriverPresenceRedisPool driverPresenceRedisPool,
                                LateDispatchMatchService lateDispatchMatchService,
                                CapacityDispatchProperties dispatchProperties) {
         this.driverEntityMapper = driverEntityMapper;
         this.driverGeoRedisPool = driverGeoRedisPool;
+        this.driverPresenceRedisPool = driverPresenceRedisPool;
         this.lateDispatchMatchService = lateDispatchMatchService;
         this.dispatchProperties = dispatchProperties;
     }
@@ -70,14 +74,18 @@ public class DriverStatusService {
             @Override
             public void afterCommit() {
                 try {
-                    if (on && flat != null && flng != null) {
-                        driverGeoRedisPool.add(cityCode, did, flat, flng);
-                        lateDispatchMatchService.tryMatchAfterDriverOnline(did, cityCode, flat, flng);
-                    } else if (!on) {
+                    if (on) {
+                        driverPresenceRedisPool.touch(cityCode, did);
+                        if (flat != null && flng != null) {
+                            driverGeoRedisPool.add(cityCode, did, flat, flng);
+                            lateDispatchMatchService.tryMatchAfterDriverOnline(did, cityCode, flat, flng);
+                        }
+                    } else {
                         if (cityCode == null || cityCode.isBlank()) {
                             log.warn("司机下线/登出同步：cityCode 为空，无法从 Redis GEO 移除 driverId={}", did);
                         } else {
                             driverGeoRedisPool.remove(cityCode, did);
+                            driverPresenceRedisPool.remove(cityCode, did);
                         }
                     }
                 } catch (Exception e) {
@@ -85,6 +93,19 @@ public class DriverStatusService {
                 }
             }
         });
+    }
+
+    /**
+     * 听单心跳：仅允许当前仍处于听单状态的司机续 Presence；携带坐标时同时更新 GEO。
+     */
+    public void heartbeat(Long driverId, Double lat, Double lng) {
+        Driver d = requireListeningDriver(driverId);
+        validateCoordinates(lat, lng);
+        double[] geoUse = resolveOnlineGeoCoords(driverId, lat, lng);
+        if (geoUse != null) {
+            driverGeoRedisPool.add(d.getCityCode(), driverId, geoUse[0], geoUse[1]);
+        }
+        driverPresenceRedisPool.touch(d.getCityCode(), driverId);
     }
 
     /**
@@ -113,6 +134,10 @@ public class DriverStatusService {
      * 接单前校验：司机存在、可接单、且已上线听单（{@code monitor_status=1}）。
      */
     public void assertReadyToAccept(Long driverId) {
+        requireListeningDriver(driverId);
+    }
+
+    private Driver requireListeningDriver(Long driverId) {
         if (driverId == null) {
             throw new IllegalArgumentException("driverId不能为空");
         }
@@ -128,6 +153,16 @@ public class DriverStatusService {
         }
         if (!Objects.equals(d.getMonitorStatus(), 1)) {
             throw new IllegalArgumentException("请先上线听单");
+        }
+        return d;
+    }
+
+    private static void validateCoordinates(Double lat, Double lng) {
+        if ((lat == null) != (lng == null)) {
+            throw new IllegalArgumentException("lat与lng必须同时提供");
+        }
+        if (lat != null && (lat < -90 || lat > 90 || lng < -180 || lng > 180)) {
+            throw new IllegalArgumentException("经纬度超出合法范围");
         }
     }
 }

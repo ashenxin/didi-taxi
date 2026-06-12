@@ -647,6 +647,20 @@ public class TripOrderWriteService {
     }
 
     /**
+     * 司机已接单但尚未到达的订单，用于司机登出时自动释单改派。
+     */
+    public List<TripOrder> listAcceptedBeforeArriveToDriver(Long driverId) {
+        if (driverId == null) {
+            throw new IllegalArgumentException("driverId不能为空");
+        }
+        return tripOrderEntityMapper.selectList(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getDriverId, driverId)
+                .eq(TripOrder::getStatus, STATUS_ACCEPTED)
+                .eq(TripOrder::getIsDeleted, 0)
+                .orderByDesc(TripOrder::getAcceptedAt));
+    }
+
+    /**
      * 待派单队列：{@code CREATED} 且起点坐标已落库，供运力服务做迟滞匹配（按创建时间升序）。
      */
     public List<PendingDispatchOrderDto> listCreatedForDispatch(String cityCode, int limit) {

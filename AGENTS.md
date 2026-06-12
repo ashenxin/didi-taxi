@@ -58,7 +58,7 @@
 - 司机 WS：`/driver/ws/**` 同类设计，司机端待确认指派应 WS 优先；HTTP assigned 仅用于首次加载、上线/关键操作后对账和手动刷新，避免依赖高频短轮询。
 - 网关对 `GET /app/ws/**`、`GET /driver/ws/**` 握手放行，实际身份由 BFF 校验小票。
 - 生产不要直连 BFF 端口；本地排障可以直连。
-- 多实例下乘客侧设计方向是 Redis Pub/Sub 广播，各节点有会话再下行。
+- 乘客/司机 WS 多实例能力本阶段不开发；当前只验收单实例内存会话与网关 Upgrade 转发，Redis Pub/Sub / Sticky 仅作为未来扩展资料保留。
 
 ### 鉴权与身份
 
@@ -256,9 +256,9 @@ mvn -pl passenger-api spring-boot:run
 
 以 `TODO与差距总览.md` 为准，常见需要注意的后续项：
 
-- 乘客 WS 已有骨架/联调，Redis Pub/Sub 跨实例广播仍需继续完善。
+- 乘客/司机 WS 单实例主路径已收口；Redis Pub/Sub / Sticky 跨实例广播本阶段不开发。
 - 司机端业务 WebSocket、Presence、断线裁决仍是重要后续方向。
 - 两段式异步指派、Outbox、Kafka 与 `Idempotency-Key` 仍需按专项方案推进。
 - 接驾 ETA 仍需实时坐标和 matrix 能力补齐。
-- 司机心跳续 GEO 与 TTL 防僵尸策略仍需加强。
+- 司机心跳续 GEO 与司机级 Presence 防僵尸策略已落地；XXL `capacityDriverPresenceCleanup` 仍需在运行环境配置启用。
 - 司机登出后 `ACCEPTED` 到达前释单口径与乘客侧取消口径仍有差异。

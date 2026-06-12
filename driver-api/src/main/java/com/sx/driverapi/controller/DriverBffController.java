@@ -4,6 +4,7 @@ import com.sx.driverapi.common.util.ResultUtil;
 import com.sx.driverapi.common.vo.ResponseVo;
 import com.sx.driverapi.model.capacity.DriverListeningStatusVO;
 import com.sx.driverapi.model.capacity.DriverOnlineBody;
+import com.sx.driverapi.model.capacity.DriverHeartbeatBody;
 import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
 import com.sx.driverapi.model.order.DriverOrderReasonBody;
@@ -55,6 +56,19 @@ public class DriverBffController {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(driverId, authedDriverId);
         driverBffService.setOnline(authedDriverId, Boolean.TRUE.equals(body.getOnline()), body.getLat(), body.getLng());
+        return ResultUtil.success();
+    }
+
+    /**
+     * 听单心跳：续司机级 Presence；携带坐标时同步更新 GEO。
+     */
+    @PostMapping("/drivers/{driverId}/heartbeat")
+    public ResponseVo<Void> heartbeat(@PathVariable Long driverId,
+                                      @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                      @RequestBody(required = false) DriverHeartbeatBody body) {
+        Long authedDriverId = requireAuthedDriverId(userId);
+        assertSameDriver(driverId, authedDriverId);
+        driverBffService.heartbeat(authedDriverId, body == null ? null : body.getLat(), body == null ? null : body.getLng());
         return ResultUtil.success();
     }
 

@@ -8,6 +8,7 @@ import com.sx.driverapi.common.exception.BizErrorException;
 import com.sx.driverapi.model.capacity.CapacityDriverDetail;
 import com.sx.driverapi.model.capacity.DriverListeningStatusVO;
 import com.sx.driverapi.model.capacity.DriverOnlineBody;
+import com.sx.driverapi.model.capacity.DriverHeartbeatBody;
 import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
 import com.sx.driverapi.model.order.DriverOrderReasonBody;
@@ -53,6 +54,13 @@ public class DriverBffService {
         body.setLng(lng);
         unwrap(capacityDriverClient.setOnline(driverId, body), "运力上线状态");
         log.info("司机在线状态已更新 driverId={} online={}", driverId, online);
+    }
+
+    public void heartbeat(Long driverId, Double lat, Double lng) {
+        DriverHeartbeatBody body = new DriverHeartbeatBody();
+        body.setLat(lat);
+        body.setLng(lng);
+        unwrap(capacityDriverClient.heartbeat(driverId, body), "司机听单心跳");
     }
 
     /**
@@ -136,6 +144,43 @@ public class DriverBffService {
             }
         }
         log.info("登出批量拒单完成 driverId={} attempted={}", driverId, pending.size());
+    }
+
+    /**
+     * 登出前：释放当前司机名下已接单但未到达的订单（{@code ACCEPTED → CREATED}），进入重新派单。
+     * 单条失败不阻断登出，仅打日志。
+     */
+    public void releaseAcceptedBeforeArriveOnLogout(long driverId) {
+        List<TripOrderRow> accepted;
+        try {
+            accepted = listAcceptedBeforeArrive(driverId);
+        } catch (Exception e) {
+            log.warn("登出查询已接未到订单失败 driverId={} err={}", driverId, e.toString());
+            return;
+        }
+        if (accepted == null || accepted.isEmpty()) {
+            return;
+        }
+        int attempted = 0;
+        for (TripOrderRow row : accepted) {
+            if (row == null || row.getOrderNo() == null || row.getOrderNo().isBlank()) {
+                continue;
+            }
+            attempted++;
+            try {
+                driverCancelBeforeArrive(row.getOrderNo(), driverId, REASON_DRIVER_LOGOUT);
+            } catch (Exception e) {
+                log.warn("登出释放已接未到订单跳过 orderNo={} driverId={} err={}",
+                        row.getOrderNo(), driverId, e.toString());
+            }
+        }
+        log.info("登出释放已接未到订单完成 driverId={} attempted={}", driverId, attempted);
+    }
+
+    public List<TripOrderRow> listAcceptedBeforeArrive(Long driverId) {
+        CoreResponseVo<List<TripOrderRow>> resp = orderClient.listAcceptedBeforeArrive(driverId, String.valueOf(driverId));
+        unwrap(resp, "拉取已接未到订单");
+        return resp.getData() == null ? List.of() : resp.getData();
     }
 
     public void driverCancelBeforeArrive(String orderNo, Long driverId, String reasonCode) {

@@ -2,6 +2,7 @@ package com.sx.capacity.xxl;
 
 import com.sx.capacity.service.LateDispatchMatchService;
 import com.sx.capacity.service.OfferRescheduleService;
+import com.sx.capacity.service.DriverPresenceCleanupService;
 import com.xxl.job.core.context.XxlJobHelper;
 import com.xxl.job.core.handler.annotation.XxlJob;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +16,7 @@ public class CapacityJobHandlers {
 
     private final LateDispatchMatchService lateDispatchMatchService;
     private final OfferRescheduleService offerRescheduleService;
+    private final DriverPresenceCleanupService driverPresenceCleanupService;
 
     /**
      * 迟滞匹配定时兜底：周期性扫描 CREATED 待派单，按 GEO 最近司机尝试指派。
@@ -55,5 +57,16 @@ public class CapacityJobHandlers {
             throw e;
         }
     }
-}
 
+    @XxlJob("capacityDriverPresenceCleanup")
+    public void driverPresenceCleanup() {
+        final long startMs = System.currentTimeMillis();
+        XxlJobHelper.log("[START] job=capacityDriverPresenceCleanup");
+        int n = driverPresenceCleanupService.cleanupExpired();
+        XxlJobHelper.log("[END] job=capacityDriverPresenceCleanup cleaned={} elapsedMs={}",
+                n, System.currentTimeMillis() - startMs);
+        if (n > 0) {
+            log.info("司机 Presence 过期清理：本轮下线 {} 名司机", n);
+        }
+    }
+}

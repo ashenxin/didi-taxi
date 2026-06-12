@@ -52,8 +52,9 @@ capacity:
   dispatch:
     # 司机与上车点直线距离上限（米），与《乘客司机端_Redis与听单下线策略》一致
     match-radius-meters: 3000
-    # 听单会话内 Redis GEO 点存活：过短会导致「库表仍听单但池里没人」；30min 与一次出车会话更匹配
-    driver-geo-ttl-seconds: 1800
+    # 司机级 Presence 超时；GEO 城市 key 不再使用整体 TTL
+    driver-heartbeat-timeout-seconds: 60
+    driver-presence-cleanup-batch-limit: 200
     # 司机确认接单窗口（秒）：10s 过易误杀；30s 兼顾体验与改派节奏
     driver-offer-seconds: 30
     # 迟滞匹配兜底：Kafka/首轮未命中时不宜等 30s 才捞 CREATED

@@ -231,10 +231,13 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 | `order.dispatch.offer-timeout-scan-interval-ms` | **5000** | `PENDING_DRIVER_CONFIRM` 过期释放指派、退回 `CREATED` 并重新派单的扫描间隔 |
 | `capacity.dispatch.offer-reschedule.scan-interval-ms` | **5000** | 历史 `ASSIGNED` 待改派兜底推进 |
 | `capacity.dispatch.late-match-scan-interval-ms` | **15000** | `CREATED` 迟滞匹配兜底扫描 |
-| `capacity.dispatch.driver-geo-ttl-seconds` | **1800** | 听单司机 Redis GEO 点 TTL（秒） |
+| `capacity.dispatch.driver-heartbeat-timeout-seconds` | **60** | 司机级 Presence 超时阈值；超过该时间未续心跳则匹配阶段过滤，清理任务会下线 |
+| `capacity.dispatch.driver-presence-cleanup-batch-limit` | **200** | Presence 过期清理单轮扫描批量上限 |
 | `order.dispatch.wait-timeout-seconds` | **180** | 等待态累计过久系统取消阈值（`CREATED / ASSIGNED / PENDING_DRIVER_CONFIRM`，从 `created_at` 起算） |
 | `order.dispatch.timeout-scan-interval-ms` | **30000** | 上述取消的扫描间隔 |
 | `driver.ws.assigned-poll-interval-ms` | **3000** | `driver-api` WS 侧拉指派并推送的间隔 |
+
+> 司机池 GEO 是城市共享 key（`tx:driver:geo:{cityCode}`），不再设置整个 key 的 TTL；失联剔除由 `tx:driver:presence:{cityCode}` 的司机级心跳分数与 `capacityDriverPresenceCleanup` 完成，避免一个司机续期导致同城所有失联司机残留。
 
 ### 6.2 XXL-JOB（Handler 名 → 建议周期）
 
@@ -245,6 +248,7 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 | `orderOutboxPublish` | **2～5s**（建议 **3s**） | Outbox 投递；无同名 Spring 定时 |
 | `capacityLateDispatchScan` | **15s** | 同 `late-match-scan-interval-ms` |
 | `capacityOfferRescheduleScan` | **5s** | 同 `offer-reschedule.scan-interval-ms`；历史 `ASSIGNED` 待改派兜底 |
+| `capacityDriverPresenceCleanup` | **30s** | 清理超过 `driver-heartbeat-timeout-seconds` 未续心跳的司机，移除 Presence/GEO 并落库下线 |
 
 ---
 

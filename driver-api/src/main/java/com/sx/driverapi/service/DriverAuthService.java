@@ -81,6 +81,7 @@ public class DriverAuthService {
             throw new BizErrorException(400, "driverId非法");
         }
         driverBffService.rejectAllPendingAssignsOnLogout(driverId);
+        driverBffService.releaseAcceptedBeforeArriveOnLogout(driverId);
         try {
             DriverOnlineBody body = new DriverOnlineBody();
             body.setOnline(false);
@@ -166,4 +167,3 @@ public class DriverAuthService {
         return out;
     }
 }
-

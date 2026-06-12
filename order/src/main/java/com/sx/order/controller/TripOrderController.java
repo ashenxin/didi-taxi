@@ -193,6 +193,29 @@ public class TripOrderController {
     }
 
     /**
+     * 司机名下已接单但尚未到达的订单列表（{@code ACCEPTED}），供司机登出自动释单。
+     * {@code GET /api/v1/orders/accepted}
+     */
+    @GetMapping("/accepted")
+    public ResponseVo<List<TripOrder>> listAcceptedBeforeArrive(@RequestParam(required = false) Long driverId,
+                                                                @RequestHeader(value = USER_ID_HEADER, required = false) String userId) {
+        try {
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(driverId, authedDriverId);
+            return ResultUtil.success(tripOrderWriteService.listAcceptedBeforeArriveToDriver(authedDriverId));
+        } catch (IllegalArgumentException ex) {
+            String msg = ex.getMessage();
+            if ("未授权，请重新登录".equals(msg)) {
+                return ResultUtil.error(401, msg);
+            }
+            if ("禁止操作其他司机数据".equals(msg)) {
+                return ResultUtil.error(403, msg);
+            }
+            return ResultUtil.requestError(msg);
+        }
+    }
+
+    /**
      * 司机接单：{@code ASSIGNED} 或 {@code PENDING_DRIVER_CONFIRM → ACCEPTED}（幂等：已为 ACCEPTED 则成功）。
      * {@code POST /api/v1/orders/{orderNo}/accept}
      */

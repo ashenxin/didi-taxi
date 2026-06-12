@@ -465,18 +465,18 @@
 
 统一前缀：`/driver/api/v1`
 
-### 3.1 司机登出（已实现：待接指派释放 + 下线 + token 作废）
+### 3.1 司机登出（已实现：待接释放 + 已接未到释单 + 下线 + token 作废）
 
 **POST** `/driver/api/v1/auth/logout`
 
-**说明（与 `driver-api` 实现对齐，2026-04）**
+**说明（与 `driver-api` 实现对齐）**
 
 1. **待接指派批量释放**：对该司机在订单侧 **`listAssignedToDriver`** 范围内的单子——即 **`ASSIGNED`**、**`PENDING_DRIVER_CONFIRM`**——逐单调用 **`reject`**，`reasonCode` = **`DRIVER_LOGOUT`**；语义与手动拒单一致，订单通常 **`→ CREATED`** 并重新派单，**非** **`CANCELLED`**。单条失败不阻断登出。
-2. **已接单 `ACCEPTED`（到达前）**：**不在**上述列表内，登出 **不会** 自动 `reject` / `driver/cancel`；与 PRD §5.6「到达前退出按取消本单」若要求 **完全等同乘客登出**，仍为 **缺口**（见《`TODO与差距总览.md`》）。
+2. **已接单 `ACCEPTED`（到达前）自动释单**：登出复用司机到达前取消链路，将订单 **`ACCEPTED → CREATED`**，清空司机与确认窗口信息，并再次投递派单 Outbox。该语义是 **释放改派 / 释单**，乘客侧进入重新派单，**不是**乘客登出的 **`CANCELLED`** 终态。查询或单笔释单失败仅记录日志，不阻断后续下线与 token 作废。
 3. **运力下线**：`online:false`（与显式下线一致，删 GEO / `monitor_status=0` 等）。
 4. **登录态**：**`driver:tv:{driverId}` INCR**，旧 JWT 立即 401。
 
-**到达后**：登出 **不会** 对已到达/行程中单做自动取消（与乘客端「有 ARRIVED/STARTED 则不给代取消」的提示策略不同，司机端 HTTP 响应体暂无 `hint` 字段）。
+**到达后**：`ARRIVED / STARTED / FINISHED` 等到达后或行程中订单，登出 **不会** 自动取消、不会自动释单；只处理下线和登录态作废。
 
 ---
 
@@ -518,7 +518,59 @@
 
 ---
 
-### 3.3 指派列表（已实现）
+### 3.3 听单心跳（已实现：续 Presence，可选更新 GEO）
+
+**POST** `/driver/api/v1/drivers/{driverId}/heartbeat`
+
+**说明**
+
+- 司机上线听单后，H5 约每 **15 秒**调用一次。
+- 请求必须经司机端鉴权；`driverId` 必须与登录身份一致。
+- `lat/lng` 同时提供时，capacity 更新司机池 GEO 坐标；不提供坐标时仍续司机级 Presence。
+- capacity 仅允许当前仍为听单状态（`monitor_status=1`）的司机续心跳。
+- 停止心跳超过 `capacity.dispatch.driver-heartbeat-timeout-seconds`（默认 **60s**）后，XXL `capacityDriverPresenceCleanup` 会移除 Presence/GEO，并将司机下线。
+
+**请求头**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| Authorization | string | 是 | `Bearer <accessToken>` |
+
+**Path 参数**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| driverId | number | 是 | 司机 id（必须与登录身份一致） |
+
+**请求体**（`DriverHeartbeatBody`）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| lat | number | 否 | 纬度；若提供必须与 `lng` 同时提供，范围 `[-90, 90]` |
+| lng | number | 否 | 经度；若提供必须与 `lat` 同时提供，范围 `[-180, 180]` |
+
+**响应 data**：无
+
+**请求示例（有定位）**
+
+```json
+{
+  "lat": 30.251612,
+  "lng": 120.141275
+}
+```
+
+**请求示例（定位失败，仅续 Presence）**
+
+```json
+{}
+```
+
+**错误语义（节选）**：`401` 未登录或 token 失效；`403` 路径司机与当前身份不一致；`400/409` 坐标不合法或司机当前未上线听单。
+
+---
+
+### 3.4 指派列表（已实现）
 
 **GET** `/driver/api/v1/orders/assigned?driverId=`
 
@@ -541,7 +593,7 @@
 
 ---
 
-### 3.4 接单（已实现）
+### 3.5 接单（已实现）
 
 **POST** `/driver/api/v1/orders/{orderNo}/accept`
 
@@ -563,7 +615,7 @@
 
 ---
 
-### 3.5 拒单（已实现）
+### 3.6 拒单（已实现）
 
 **POST** `/driver/api/v1/orders/{orderNo}/reject`
 
@@ -589,7 +641,7 @@
 
 ---
 
-### 3.6 司机取消（已接单后、到达前，已实现）
+### 3.7 司机取消（已接单后、到达前，已实现）
 
 **POST** `/driver/api/v1/orders/{orderNo}/cancel`
 

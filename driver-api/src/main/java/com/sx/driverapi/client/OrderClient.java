@@ -21,6 +21,10 @@ public interface OrderClient {
     CoreResponseVo<List<TripOrderRow>> listAssigned(@RequestParam("driverId") Long driverId,
                                                     @RequestHeader("X-User-Id") String userId);
 
+    @GetMapping("/api/v1/orders/accepted")
+    CoreResponseVo<List<TripOrderRow>> listAcceptedBeforeArrive(@RequestParam("driverId") Long driverId,
+                                                                @RequestHeader("X-User-Id") String userId);
+
     @GetMapping("/api/v1/orders/{orderNo}")
     CoreResponseVo<TripOrderRow> getByOrderNo(@PathVariable("orderNo") String orderNo);
 

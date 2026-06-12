@@ -7,6 +7,7 @@ import com.sx.capacity.model.Car;
 import com.sx.capacity.model.Driver;
 import com.sx.capacity.model.dto.NearestDriverResult;
 import com.sx.capacity.service.geo.DriverGeoRedisPool;
+import com.sx.capacity.service.geo.DriverPresenceRedisPool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -27,17 +28,20 @@ public class NearestDriverQueryService {
     private final DriverEntityMapper driverEntityMapper;
     private final CarEntityMapper carEntityMapper;
     private final DriverGeoRedisPool driverGeoRedisPool;
+    private final DriverPresenceRedisPool driverPresenceRedisPool;
     private final DriverPassengerMatchBlockService matchBlockService;
     private final double matchRadiusMeters;
 
     public NearestDriverQueryService(DriverEntityMapper driverEntityMapper,
                                      CarEntityMapper carEntityMapper,
                                      DriverGeoRedisPool driverGeoRedisPool,
+                                     DriverPresenceRedisPool driverPresenceRedisPool,
                                      DriverPassengerMatchBlockService matchBlockService,
                                      @Value("${capacity.dispatch.match-radius-meters:3000}") double matchRadiusMeters) {
         this.driverEntityMapper = driverEntityMapper;
         this.carEntityMapper = carEntityMapper;
         this.driverGeoRedisPool = driverGeoRedisPool;
+        this.driverPresenceRedisPool = driverPresenceRedisPool;
         this.matchBlockService = matchBlockService;
         this.matchRadiusMeters = matchRadiusMeters;
     }
@@ -116,6 +120,9 @@ public class NearestDriverQueryService {
     }
 
     private NearestDriverResult buildEligible(Long driverId, String cityCode, String productCode) {
+        if (!driverPresenceRedisPool.isFresh(cityCode, driverId)) {
+            return null;
+        }
         var carQw = Wrappers.<Car>lambdaQuery()
                 .eq(Car::getIsDeleted, 0)
                 .eq(Car::getCarState, 0)
@@ -178,6 +185,9 @@ public class NearestDriverQueryService {
         for (Car car : cars) {
             Driver d = driverMap.get(car.getDriverId());
             if (d == null) {
+                continue;
+            }
+            if (!driverPresenceRedisPool.isFresh(cityCode, d.getId())) {
                 continue;
             }
             if (matchBlockService.isBlocked(d.getId(), passengerId)) {

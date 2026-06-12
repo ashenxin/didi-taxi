@@ -69,8 +69,10 @@
 
 ### 4.4 登出时的 BFF 编排（`POST .../auth/logout`）
 
-顺序固化为：`DriverAuthService#logout` → **先** `DriverBffService#rejectAllPendingAssignsOnLogout`（对 `listAssigned` 内每笔 `reject(..., DRIVER_LOGOUT)`），**再** Feign 运力 `online:false`，**最后** `driver:tv:*` **INCR**。  
-与 **乘客** `passenger-api` 登出时「代 `cancel` → **CANCELLED**」不同；司机侧当前对「待接指派」走的是 **拒单链路**（通常 **CREATED + 重派**）。**`ACCEPTED`** 不在 `listAssignedToDriver` 查询范围内，登出 **不会** 自动释放已接单行程。
+目标顺序固化为：`DriverAuthService#logout` → **先** `DriverBffService#rejectAllPendingAssignsOnLogout`（对 `listAssigned` 内每笔 `reject(..., DRIVER_LOGOUT)`），**再**释放司机名下 **`ACCEPTED` 且未到达** 的订单，随后 Feign 运力 `online:false`，**最后** `driver:tv:*` **INCR**。
+与 **乘客** `passenger-api` 登出时「代 `cancel` → **CANCELLED**」不同；司机侧对「待接指派」走 **拒单链路**（通常 **CREATED + 重派**），对「已接未到」目标上复用现有司机到达前取消链路（`driver/cancel` 等价能力），将 **`ACCEPTED → CREATED`**，清空司机与确认窗口信息，并重新投递派单 Outbox。**`ARRIVED / STARTED / FINISHED`** 不自动取消、不自动释单。
+
+已实现：`driver-api` 登出时先查询 order-service `ACCEPTED` 已接未到列表，再逐单调用既有 `driver/cancel` 链路。查询或单笔释单失败仅记录日志，不阻断后续运力下线与 token 作废。
 
 ---
 
@@ -115,4 +117,3 @@
 - `409` 业务冲突（可选：强区分注册/登录时的已注册）
 - `429` 频控/次数限制/当日封禁
 - `5xx` 下游异常
-
