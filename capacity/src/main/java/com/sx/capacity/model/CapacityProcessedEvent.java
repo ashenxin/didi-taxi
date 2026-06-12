@@ -19,5 +19,8 @@ public class CapacityProcessedEvent {
     private String consumerGroup;
     private String eventId;
     private LocalDateTime processedAt;
+    private String resultStatus;
+    private String orderNo;
+    private Long driverId;
+    private String errorMessage;
 }
-

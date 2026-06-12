@@ -117,7 +117,7 @@
 | **不开发（本阶段）** | **乘客 WS 多实例广播** | 单机内存会话 + `ORDER_CHANGED` 已支持；当前项目按单实例/本地联调验收，**不开发 Redis Pub/Sub 跨实例广播**；相关设计仅作为未来扩展资料保留。 |
 | **中** | **接驾 ETA（司机位置 → 上车点）** | 《最小闭环》附录/表格：当前 ETA 多为占位或路线时长；**matrix + 实时坐标** 未接。 |
 | **低** | **`passenger_display_code` 字段体系化** | 当前已通过详情 `reDispatching` 满足乘客端“重派中”展示；如需统一多端枚举仍可后续补标准 display_code。 |
-| **已完成（主路径）/ 中（运维增强）** | **两段式异步指派 + Outbox + Kafka** | `POST /app/api/v1/orders` 已切换为两段式主路径：`passenger-api` 只做 geocode/route/estimate + 创建订单，`order-service` 同事务写 `order_outbox_event`，`orderOutboxPublish` 投 Kafka，`capacity-service` 消费后 `assign + openOffer`。后续增强：Outbox/Kafka 指标、DLQ、运维告警与生产参数。 |
+| **已完成（主路径 + 基础诊断）/ 中（运维增强）** | **两段式异步指派 + Outbox + Kafka** | `POST /app/api/v1/orders` 已切换为两段式主路径：`passenger-api` 只做 geocode/route/estimate + 创建订单，`order-service` 同事务写 `order_outbox_event`，`orderOutboxPublish` 投 Kafka，`capacity-service` 消费后 `assign + openOffer`。已补 outbox `FAILED` 上限、手动 retry、order 侧 `dispatch-trace` 与 capacity 消费结果落库诊断。后续增强：DLQ、指标告警与生产参数。 |
 | **已完成（下单）/ 中（扩展）** | **幂等键 `Idempotency-Key`** | 乘客下单 `POST /app/api/v1/orders` 与 `/orders/create` 已要求 Header 并透传 order-service；order 侧 `order_idempotent_record` 已覆盖 `CREATE_ORDER`，同 key 同请求体返回同一 `orderNo`，同 key 不同请求体返回 409。取消、接单、拒单等其它写接口后续再扩展。 |
 | **低** | **轮询顺带触发匹配（限频）** | 《Redis》**§6.2**：可选；**默认不做**。 |
 | **已完成** | **司机 `ACCEPTED` 登出自动释单** | 待接指派登出时 **`reject(DRIVER_LOGOUT)`** → **`CREATED + 重派`**；司机 **`ACCEPTED` 且未到达** 登出自动 **释放改派 / 释单**，复用司机到达前取消链路 **`ACCEPTED → CREATED`**，不生成乘客侧 **`CANCELLED`** 终态。 |
@@ -167,3 +167,4 @@
 | 2026-06-03 | **下单 Idempotency-Key 落地**：乘客下单两个入口强制 Header，`passenger-api` 透传至 `order-service`，`order_idempotent_record` 覆盖 `CREATE_ORDER` 请求级幂等；其它写接口幂等仍后续。 |
 | 2026-06-03 | **两段式异步指派主路径落地**：`POST /app/api/v1/orders` 不再同步 assign/openOffer，创建订单后由 Outbox + Kafka + capacity consumer 异步推进派单；`mvn -pl passenger-api test`、`mvn -pl order test` 已通过。 |
 | 2026-06-05 | **司机级 Presence 与位置心跳落地**：新增司机心跳接口、Presence ZSET、匹配新鲜度过滤和 XXL 过期清理；修复城市 GEO key 整体 TTL 无法独立淘汰失联司机的问题。 |
+| 2026-06-12 | **Outbox/Kafka 基础诊断与失败兜底**：order outbox 发布失败达到上限转 `FAILED` 并支持手动 retry；capacity `capacity_processed_event` 扩展消费结果字段，可按 `eventId` / `orderNo` 查询 `SUCCESS`、`NO_DRIVER`、`FAILED`、`INVALID`、`MALFORMED`。 |

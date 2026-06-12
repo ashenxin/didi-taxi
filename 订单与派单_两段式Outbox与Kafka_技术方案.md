@@ -3,7 +3,7 @@
 > 文档文件名：`订单与派单_两段式Outbox与Kafka_技术方案.md`  
 > 范围：本方案用于将“下单同步派单”演进为“两段式：先创建订单、后异步派单”，并引入 Transactional Outbox + Kafka，消费者落在 `capacity-service`。  
 > 约束：Kafka 消息 JSON；“无司机时不重试”（不让 Kafka 层反复投递该订单的派单请求）。  
-> 代码现状：`order-service` 已有 `trip_order` 状态机与 `order_event` 流水；派单确认窗口（`PENDING_DRIVER_CONFIRM`）、超时扫描、改派调度等已实现；`POST /app/api/v1/orders` 已切换为两段式主路径，`passenger-api` 创建订单后不再同步 `assign/openOffer`，派单由 Outbox + Kafka + `capacity-service` consumer 异步推进。
+> 代码现状：`order-service` 已有 `trip_order` 状态机与 `order_event` 流水；派单确认窗口（`PENDING_DRIVER_CONFIRM（待司机确认）`）、超时扫描、改派调度等已实现；`POST /app/api/v1/orders` 已切换为两段式主路径，`passenger-api` 创建订单后不再同步 `assign/openOffer`，派单由 Outbox + Kafka + `capacity-service` consumer 异步推进；Outbox 发布失败会按上限转 `FAILED`，order/capacity 均提供内部诊断接口。
 
 ---
 
@@ -67,7 +67,7 @@
 - **capacity-service**
   - 维护司机池（Redis GEO）与候选过滤（在线/可接单/城市等）
   - Kafka 消费者：消费“需要派单”的事件，执行一次派单尝试
-  - 消费端幂等：`processed_event`（去重表）记录 `eventId`
+  - 消费端幂等与结果记录：`capacity_processed_event` 记录 `eventId`、消费结果、关联 `orderNo`
   - 无司机时结束，不重试；长期兜底交由既有迟滞匹配
 
 - **passenger-api**
@@ -209,10 +209,19 @@
 - `consumer_group`
 - `event_id`
 - `processed_at`
+- `result_status`：`PROCESSING` / `SUCCESS` / `NO_DRIVER` / `FAILED` / `INVALID` / `MALFORMED`
+- `order_no`
+- `driver_id`：成功或最后尝试的司机
+- `error_message`：失败、跳过或异常原因
 
 唯一键：
 
 - UNIQUE(`consumer_group`, `event_id`)
+
+查询索引：
+
+- `idx_capacity_processed_order(order_no, processed_at)`
+- `idx_capacity_processed_status(result_status, processed_at)`
 
 > 实现建议采用“抢占式去重”：先插入，唯一键冲突则跳过。
 
@@ -248,16 +257,20 @@
 
 收到消息后：
 
-1) **幂等占坑**：插入 `capacity_processed_event(consumer_group,eventId)`
+1) **幂等占坑**：插入 `capacity_processed_event(consumer_group,eventId)`，并记录 `PROCESSING`
    - 冲突：直接 ack 跳过
 2) 找司机：
    - 调用 capacity 内部“最近司机/3km/可接单”逻辑（建议支持 topN 候选）
 3) 无司机：
-   - 记日志/指标（no_driver）
+   - 更新 `capacity_processed_event.result_status=NO_DRIVER`
    - ack 结束（不重试）
 4) 有司机：
    - 调 `order-service assign`（CAS：`CREATED -> ASSIGNED`）
-   - 成功后调 `order-service openOffer`（`ASSIGNED -> PENDING_DRIVER_CONFIRM`）
+   - 成功后调 `order-service openOffer`（`ASSIGNED（已指派/待接单） -> PENDING_DRIVER_CONFIRM（待司机确认）`）
+   - 成功更新 `result_status=SUCCESS` 与 `driver_id`
+5) 候选都失败：
+   - 更新 `result_status=FAILED`，写入最后失败原因
+   - ack 结束，避免 Kafka 分区被单笔业务冲突卡住
    - （可选）写 `pending-order-index`
    - ack 结束
 
@@ -385,7 +398,7 @@ onMessage(event):
 - `PENDING`：待发布（可领取）
 - `PROCESSING`：已被某实例领取，正在发布中
 - `PUBLISHED`：已确认发送成功并标记完成
-- `FAILED`：超过最大重试/人工介入（可选）
+- `FAILED`：超过最大重试，需要人工排查或手动重试
 
 建议新增字段：
 
@@ -423,10 +436,10 @@ onMessage(event):
 
 - 计算下次重试时间 `next_retry_at`（指数退避 + 抖动）
 - `retry_count = retry_count + 1`
-- 状态回退到 `PENDING`（便于后续再次领取）：
+- 未超过上限时，状态回退到 `PENDING`（便于后续再次领取）：
   - `UPDATE ... SET status=PENDING, retry_count=retry_count+1, next_retry_at=?, last_error=?, updated_at=now() WHERE id=? AND status=PROCESSING`
-- 若 `retry_count` 超过上限：
-  - 标记 `FAILED` 并告警（或继续留在 PENDING 但 next_retry_at 拉长，按团队偏好）
+- 若 `retry_count` 达到上限（默认 `order.outbox.publisher.max-retry-count=10`）：
+  - 标记 `FAILED`，保留 `last_error` 与 `next_retry_at`，由内部诊断接口或人工 SQL 排查后再重试
 
 ### 超时回收（reclaim）规则（处理实例崩溃/卡死）
 
@@ -520,6 +533,22 @@ onMessage(event):
 2) 看 `order_event` 流水是否有 `ORDER_ASSIGNED` / `OFFER_OPENED`（若有）
 3) 看 outbox 事件是否 `PUBLISHED`
 4) 看 capacity 是否处理过 `eventId`（processed_event 是否存在）
+
+### 11.3 内部诊断接口（已落地）
+
+order-service：
+
+- `GET /api/v1/orders/internal/outbox/summary`：查看 `PENDING` / `PROCESSING` / `PUBLISHED` / `FAILED` 数量、最老等待年龄与近期失败。
+- `GET /api/v1/orders/internal/outbox/by-order/{orderNo}`：按订单查 outbox 记录。
+- `GET /api/v1/orders/internal/outbox/failed?limit=50`：查看失败 outbox。
+- `POST /api/v1/orders/internal/outbox/{id}/retry`：将 `FAILED` / `PROCESSING` outbox 重新置为 `PENDING`。
+- `GET /api/v1/orders/internal/dispatch-trace/{orderNo}`：聚合订单状态、outbox 与排障建议；状态文案会展示 `CREATED（待派单/重新派单）`、`PENDING_DRIVER_CONFIRM（待司机确认）`、`ACCEPTED（司机已接单）` 等。
+
+capacity-service：
+
+- `GET /api/v1/dispatch/internal/events/{eventId}`：按事件查消费结果；可选 `consumerGroup`。
+- `GET /api/v1/dispatch/internal/events/by-order/{orderNo}`：按订单查消费事件。
+- `GET /api/v1/dispatch/internal/events/recent-failed?limit=50`：查看近期 `FAILED` / `INVALID` / `MALFORMED` 消费记录。
 
 ---
 

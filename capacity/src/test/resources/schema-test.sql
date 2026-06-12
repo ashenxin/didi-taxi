@@ -111,7 +111,13 @@ CREATE TABLE IF NOT EXISTS capacity_processed_event (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     consumer_group VARCHAR(128) NOT NULL,
     event_id VARCHAR(64) NOT NULL,
-    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    result_status VARCHAR(64) NULL,
+    order_no VARCHAR(64) NULL,
+    driver_id BIGINT NULL,
+    error_message VARCHAR(1000) NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_capacity_processed_event ON capacity_processed_event (consumer_group, event_id);
+CREATE INDEX IF NOT EXISTS idx_capacity_processed_order ON capacity_processed_event (order_no, processed_at);
+CREATE INDEX IF NOT EXISTS idx_capacity_processed_status ON capacity_processed_event (result_status, processed_at);

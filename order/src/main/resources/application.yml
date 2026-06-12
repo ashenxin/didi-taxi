@@ -54,6 +54,9 @@ order:
     timeout-scan-interval-ms: 30000
     # 待司机确认(7) 过期扫描：略小于确认窗，保证释放指派并重新派单的滞后可控（默认窗 30s + 本项 5s ≈ 最坏多等 5s）
     offer-timeout-scan-interval-ms: 5000
+  outbox:
+    publisher:
+      max-retry-count: 10
 
 services:
   passenger-api:

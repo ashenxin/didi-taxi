@@ -27,6 +27,9 @@ public class OutboxPublisherJob {
     @Value("${order.outbox.publisher.processing-timeout-seconds:300}")
     private int processingTimeoutSeconds;
 
+    @Value("${order.outbox.publisher.max-retry-count:10}")
+    private int maxRetryCount;
+
     public OutboxPublisherJob(OrderOutboxEventMapper mapper, KafkaTemplate<String, String> kafkaTemplate) {
         this.mapper = mapper;
         this.kafkaTemplate = kafkaTemplate;
@@ -90,16 +93,24 @@ public class OutboxPublisherJob {
                     if (err.length() > 1800) {
                         err = err.substring(0, 1800);
                     }
+                    int nextRetryCount = (e.getRetryCount() == null ? 0 : e.getRetryCount()) + 1;
+                    boolean exhausted = nextRetryCount >= Math.max(1, maxRetryCount);
                     LocalDateTime next = LocalDateTime.now().plusSeconds(backoffSeconds(e.getRetryCount() == null ? 0 : e.getRetryCount()));
                     mapper.update(null, Wrappers.<OrderOutboxEvent>lambdaUpdate()
-                            .set(OrderOutboxEvent::getStatus, "PENDING")
-                            .set(OrderOutboxEvent::getRetryCount, (e.getRetryCount() == null ? 0 : e.getRetryCount()) + 1)
+                            .set(OrderOutboxEvent::getStatus, exhausted ? "FAILED" : "PENDING")
+                            .set(OrderOutboxEvent::getRetryCount, nextRetryCount)
                             .set(OrderOutboxEvent::getNextRetryAt, next)
                             .set(OrderOutboxEvent::getLastError, err)
                             .set(OrderOutboxEvent::getUpdatedAt, LocalDateTime.now())
                             .eq(OrderOutboxEvent::getId, e.getId())
                             .eq(OrderOutboxEvent::getStatus, "PROCESSING"));
-                    log.warn("outbox publish failed id={} topic={} err={}", e.getId(), e.getTopic(), ex.toString());
+                    if (exhausted) {
+                        log.error("outbox publish exhausted id={} orderNo={} topic={} retryCount={} err={}",
+                                e.getId(), e.getAggregateId(), e.getTopic(), nextRetryCount, ex.toString());
+                    } else {
+                        log.warn("outbox publish failed id={} orderNo={} topic={} retryCount={} nextRetryAt={} err={}",
+                                e.getId(), e.getAggregateId(), e.getTopic(), nextRetryCount, next, ex.toString());
+                    }
                 }
             }
         } finally {
@@ -141,4 +152,3 @@ public class OutboxPublisherJob {
         }
     }
 }
-

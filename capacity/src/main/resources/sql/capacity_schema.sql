@@ -137,7 +137,12 @@ CREATE TABLE IF NOT EXISTS `capacity_processed_event` (
     `consumer_group` VARCHAR(128) NOT NULL,
     `event_id` VARCHAR(64) NOT NULL,
     `processed_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `result_status` VARCHAR(64) NULL COMMENT '消费结果：PROCESSING/SUCCESS/NO_DRIVER/FAILED/INVALID/MALFORMED',
+    `order_no` VARCHAR(64) NULL COMMENT '关联订单号',
+    `driver_id` BIGINT NULL COMMENT '成功或最后尝试的司机ID',
+    `error_message` VARCHAR(1000) NULL COMMENT '失败、跳过或异常原因',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_capacity_processed_event` (`consumer_group`, `event_id`)
+    UNIQUE KEY `uk_capacity_processed_event` (`consumer_group`, `event_id`),
+    KEY `idx_capacity_processed_order` (`order_no`, `processed_at`),
+    KEY `idx_capacity_processed_status` (`result_status`, `processed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='capacity 消费端幂等去重表';
-
