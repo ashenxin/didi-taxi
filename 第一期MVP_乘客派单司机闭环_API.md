@@ -179,7 +179,7 @@
 
 ## 2. 乘客下单与订单（passenger-api）
 
-### 2.1 一步下单（同步 createAndAssign，已实现）
+### 2.1 一步下单（当前主入口，创建后异步派单）
 
 **POST** `/app/api/v1/orders`
 

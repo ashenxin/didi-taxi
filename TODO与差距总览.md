@@ -19,10 +19,10 @@
 | 乘客/司机闭环 | 《乘客司机端_最小闭环接口调用文档.md》 |
 | Redis 司机池/订单池 | 《乘客司机端_Redis与听单下线策略.md》 |
 | 司机上线/接单/调度 | 《司机端_上线听单与接单设计.md》 |
-| 司机登录/WS | 《司机端_登录注册设计.md》《司机端_登录注册接口文档.md》《司机端_WebSocket与实时协议入门.md》 |
+| 司机登录/WS | 《司机端_登录注册_PRD.md》《司机端_登录注册_TECH.md》《司机端_登录注册_API.md》《司机端_WebSocket与实时协议入门.md》 |
 | 网关 | 《网关服务_设计.md》《网关服务_技术.md》 |
-| 后台（汇总） | 《后台管理系统_权限清单与鉴权设计.md》《后台管理系统_权限与接口文档.md》《后台管理系统_订单管理_设计.md》《后台管理系统_订单管理_接口文档.md》《后台管理系统_运力配置_设计.md》《后台管理系统_运力配置_接口文档.md》 |
-| 订单技术 | 《订单服务幂等与并发方案说明.md》《订单与派单_两段式Outbox与Kafka_技术方案.md》 |
+| 后台（汇总） | 《后台管理系统_权限清单与鉴权设计.md》《后台管理系统_权限与接口文档.md》《后台管理系统_订单管理_PRD.md》《后台管理系统_订单管理_TECH.md》《后台管理系统_订单管理_API.md》《后台管理系统_运力配置_PRD.md》《后台管理系统_运力配置_TECH.md》《后台管理系统_运力配置_API.md》 |
+| 订单技术 | 《订单与派单_订单服务幂等与并发方案说明.md》《订单与派单_两段式Outbox与Kafka_技术方案.md》 |
 
 ---
 
@@ -48,7 +48,8 @@
 #### 1.1.2 仍为 MVP+ / 未做（与设计文档「非目标」一致）
 
 - 退款对账、人工改单/派单、导出、手机号脱敏、结构化审计等。
-- TODO 中曾写的「全量关键时间线、`cancelBy`、事件 payload 折叠」等排障增强：**非本期硬性范围**。
+- **订单运维排障入口**：已有 order/capacity 内部诊断接口，但后台还没有统一页面或 admin-api 聚合入口。建议作为近期高优先级开发项，详见 §2.6。
+- **订单时间线增强**：`order_event` 已有基础流水，但后台/联调视角仍需更清晰地折叠 payload、展示中文状态与关键原因，详见 §2.6。
 
 ### 1.2 运力与换队
 
@@ -84,9 +85,10 @@
 
 ### 1.4 建议排期（按收益）
 
-1. **前端**：登录/菜单/计价/运力页与现 BFF **对齐验收**（若在独立仓库，单列一轮联调）。  
-2. **按需：审计**：在业务/审计表中补齐结构化日志（操作者 id、资源 id、动作、结果、时间等）。  
-3. **按需**：修改密码接口、其它 `GET .../{id}` 详情类接口（详见《运力配置_设计》「按需再补」）。
+1. **后台/运维排障页或 admin-api 诊断聚合接口**：承接 order/capacity 内部诊断能力，按 `orderNo` 一站式排查派单链路。
+2. **前端**：登录/菜单/计价/运力页与现 BFF **对齐验收**（若在独立仓库，单列一轮联调）。
+3. **按需：审计**：在业务/审计表中补齐结构化日志（操作者 id、资源 id、动作、结果、时间等）。
+4. **按需**：修改密码接口、其它 `GET .../{id}` 详情类接口（详见《运力配置_设计》「按需再补」）。
 
 ---
 
@@ -115,10 +117,10 @@
 | 优先级 | 项 | 说明（文档出处） |
 |--------|-----|------------------|
 | **不开发（本阶段）** | **乘客 WS 多实例广播** | 单机内存会话 + `ORDER_CHANGED` 已支持；当前项目按单实例/本地联调验收，**不开发 Redis Pub/Sub 跨实例广播**；相关设计仅作为未来扩展资料保留。 |
-| **中** | **接驾 ETA（司机位置 → 上车点）** | 《最小闭环》附录/表格：当前 ETA 多为占位或路线时长；**matrix + 实时坐标** 未接。 |
+| **暂缓** | **接驾 ETA（司机位置 → 上车点）** | 当前暂不继续接入高德地图服务；ETA 仍记录为后续体验项。若未来恢复，可基于司机心跳/GEO 位置 + map matrix 或驾车规划计算。 |
 | **低** | **`passenger_display_code` 字段体系化** | 当前已通过详情 `reDispatching` 满足乘客端“重派中”展示；如需统一多端枚举仍可后续补标准 display_code。 |
-| **已完成（主路径 + 基础诊断）/ 中（运维增强）** | **两段式异步指派 + Outbox + Kafka** | `POST /app/api/v1/orders` 已切换为两段式主路径：`passenger-api` 只做 geocode/route/estimate + 创建订单，`order-service` 同事务写 `order_outbox_event`，`orderOutboxPublish` 投 Kafka，`capacity-service` 消费后 `assign + openOffer`。已补 outbox `FAILED` 上限、手动 retry、order 侧 `dispatch-trace` 与 capacity 消费结果落库诊断。后续增强：DLQ、指标告警与生产参数。 |
-| **已完成（下单）/ 中（扩展）** | **幂等键 `Idempotency-Key`** | 乘客下单 `POST /app/api/v1/orders` 与 `/orders/create` 已要求 Header 并透传 order-service；order 侧 `order_idempotent_record` 已覆盖 `CREATE_ORDER`，同 key 同请求体返回同一 `orderNo`，同 key 不同请求体返回 409。取消、接单、拒单等其它写接口后续再扩展。 |
+| **已完成（主路径 + 基础诊断）/ 中（运维增强）** | **两段式异步指派 + Outbox + Kafka** | `POST /app/api/v1/orders` 已切换为两段式主路径：`passenger-api` 只做 geocode/route/estimate + 创建订单，`order-service` 同事务写 `order_outbox_event`，`orderOutboxPublish` 投 Kafka，`capacity-service` 消费后 `assign + openOffer`。已补 outbox `FAILED` 上限、手动 retry、order 侧 `dispatch-trace` 与 capacity 消费结果落库诊断。后续增强：后台/运维排障入口、DLQ、指标告警与生产参数。 |
+| **已完成（下单）/ 中（扩展）** | **幂等键 `Idempotency-Key`** | 乘客下单 `POST /app/api/v1/orders` 与 `/orders/create` 已要求 Header 并透传 order-service；order 侧 `order_idempotent_record` 已覆盖 `CREATE_ORDER`，同 key 同请求体返回同一 `orderNo`，同 key 不同请求体返回 409。取消、接单、拒单、到达前取消、完单等其它写接口后续再扩展。 |
 | **低** | **轮询顺带触发匹配（限频）** | 《Redis》**§6.2**：可选；**默认不做**。 |
 | **已完成** | **司机 `ACCEPTED` 登出自动释单** | 待接指派登出时 **`reject(DRIVER_LOGOUT)`** → **`CREATED + 重派`**；司机 **`ACCEPTED` 且未到达** 登出自动 **释放改派 / 释单**，复用司机到达前取消链路 **`ACCEPTED → CREATED`**，不生成乘客侧 **`CANCELLED`** 终态。 |
 
@@ -153,6 +155,17 @@
 | **低** | **城市 geocode 映射扩展** | 《最小闭环》**§1.3**：仅部分 `cityCode` 映射。 |
 | **低** | **幂等方案全量落地** | 《订单服务幂等与并发方案说明》：与业务接口逐一对齐。 |
 
+### 2.6 近期候选开发计划（暂不接入高德地图）
+
+> 2026-06-13 讨论结论：暂不继续做高德地图 / 接驾 ETA，本阶段优先选择不依赖外部地图服务、能提升联调效率和系统稳定性的任务。
+
+| 建议优先级 | 开发点 | 目标 | 主要范围 | 验收口径 |
+|------------|--------|------|----------|----------|
+| **P0** | **后台/运维排障页或 admin-api 诊断聚合接口** | 把 order/capacity 已有诊断能力变成一个按 `orderNo` 查询的统一入口，减少手工 curl 和跨库排查。 | admin-api 聚合 `order-service` `dispatch-trace` / outbox 查询与 `capacity-service` 消费结果；可选后台页面展示 outbox 状态、capacity 结果、卡点建议；支持 `FAILED` outbox 手动 retry。 | 输入 `orderNo` 能看到订单状态、outbox 状态、Kafka 消费结果、是否 `NO_DRIVER` / `FAILED` / `MALFORMED`，并能对 `FAILED` outbox 发起重试。 |
+| **P1** | **订单时间线增强** | 让订单详情和排障视角更可读，减少直接看 `order_event.payload` 的成本。 | 统一事件 DTO；展示 `CREATED（待派单/重新派单）`、`PENDING_DRIVER_CONFIRM（待司机确认）`、`ACCEPTED（司机已接单）` 等中文状态；折叠司机拒单、确认窗超时、司机登出释单、系统取消原因。 | `GET /orders/{orderNo}/events` 或后台订单详情能返回排序稳定、状态中文清晰、原因字段明确的时间线。 |
+| **P1** | **DLQ / 坏消息处理** | 对 Kafka `INVALID` / `MALFORMED` 派单消息提供可查询、可审计的死信记录，避免只靠日志。 | 新增死信表或死信 topic；记录原始 payload、topic/partition/offset、错误原因、首次/最近出现时间；提供查询接口；重放能力可后置。 | 发送非法 JSON 或缺字段消息后，consumer ack 不阻塞分区，同时死信记录可通过接口查询。 |
+| **P2** | **写接口幂等扩展** | 将 `Idempotency-Key` 从乘客下单扩展到其它关键写动作，降低重复点击、超时重试和网关重放导致的副作用。 | 优先乘客取消、司机接单、司机拒单、司机到达前取消、完单；结合状态机 CAS 设计 actionType 与 request_hash；不改变订单权威状态机。 | 同 key 同请求重复调用返回同一业务结果；同 key 不同请求返回 409；状态已经推进时不产生重复事件或重复 Outbox。 |
+
 ---
 
 ## 三、修订记录
@@ -168,3 +181,4 @@
 | 2026-06-03 | **两段式异步指派主路径落地**：`POST /app/api/v1/orders` 不再同步 assign/openOffer，创建订单后由 Outbox + Kafka + capacity consumer 异步推进派单；`mvn -pl passenger-api test`、`mvn -pl order test` 已通过。 |
 | 2026-06-05 | **司机级 Presence 与位置心跳落地**：新增司机心跳接口、Presence ZSET、匹配新鲜度过滤和 XXL 过期清理；修复城市 GEO key 整体 TTL 无法独立淘汰失联司机的问题。 |
 | 2026-06-12 | **Outbox/Kafka 基础诊断与失败兜底**：order outbox 发布失败达到上限转 `FAILED` 并支持手动 retry；capacity `capacity_processed_event` 扩展消费结果字段，可按 `eventId` / `orderNo` 查询 `SUCCESS`、`NO_DRIVER`、`FAILED`、`INVALID`、`MALFORMED`。 |
+| 2026-06-13 | **近期开发计划调整**：暂缓高德地图/接驾 ETA；新增 §2.6 四个候选开发点：后台/运维排障页、订单时间线增强、DLQ / 坏消息处理、写接口幂等扩展。 |

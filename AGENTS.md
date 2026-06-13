@@ -163,7 +163,7 @@ mvn -pl passenger-api spring-boot:run
 
 - MySQL：各服务的业务库，配置在对应 `application.yml`。
 - Redis：乘客/司机 token version、司机 GEO 池、WS/调度辅助键。
-- Kafka：order outbox / 派单异步化相关，当前部分链路仍以同步 `createAndAssign` 为主。
+- Kafka：order outbox / 派单异步化相关；乘客下单主链路已切换为创建订单后由 Outbox + Kafka + capacity consumer 异步派单。
 - XXL-JOB：调度中心已纳入 `xxl-job-admin` 子模块，默认 `http://127.0.0.1:8080/xxl-job-admin`；注意不要和 Spring 定时任务重复跑同一逻辑。
 - 高德地图 Key：map 服务调用外部地图能力时需要。
 
@@ -212,7 +212,7 @@ mvn -pl passenger-api spring-boot:run
 
 ### 订单与派单
 
-- `订单服务幂等与并发方案说明.md`
+- `订单与派单_订单服务幂等与并发方案说明.md`
 - `订单与派单_两段式Outbox与Kafka_技术方案.md`
 - `司机端_上线听单与接单设计.md`
 
@@ -257,8 +257,8 @@ mvn -pl passenger-api spring-boot:run
 以 `TODO与差距总览.md` 为准，常见需要注意的后续项：
 
 - 乘客/司机 WS 单实例主路径已收口；Redis Pub/Sub / Sticky 跨实例广播本阶段不开发。
-- 司机端业务 WebSocket、Presence、断线裁决仍是重要后续方向。
-- 两段式异步指派、Outbox、Kafka 与 `Idempotency-Key` 仍需按专项方案推进。
-- 接驾 ETA 仍需实时坐标和 matrix 能力补齐。
+- 两段式异步指派、Outbox、Kafka 与下单 `Idempotency-Key` 主路径已落地；后续重点转为后台/运维排障入口、DLQ、指标告警与写接口幂等扩展。
+- 接驾 ETA 仍需实时坐标和 matrix 能力补齐；当前阶段暂不继续接入高德地图服务，先保留为后续体验项。
 - 司机心跳续 GEO 与司机级 Presence 防僵尸策略已落地；XXL `capacityDriverPresenceCleanup` 仍需在运行环境配置启用。
-- 司机登出后 `ACCEPTED` 到达前释单口径与乘客侧取消口径仍有差异。
+- 司机登出后 `ACCEPTED`（司机已接单）到达前自动释单口径已明确并落地：释放改派回 `CREATED`（待派单/重新派单），不是乘客侧 `CANCELLED`（已取消）终态。
+- 近期候选开发点以 `TODO与差距总览.md` §2.6 为准：后台/运维排障页、订单时间线增强、DLQ / 坏消息处理、写接口幂等扩展。

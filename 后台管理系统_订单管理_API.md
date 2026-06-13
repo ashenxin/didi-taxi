@@ -60,6 +60,61 @@
 
 - 订单不存在或不在数据域内：HTTP 404，`msg` 如「订单不存在」
 
+### 2.3 派单诊断聚合（近期增强）
+
+- **Method**：GET
+- **Path**：`/admin/api/v1/orders/{orderNo}/dispatch-diagnostics`
+
+**用途**
+
+供后台订单排障页按 `orderNo` 一次性查看订单状态、Outbox 发布状态、capacity Kafka 消费结果与卡点建议。
+
+**成功响应建议**
+
+```json
+{
+  "code": 200,
+  "msg": "success",
+  "data": {
+    "orderNo": "202606120001",
+    "orderStatus": 0,
+    "orderStatusText": "CREATED（待派单/重新派单）",
+    "suggestion": "outbox已发布但订单仍为CREATED（待派单/重新派单），继续检查capacity消费结果、司机池与Kafka lag",
+    "outboxes": [],
+    "capacityEvents": []
+  }
+}
+```
+
+**前端展示建议**
+
+- `orderStatusText` 直接展示；若缺失，则用本地状态枚举兜底。
+- `outboxes` 展示 `status`、`retryCount`、`nextRetryAt`、`lastError`。
+- `capacityEvents` 展示 `resultStatus`、`driverId`、`errorMessage`。
+- `FAILED` outbox 可显示“重试”操作。
+
+### 2.4 Outbox 手动重试（近期增强）
+
+- **Method**：POST
+- **Path**：`/admin/api/v1/orders/outbox/{id}/retry`
+
+**用途**
+
+对 `FAILED` 或长时间卡住的 `PROCESSING` outbox 发起重试。前端应二次确认。
+
+**成功响应**
+
+- HTTP：200
+- `data`：重试后的 outbox 记录，以实现 VO 为准；预期状态回到 `PENDING`。
+
+**失败响应**
+
+| 场景 | HTTP | 说明 |
+|------|------|------|
+| outbox 不存在 | 404 | 不存在或不可见 |
+| 状态不允许重试 | 409 | 例如已 `PUBLISHED` |
+| 下游不可用 | 502/504 | 透出统一错误 |
+
 ---
 
 ## 3. 下游依赖（`admin-api` 调用）
@@ -71,6 +126,9 @@
 | GET | `/api/v1/orders` | 分页；Query 含 `pageNo`、`pageSize` 及订单筛选项（由 BFF 转发） |
 | GET | `/api/v1/orders/{orderNo}` | 详情 |
 | GET | `/api/v1/orders/{orderNo}/events` | 事件列表（建议按 `occurredAt` 升序返回） |
+| GET | `/api/v1/orders/internal/dispatch-trace/{orderNo}` | 派单诊断：订单状态、outbox 与建议 |
+| GET | `/api/v1/orders/internal/outbox/by-order/{orderNo}` | 按订单查 outbox |
+| POST | `/api/v1/orders/internal/outbox/{id}/retry` | 手动重试 outbox |
 
 ### 3.2 `passenger-service`
 
@@ -78,6 +136,14 @@
 |--------|------|------|
 | GET | `/api/v1/customers/by-phone?phone=` | 列表按手机号筛选的前置查询 |
 | GET | `/api/v1/customers/{passengerId}` | 详情补手机号（`passengerId` 类型以实现为准） |
+
+### 3.3 `capacity-service`
+
+| Method | Path | 用途 |
+|--------|------|------|
+| GET | `/api/v1/dispatch/internal/events/by-order/{orderNo}` | 按订单查 Kafka 派单消费结果 |
+| GET | `/api/v1/dispatch/internal/events/{eventId}` | 按事件查 Kafka 派单消费结果 |
+| GET | `/api/v1/dispatch/internal/events/recent-failed` | 近期失败/坏消息消费记录（后续可用于 DLQ 页面） |
 
 ---
 
@@ -125,4 +191,4 @@
 |------|------|
 | 2026-04-03 | 首版：从原订单 TODO 提炼；对齐 JWT、§4.7、当前 BFF 路径 |
 | 2026-04-15 | 增补 `order_seed.sql` 联调数据、`operator_type`、直辖市区县展示与编码约定 |
-
+| 2026-06-13 | 补充后台派单诊断聚合与 outbox 手动重试接口建议，供前端排障页设计使用 |

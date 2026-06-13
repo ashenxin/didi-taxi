@@ -14,11 +14,15 @@
   - 校验 JWT、执行数据域（`AdminDataScope`）校验与合并
   - 通过 Feign/HTTP 调用 `order-service`、`passenger-service`
   - **不直连订单库**
+  - 近期增强：聚合 `order-service` Outbox 诊断与 `capacity-service` Kafka 消费结果，形成后台排障接口
 - **`order-service`**
   - 订单主表（如 `trip_order`）、订单事件表（如 `order_event`）
   - 提供分页、详情、事件列表查询接口
+  - 提供内部 outbox / dispatch-trace 诊断接口
 - **`passenger-service`**
   - 按手机号查乘客、按 id 查乘客（用于列表筛选与详情补手机号）
+- **`capacity-service`**
+  - 提供派单 Kafka 消费结果诊断接口，用于按 `eventId` 或 `orderNo` 查询消费状态
 
 ---
 
@@ -77,6 +81,20 @@
 → `order-service GET /api/v1/orders/{orderNo}/events`  
 →（可选）`passenger-service GET /api/v1/customers/{passengerId}`
 
+### 4.4 派单诊断聚合（近期增强）
+
+`didi-Vue` → `admin-api GET /admin/api/v1/orders/{orderNo}/dispatch-diagnostics`
+→ `order-service GET /api/v1/orders/internal/dispatch-trace/{orderNo}`
+→ `order-service GET /api/v1/orders/internal/outbox/by-order/{orderNo}`
+→ `capacity-service GET /api/v1/dispatch/internal/events/by-order/{orderNo}`
+
+手动重试：
+
+`didi-Vue` → `admin-api POST /admin/api/v1/orders/outbox/{id}/retry`
+→ `order-service POST /api/v1/orders/internal/outbox/{id}/retry`
+
+> BFF 需先按订单详情执行数据域校验，避免通过诊断接口绕过后台订单权限。
+
 ---
 
 ## 5. 错误码与网关行为
@@ -103,3 +121,11 @@
 
 前端展示逻辑需与国标码约定对齐，直辖市区县码场景要保持一致（详见 API 文档联调说明）。
 
+---
+
+## 7. 前端联调建议（近期增强）
+
+- 订单排障页先做只读聚合，重试按钮仅对 `FAILED` outbox 显示。
+- 状态文案统一展示英文状态 + 中文释义，例如 `PENDING_DRIVER_CONFIRM（待司机确认）`。
+- capacity 消费结果建议用不同颜色区分：`SUCCESS` 成功、`NO_DRIVER` 无司机、`FAILED` 失败、`INVALID` / `MALFORMED` 坏消息。
+- DLQ / 坏消息页后续独立建设，当前订单排障页只展示与该 `orderNo` 相关的消费结果。
