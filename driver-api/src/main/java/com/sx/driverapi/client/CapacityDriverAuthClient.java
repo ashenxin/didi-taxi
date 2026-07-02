@@ -6,6 +6,7 @@ import com.sx.driverapi.client.dto.AppPasswordRegisterRequest;
 import com.sx.driverapi.client.dto.AppSmsLoginRequest;
 import com.sx.driverapi.client.dto.AppSmsRegisterRequest;
 import com.sx.driverapi.client.dto.AppSmsSendRequest;
+import com.sx.driverapi.client.dto.AppSmsSendResult;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 public interface CapacityDriverAuthClient {
 
     @PostMapping("/api/v1/driver/app/auth/sms/send")
-    CoreResponseVo<Void> sendSms(@RequestBody AppSmsSendRequest body);
+    CoreResponseVo<AppSmsSendResult> sendSms(@RequestBody AppSmsSendRequest body);
 
     @PostMapping("/api/v1/driver/app/auth/register-sms")
     CoreResponseVo<AppAuthDriverBrief> registerSms(@RequestBody AppSmsRegisterRequest body);
@@ -28,4 +29,3 @@ public interface CapacityDriverAuthClient {
     @PostMapping("/api/v1/driver/app/auth/login-password")
     CoreResponseVo<AppAuthDriverBrief> loginPassword(@RequestBody AppPasswordLoginRequest body);
 }
-

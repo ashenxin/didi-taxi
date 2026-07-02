@@ -9,6 +9,7 @@ import com.sx.driverapi.model.auth.PasswordRegisterRequest;
 import com.sx.driverapi.model.auth.SmsLoginRequest;
 import com.sx.driverapi.model.auth.SmsRegisterRequest;
 import com.sx.driverapi.model.auth.SmsSendRequest;
+import com.sx.driverapi.model.auth.SmsSendResult;
 import com.sx.driverapi.auth.DriverRequestAttributes;
 import com.sx.driverapi.service.DriverAuthService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -37,9 +38,8 @@ public class DriverAuthController {
      * {@code POST /driver/api/v1/auth/sms/send}
      */
     @PostMapping("/sms/send")
-    public ResponseVo<Void> sendSms(@Valid @RequestBody SmsSendRequest body) {
-        driverAuthService.sendSms(body.getPhone());
-        return ResultUtil.success(null);
+    public ResponseVo<SmsSendResult> sendSms(@Valid @RequestBody SmsSendRequest body) {
+        return ResultUtil.success(driverAuthService.sendSms(body.getPhone()));
     }
 
     /**
@@ -106,4 +106,3 @@ public class DriverAuthController {
         return ResultUtil.success(driverAuthService.issueWsToken(driverId, phone));
     }
 }
-

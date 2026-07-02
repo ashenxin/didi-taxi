@@ -4,6 +4,7 @@ import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
 import com.sx.passengerapi.client.dto.AppLoginPasswordRequest;
 import com.sx.passengerapi.client.dto.AppSmsLoginRequest;
 import com.sx.passengerapi.client.dto.AppSmsSendRequest;
+import com.sx.passengerapi.client.dto.AppSmsSendResult;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,7 +20,7 @@ public interface PassengerCoreAuthClient {
     ResponseVo<AppAuthCustomerBrief> loginPassword(@RequestBody AppLoginPasswordRequest body);
 
     @PostMapping("/api/v1/app/auth/sms/send")
-    ResponseVo<Void> sendSms(@RequestBody AppSmsSendRequest body);
+    ResponseVo<AppSmsSendResult> sendSms(@RequestBody AppSmsSendRequest body);
 
     @PostMapping("/api/v1/app/auth/login-sms")
     ResponseVo<AppAuthCustomerBrief> loginSms(@RequestBody AppSmsLoginRequest body);

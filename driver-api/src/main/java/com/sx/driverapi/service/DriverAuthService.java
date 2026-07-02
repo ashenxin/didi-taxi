@@ -11,9 +11,11 @@ import com.sx.driverapi.client.dto.AppPasswordRegisterRequest;
 import com.sx.driverapi.client.dto.AppSmsLoginRequest;
 import com.sx.driverapi.client.dto.AppSmsRegisterRequest;
 import com.sx.driverapi.client.dto.AppSmsSendRequest;
+import com.sx.driverapi.client.dto.AppSmsSendResult;
 import com.sx.driverapi.common.exception.BizErrorException;
 import com.sx.driverapi.model.auth.DriverLoginResponse;
 import com.sx.driverapi.model.auth.DriverProfileVO;
+import com.sx.driverapi.model.auth.SmsSendResult;
 import com.sx.driverapi.model.capacity.DriverOnlineBody;
 import feign.FeignException;
 import lombok.extern.slf4j.Slf4j;
@@ -41,11 +43,13 @@ public class DriverAuthService {
         this.tokenVersionStore = tokenVersionStore;
     }
 
-    public void sendSms(String phone) {
+    public SmsSendResult sendSms(String phone) {
         try {
-            CoreResponseVo<Void> resp = capacityDriverAuthClient.sendSms(new AppSmsSendRequest(phone));
+            CoreResponseVo<AppSmsSendResult> resp = capacityDriverAuthClient.sendSms(new AppSmsSendRequest(phone));
             unwrapOk(resp);
             log.info("司机短信发送请求已提交 phone={}", maskPhone(phone));
+            AppSmsSendResult data = resp.getData();
+            return new SmsSendResult(data == null ? null : data.getMockCode());
         } catch (FeignException e) {
             log.error("司机短信发送 Feign 异常 phone={} status={}", maskPhone(phone), e.status(), e);
             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");

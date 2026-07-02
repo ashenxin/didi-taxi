@@ -8,6 +8,8 @@ import com.sx.passengerapi.model.order.CreateAndAssignOrderBody;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderResult;
 import com.sx.passengerapi.model.order.CreateOrderResultV1;
 import com.sx.passengerapi.model.order.PassengerOrderDetailVO;
+import com.sx.passengerapi.model.order.PassengerOrderListType;
+import com.sx.passengerapi.model.order.PassengerOrderPageVO;
 import com.sx.passengerapi.service.PassengerOrderService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -68,6 +71,23 @@ public class PassengerOrderController {
         rejectPassengerIdBodyMismatch(passengerId, body.getPassengerId());
         body.setPassengerId(passengerId);
         return ResultUtil.success(passengerOrderService.createTwoPhase(body, idempotencyKey));
+    }
+
+    /**
+     * 乘客个人中心“我的订单”列表。
+     * {@code GET /app/api/v1/orders?type=&pageNo=&pageSize=}
+     */
+    @GetMapping("/orders")
+    public ResponseVo<PassengerOrderPageVO> listOrders(
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @RequestParam(value = "type", required = false) String type,
+            @RequestParam(value = "pageNo", required = false) Integer pageNo,
+            @RequestParam(value = "pageSize", required = false) Integer pageSize) {
+        if (passengerId == null) {
+            throw new BizErrorException(401, "未授权，请重新登录");
+        }
+        PassengerOrderListType listType = PassengerOrderListType.fromQuery(type);
+        return ResultUtil.success(passengerOrderService.listMyOrders(passengerId, listType, pageNo, pageSize));
     }
 
     /**

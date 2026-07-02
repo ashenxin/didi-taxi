@@ -6,6 +6,7 @@ import com.sx.capacity.app.dto.AppPasswordRegisterRequest;
 import com.sx.capacity.app.dto.AppSmsLoginRequest;
 import com.sx.capacity.app.dto.AppSmsRegisterRequest;
 import com.sx.capacity.app.dto.AppSmsSendRequest;
+import com.sx.capacity.app.dto.AppSmsSendResult;
 import com.sx.capacity.common.vo.ResponseVo;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -32,7 +33,7 @@ public class AppDriverAuthController {
      * {@code POST /api/v1/driver/app/auth/sms/send}
      */
     @PostMapping("/sms/send")
-    public ResponseVo<Void> sendSms(@Valid @RequestBody AppSmsSendRequest body) {
+    public ResponseVo<AppSmsSendResult> sendSms(@Valid @RequestBody AppSmsSendRequest body) {
         return service.sendSmsCode(body.getPhone());
     }
 
@@ -72,4 +73,3 @@ public class AppDriverAuthController {
         return service.loginPassword(body);
     }
 }
-

@@ -6,6 +6,7 @@ import com.sx.capacity.app.dto.AppPasswordLoginRequest;
 import com.sx.capacity.app.dto.AppPasswordRegisterRequest;
 import com.sx.capacity.app.dto.AppSmsLoginRequest;
 import com.sx.capacity.app.dto.AppSmsRegisterRequest;
+import com.sx.capacity.app.dto.AppSmsSendResult;
 import com.sx.capacity.common.util.ResultUtil;
 import com.sx.capacity.common.vo.ResponseVo;
 import com.sx.capacity.dao.DriverEntityMapper;
@@ -95,7 +96,7 @@ public class AppDriverAuthService {
      * @param phone 手机号
      * @return 成功无正文，失败带业务错误码与提示
      */
-    public ResponseVo<Void> sendSmsCode(String phone) {
+    public ResponseVo<AppSmsSendResult> sendSmsCode(String phone) {
         String p = phone == null ? null : phone.trim();
         if (p == null || p.isBlank()) {
             return ResultUtil.error(400, "手机号不能为空");
@@ -125,10 +126,11 @@ public class AppDriverAuthService {
 
         if (props.isMockSendEnabled()) {
             log.info("[运力端司机认证] 模拟短信验证码 phone={} code={}（mockSendEnabled=true）", p, code);
+            return ResultUtil.success(new AppSmsSendResult(code));
         } else {
             log.warn("[运力端司机认证] mockSendEnabled=false 且未接入短信通道 phone={}", p);
         }
-        return ResultUtil.success(null);
+        return ResultUtil.success(new AppSmsSendResult(null));
     }
 
     /**

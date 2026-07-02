@@ -73,11 +73,11 @@ capacity:
         lng: 120.2156
   app:
     driver-auth:
-      code-ttl-seconds: 300
-      min-interval-seconds: 60
-      daily-sms-limit-per-phone: 5
-      daily-login-fail-limit-per-phone: 5
-      mock-send-enabled: true
+      code-ttl-seconds: ${DRIVER_SMS_CODE_TTL_SECONDS:300}
+      min-interval-seconds: ${DRIVER_SMS_MIN_INTERVAL_SECONDS:2}
+      daily-sms-limit-per-phone: ${DRIVER_SMS_DAILY_LIMIT_PER_PHONE:100}
+      daily-login-fail-limit-per-phone: ${DRIVER_LOGIN_FAIL_DAILY_LIMIT_PER_PHONE:100}
+      mock-send-enabled: ${DRIVER_SMS_MOCK_ENABLED:true}
 
 # XXL-JOB 执行器：需独立部署 xxl-job-admin，版本需与根 pom 中 xxl.job.version 对齐
 xxl:
@@ -104,6 +104,13 @@ logging:
   level:
     com.sx.capacity.dao: DEBUG
 
+capacity:
+  app:
+    driver-auth:
+      min-interval-seconds: 2
+      daily-sms-limit-per-phone: 100
+      daily-login-fail-limit-per-phone: 100
+
 ---
 # 非生产：与 dev 相同（IDE 常用 --spring.profiles.active=local）
 spring:
@@ -114,3 +121,10 @@ spring:
 logging:
   level:
     com.sx.capacity.dao: DEBUG
+
+capacity:
+  app:
+    driver-auth:
+      min-interval-seconds: 2
+      daily-sms-limit-per-phone: 100
+      daily-login-fail-limit-per-phone: 100

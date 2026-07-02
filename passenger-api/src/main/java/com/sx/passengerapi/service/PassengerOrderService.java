@@ -17,8 +17,12 @@ import com.sx.passengerapi.model.order.CreateAndAssignOrderBody;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderResult;
 import com.sx.passengerapi.model.order.CreateOrderResultV1;
 import com.sx.passengerapi.model.order.OrderStatus;
+import com.sx.passengerapi.model.order.PassengerOrderActionVO;
 import com.sx.passengerapi.model.order.PassengerOrderDetailVO;
 import com.sx.passengerapi.model.order.PassengerOrderDriverVO;
+import com.sx.passengerapi.model.order.PassengerOrderListItemVO;
+import com.sx.passengerapi.model.order.PassengerOrderListType;
+import com.sx.passengerapi.model.order.PassengerOrderPageVO;
 import com.sx.passengerapi.model.auth.PassengerLogoutResult;
 import com.sx.passengerapi.model.order.PassengerOrderTimestamps;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
@@ -38,6 +42,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -358,6 +364,41 @@ public class PassengerOrderService {
         return vo;
     }
 
+    /**
+     * 乘客个人中心“我的订单”列表：支持全部 / 待出发 / 退款与取消筛选。
+     * 列表按创建时间倒序，按钮仅展示，不承载业务动作。
+     */
+    public PassengerOrderPageVO listMyOrders(Long passengerId, PassengerOrderListType type, Integer pageNo, Integer pageSize) {
+        if (passengerId == null) {
+            throw new BizErrorException(400, "passengerId不能为空");
+        }
+        PassengerOrderListType effectiveType = type == null ? PassengerOrderListType.ALL : type;
+        int current = pageNo == null || pageNo < 1 ? 1 : pageNo;
+        int size = pageSize == null || pageSize < 1 ? 10 : pageSize;
+
+        List<TripOrderRow> allRows = loadAllPassengerOrders(passengerId);
+        List<TripOrderRow> filteredRows = new ArrayList<>();
+        for (TripOrderRow row : allRows) {
+            if (effectiveType.matches(row)) {
+                filteredRows.add(row);
+            }
+        }
+
+        int from = Math.max(0, (current - 1) * size);
+        int to = Math.min(filteredRows.size(), from + size);
+        List<PassengerOrderListItemVO> list = from >= filteredRows.size()
+                ? List.of()
+                : filteredRows.subList(from, to).stream().map(this::toListItemVO).toList();
+
+        PassengerOrderPageVO out = new PassengerOrderPageVO();
+        out.setList(list);
+        out.setTotal(filteredRows.size());
+        out.setPageNo(current);
+        out.setPageSize(size);
+        out.setType(effectiveType);
+        return out;
+    }
+
     private boolean isRedispatching(String orderNo, Integer statusCode) {
         // 仅在 CREATED 展示“正在重新派单”
         if (statusCode == null || statusCode != 0) {
@@ -404,17 +445,7 @@ public class PassengerOrderService {
         if (passengerId <= 0) {
             return out;
         }
-        var resp = orderClient.pageOrders(passengerId, 1, 50);
-        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-            log.warn("登出：查询乘客订单失败 passengerId={} code={} msg={}",
-                    passengerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-            return out;
-        }
-        OrderPageData data = resp.getData();
-        if (data == null) {
-            return out;
-        }
-        List<TripOrderRow> rows = data.getList();
+        List<TripOrderRow> rows = loadAllPassengerOrders(passengerId);
         if (rows == null || rows.isEmpty()) {
             return out;
         }
@@ -459,6 +490,84 @@ public class PassengerOrderService {
             out.setHint("已为您取消进行中的订单（退出登录）。");
         }
         return out;
+    }
+
+    private List<TripOrderRow> loadAllPassengerOrders(Long passengerId) {
+        List<TripOrderRow> rows = new ArrayList<>();
+        final int corePageSize = 100;
+        int corePageNo = 1;
+        while (true) {
+            var resp = orderClient.pageOrders(passengerId, corePageNo, corePageSize);
+            if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+                log.warn("查询乘客订单失败 passengerId={} pageNo={} code={} msg={}",
+                        passengerId, corePageNo, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+                return Collections.emptyList();
+            }
+            OrderPageData data = resp.getData();
+            if (data == null || data.getList() == null || data.getList().isEmpty()) {
+                break;
+            }
+            rows.addAll(data.getList());
+            Integer total = data.getTotal();
+            if (total != null && rows.size() >= total) {
+                break;
+            }
+            corePageNo++;
+        }
+        return rows;
+    }
+
+    private PassengerOrderListItemVO toListItemVO(TripOrderRow row) {
+        PassengerOrderListItemVO vo = new PassengerOrderListItemVO();
+        vo.setOrderNo(row.getOrderNo());
+        vo.setOriginAddress(row.getOriginAddress());
+        vo.setDestAddress(row.getDestAddress());
+        vo.setStatus(OrderStatus.fromCode(row.getStatus()));
+        vo.setEstimatedAmount(row.getEstimatedAmount());
+        vo.setFinalAmount(row.getFinalAmount());
+        if (row.getDriverId() != null) {
+            PassengerOrderDriverVO d = new PassengerOrderDriverVO();
+            d.setDriverId(row.getDriverId());
+            d.setCarId(row.getCarId());
+            d.setCompanyId(row.getCompanyId());
+            vo.setDriver(d);
+        }
+        PassengerOrderTimestamps ts = new PassengerOrderTimestamps();
+        ts.setCreatedAt(row.getCreatedAt());
+        ts.setAssignedAt(row.getAssignedAt());
+        ts.setAcceptedAt(row.getAcceptedAt());
+        ts.setArrivedAt(row.getArrivedAt());
+        ts.setStartedAt(row.getStartedAt());
+        ts.setFinishedAt(row.getFinishedAt());
+        ts.setCancelledAt(row.getCancelledAt());
+        vo.setTimestamps(ts);
+        vo.setCancelBy(row.getCancelBy());
+        vo.setCancelReason(row.getCancelReason());
+        vo.setReDispatching(isRedispatching(row.getOrderNo(), row.getStatus()));
+        vo.setActions(defaultActions());
+        return vo;
+    }
+
+    private static List<PassengerOrderActionVO> defaultActions() {
+        PassengerOrderActionVO invoice = new PassengerOrderActionVO();
+        invoice.setCode("APPLY_INVOICE");
+        invoice.setLabel("申请开票");
+        invoice.setDisabled(Boolean.TRUE);
+        invoice.setImplemented(Boolean.FALSE);
+
+        PassengerOrderActionVO returnTrip = new PassengerOrderActionVO();
+        returnTrip.setCode("RETURN_TRIP");
+        returnTrip.setLabel("呼叫返程");
+        returnTrip.setDisabled(Boolean.TRUE);
+        returnTrip.setImplemented(Boolean.FALSE);
+
+        PassengerOrderActionVO rate = new PassengerOrderActionVO();
+        rate.setCode("RATE");
+        rate.setLabel("评价");
+        rate.setDisabled(Boolean.TRUE);
+        rate.setImplemented(Boolean.FALSE);
+
+        return List.of(invoice, returnTrip, rate);
     }
 
     private static PassengerOrderDetailVO toDetailVO(TripOrderRow row) {

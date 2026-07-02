@@ -4,6 +4,7 @@ import com.sx.passenger.app.dto.AppAuthCustomerBrief;
 import com.sx.passenger.app.dto.AppLoginPasswordRequest;
 import com.sx.passenger.app.dto.AppSmsLoginRequest;
 import com.sx.passenger.app.dto.AppSmsSendRequest;
+import com.sx.passenger.app.dto.AppSmsSendResult;
 import com.sx.passenger.common.vo.ResponseVo;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -39,7 +40,7 @@ public class AppCustomerAuthController {
      * {@code POST /api/v1/app/auth/sms/send}
      */
     @PostMapping("/sms/send")
-    public ResponseVo<Void> sendSms(@Valid @RequestBody AppSmsSendRequest body) {
+    public ResponseVo<AppSmsSendResult> sendSms(@Valid @RequestBody AppSmsSendRequest body) {
         return appCustomerAuthService.sendSmsCode(body.getPhone());
     }
 

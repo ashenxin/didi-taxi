@@ -3,6 +3,7 @@ package com.sx.passenger.app;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.passenger.app.dto.AppAuthCustomerBrief;
 import com.sx.passenger.app.dto.AppLoginPasswordRequest;
+import com.sx.passenger.app.dto.AppSmsSendResult;
 import com.sx.passenger.app.dto.AppSmsLoginRequest;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.model.Customer;
@@ -86,7 +87,7 @@ public class AppCustomerAuthService {
         return ResultUtil.success(toBrief(c));
     }
 
-    public ResponseVo<Void> sendSmsCode(String phone) {
+    public ResponseVo<AppSmsSendResult> sendSmsCode(String phone) {
         String gapKey = KEY_SMS_GAP_PREFIX + phone;
         Boolean firstGap = redis.opsForValue().setIfAbsent(gapKey, "1", Duration.ofSeconds(smsProps.getMinIntervalSeconds()));
         if (Boolean.FALSE.equals(firstGap)) {
@@ -110,11 +111,12 @@ public class AppCustomerAuthService {
 
         if (smsProps.isMockSendEnabled()) {
             log.info("[乘客端认证] 模拟短信验证码 phone={} code={}（mockSendEnabled=true）", phone, code);
+            return ResultUtil.success(new AppSmsSendResult(code));
         } else {
             // 生产：在此调用短信网关；失败时应 delete gapKey、回滚 daily 计数（简化可接受少量误差）
             log.warn("[乘客端认证] mockSendEnabled=false 且未接入短信通道 phone={}", phone);
         }
-        return ResultUtil.success(null);
+        return ResultUtil.success(new AppSmsSendResult(null));
     }
 
     @Transactional

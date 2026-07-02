@@ -7,11 +7,13 @@ import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
 import com.sx.passengerapi.client.dto.AppLoginPasswordRequest;
 import com.sx.passengerapi.client.dto.AppSmsLoginRequest;
 import com.sx.passengerapi.client.dto.AppSmsSendRequest;
+import com.sx.passengerapi.client.dto.AppSmsSendResult;
 import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
 import com.sx.passengerapi.model.auth.CustomerProfileVO;
 import com.sx.passengerapi.model.auth.PassengerLogoutResult;
+import com.sx.passengerapi.model.auth.SmsSendResult;
 import com.sx.passengerapi.ws.PassengerWsProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -39,8 +41,8 @@ public class PassengerAuthService {
         this.passengerWsProperties = passengerWsProperties;
     }
 
-    public void sendSms(String phone) {
-        ResponseVo<Void> body = passengerCoreAuthClient.sendSms(new AppSmsSendRequest(phone));
+    public SmsSendResult sendSms(String phone) {
+        ResponseVo<AppSmsSendResult> body = passengerCoreAuthClient.sendSms(new AppSmsSendRequest(phone));
         if (body == null || body.getCode() == null) {
             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
         }
@@ -48,6 +50,8 @@ public class PassengerAuthService {
             throw new BizErrorException(body.getCode(), body.getMsg());
         }
         log.info("乘客短信发送请求已提交 phone={}", maskPhone(phone));
+        AppSmsSendResult data = body.getData();
+        return new SmsSendResult(data == null ? null : data.getMockCode());
     }
 
     public CustomerLoginResponse loginSms(String phone, String code) {
@@ -139,4 +143,3 @@ public class PassengerAuthService {
         return "****" + phone.substring(phone.length() - 4);
     }
 }
-

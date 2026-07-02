@@ -5,6 +5,7 @@ import com.sx.passengerapi.common.util.ResultUtil;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
 import com.sx.passengerapi.model.auth.PassengerLogoutResult;
+import com.sx.passengerapi.model.auth.SmsSendResult;
 import com.sx.passengerapi.service.PassengerAuthService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -34,9 +35,8 @@ public class PassengerAuthController {
      * {@code POST /app/api/v1/auth/sms/send}
      */
     @PostMapping("/sms/send")
-    public ResponseVo<Void> sendSms(@Valid @RequestBody com.sx.passengerapi.model.auth.SmsSendRequest body) {
-        passengerAuthService.sendSms(body.getPhone());
-        return ResultUtil.success(null);
+    public ResponseVo<SmsSendResult> sendSms(@Valid @RequestBody com.sx.passengerapi.model.auth.SmsSendRequest body) {
+        return ResultUtil.success(passengerAuthService.sendSms(body.getPhone()));
     }
 
     /**
