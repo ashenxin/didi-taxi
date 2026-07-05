@@ -1,0 +1,25 @@
+server:
+  port: 8095
+
+spring:
+  application:
+    name: wallet-service
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/wallet?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf8&autoReconnect=true&useSSL=false&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true
+    username: root
+    password:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    druid:
+      validation-query: SELECT 1
+      test-while-idle: true
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+wallet:
+  payment:
+    mock-enabled: ${WALLET_PAYMENT_MOCK_ENABLED:true}

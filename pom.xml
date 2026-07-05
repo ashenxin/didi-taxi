@@ -23,6 +23,7 @@
         <module>calculate</module>
         <module>passenger</module>
         <module>order</module>
+        <module>wallet</module>
         <module>map</module>
         <module>admin-api</module>
         <module>passenger-api</module>

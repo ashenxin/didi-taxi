@@ -54,5 +54,7 @@ services:
     base-url: http://127.0.0.1:8090
   calculate:
     base-url: http://127.0.0.1:8091
+  wallet:
+    base-url: http://127.0.0.1:8095
   map:
     base-url: http://127.0.0.1:8094
