@@ -16,6 +16,7 @@ import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
+import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
 import com.sx.passengerapi.model.settings.AccountCancelConfirmRequest;
 import com.sx.passengerapi.model.settings.AccountCancelResultVO;
 import com.sx.passengerapi.model.settings.PhoneChangeConfirmRequest;
@@ -90,6 +91,9 @@ public class PassengerSettingsService {
         if (hasActiveOrder(customerId)) {
             throw new BizErrorException(409, "当前存在进行中订单，请先完成或取消订单后再注销");
         }
+        if (hasUnsettledOrder(customerId)) {
+            throw new BizErrorException(409, "当前存在未结清订单，请结清后再注销");
+        }
         AppAccountCancelResult data = unwrap(passengerCoreSettingsClient.confirmAccountCancel(
                 new AppAccountCancelConfirmRequest(customerId, req.getCode(), req.getConfirm())));
         // 注销生效后旧 token 立即失效；后台历史数据仍按原 customerId 可查。
@@ -114,6 +118,17 @@ public class PassengerSettingsService {
             }
         }
         return false;
+    }
+
+    private boolean hasUnsettledOrder(long customerId) {
+        ResponseVo<UnsettledOrderCheckResult> resp = orderClient.unsettledExists(customerId);
+        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+            log.warn("注销前查询未结清订单失败 passengerId={} code={} msg={}",
+                    customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+            throw new BizErrorException(502, "订单结算服务暂时不可用，请稍后重试");
+        }
+        UnsettledOrderCheckResult data = resp.getData();
+        return data != null && Boolean.TRUE.equals(data.getExists());
     }
 
     private List<TripOrderRow> loadAllPassengerOrders(Long passengerId) {

@@ -9,6 +9,7 @@ import com.sx.passengerapi.model.ordercore.OpenDriverOfferBody;
 import com.sx.passengerapi.model.ordercore.OrderEventRow;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
+import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -49,4 +50,7 @@ public interface OrderClient {
 
     @PostMapping("/api/v1/orders/{orderNo}/cancel")
     ResponseVo<Void> cancel(@PathVariable("orderNo") String orderNo, @RequestBody CancelOrderBody body);
+
+    @GetMapping("/api/v1/orders/internal/settlements/unsettled-exists")
+    ResponseVo<UnsettledOrderCheckResult> unsettledExists(@RequestParam("passengerId") Long passengerId);
 }

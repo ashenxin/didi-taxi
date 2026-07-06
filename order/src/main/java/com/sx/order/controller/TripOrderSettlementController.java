@@ -7,12 +7,14 @@ import com.sx.order.dao.TripOrderSettlementMapper;
 import com.sx.order.model.TripOrderSettlement;
 import com.sx.order.model.dto.SettlementPaymentUpdateRequest;
 import com.sx.order.model.dto.SettlementUpsertRequest;
+import com.sx.order.model.dto.UnsettledOrderCheckResult;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
@@ -83,6 +85,25 @@ public class TripOrderSettlementController {
             return ResultUtil.error(404, "订单结算记录不存在");
         }
         return ResultUtil.success(settlement);
+    }
+
+    /**
+     * 注销账号前检查是否存在未结清订单。
+     * 有应付金额时必须支付成功且状态为 PAID；零应付订单允许 PAID/CLOSED。
+     */
+    @GetMapping("/unsettled-exists")
+    public ResponseVo<UnsettledOrderCheckResult> unsettledExists(@RequestParam("passengerId") Long passengerId) {
+        if (passengerId == null || passengerId <= 0) {
+            return ResultUtil.error(400, "passengerId不能为空");
+        }
+        Long count = settlementMapper.selectCount(Wrappers.<TripOrderSettlement>lambdaQuery()
+                .eq(TripOrderSettlement::getPassengerId, passengerId)
+                .apply("((COALESCE(payable_amount, 0) > 0 " +
+                        "AND (payment_status <> 2 OR paid_amount IS NULL OR paid_amount < payable_amount OR settlement_status <> 'PAID')) " +
+                        "OR (COALESCE(payable_amount, 0) = 0 AND settlement_status NOT IN ('PAID', 'CLOSED')))")
+                .last("LIMIT 1"));
+        long n = count == null ? 0L : count;
+        return ResultUtil.success(new UnsettledOrderCheckResult(n > 0, n));
     }
 
     private TripOrderSettlement getByOrderNo(String orderNo) {
