@@ -21,6 +21,7 @@
 |--------|------|------|
 | GET | `/` | 分页列表 |
 | GET | `/{id}` | 详情（不在域内 404） |
+| GET | `/{id}/coupons` | 查看该计价规则同范围优惠券方案 |
 | POST | `/` | 新建（返回新建规则 id） |
 | PUT | `/{id}` | 更新（通常返回 data = null） |
 | DELETE | `/{id}` | 逻辑删除 |
@@ -60,7 +61,55 @@
 
 - 逻辑删除（以 `calculate-service` 行为为准）
 
-### 2.6 `FareRuleUpsertBody` 字段
+### 2.6 GET `/{id}/coupons` 同范围优惠券方案
+
+说明：
+
+- 后台从计价规则详情页进入优惠券方案。
+- BFF 先读取计价规则详情并做数据域校验。
+- 使用该规则的 `companyId + cityCode + productCode` 查询 `coupon_template`。
+- 不代表 `fare_rule` 表有优惠券字段，也不代表优惠券模板强绑定 `fare_rule_id`。
+
+Query：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `status` | String | 否 | DRAFT / PUBLISHED / OFFLINE |
+| `pageNo` | number | 否 | 默认 1 |
+| `pageSize` | number | 否 | 默认 20 |
+
+响应 data：
+
+```json
+{
+  "total": 1,
+  "pageNo": 1,
+  "pageSize": 20,
+  "list": [
+    {
+      "templateId": 1001,
+      "name": "杭州快车满35减5",
+      "companyId": 10,
+      "couponType": "AMOUNT_OFF",
+      "thresholdAmount": "35.00",
+      "discountAmount": "5.00",
+      "discountRate": null,
+      "maxDiscountAmount": null,
+      "cityCode": "330100",
+      "productCode": "ECONOMY",
+      "validStartAt": "2026-10-01 00:00:00",
+      "validEndAt": "2026-10-07 23:59:59",
+      "totalCount": 1000,
+      "receivedCount": 100,
+      "usedCount": 20,
+      "perUserLimit": 1,
+      "status": "PUBLISHED"
+    }
+  ]
+}
+```
+
+### 2.7 `FareRuleUpsertBody` 字段
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -93,6 +142,19 @@
 **业务校验（服务端）**
 
 - 同一 `company_id + province + city + product_code` 下，`is_deleted = 0` 的规则有效期区间不得重叠；否则返回业务错误（HTTP/`code` 以全局异常处理器为准）。
+- `fare_rule` 不保存优惠券开关或优惠券字段。
+
+### 3.1a `calculate-service`（优惠券模板，供后台聚合）
+
+车队营销优惠券接口以《二期功能/车队营销优惠券_API.md》为准。计价管理详情页最小依赖：
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/v1/coupons/templates` | Query：`companyId`、`cityCode`、`productCode`、`status`、`pageNo`、`pageSize` |
+| POST | `/api/v1/coupons/templates` | 超管创建模板 |
+| PUT | `/api/v1/coupons/templates/{templateId}` | 超管更新草稿 |
+| POST | `/api/v1/coupons/templates/{templateId}/publish` | 超管发布 |
+| POST | `/api/v1/coupons/templates/{templateId}/offline` | 超管下架 |
 
 ### 3.2 `calculate-service`（费用预估，非管理菜单）
 
@@ -109,6 +171,7 @@
 ## 4. Feign 对照（`admin-api`）
 
 - `CalculateClient`（`services.calculate.base-url`）：`page`、`detail`、`create`、`update`、`delete`，路径对应「下游 §3.1」。
+- 车队营销优惠券：后续扩展 `CalculateClient` 查询/创建/发布/下架优惠券模板，路径对应《二期功能/车队营销优惠券_API.md》。
 - 公司名称补全：`CapacityClient#companyDetail`。
 
 ---
@@ -127,6 +190,7 @@
 | 筛选项越出账号省/市 | 403 |
 | 规则/公司不在域内 | 404 |
 | 参数校验失败（含公司与省市不一致、区间重叠） | 400 或业务码（见实现） |
+| 非超管调用优惠券写接口 | 403 |
 | 下游错误 | 透传或统一 502（见实现） |
 
 ---
@@ -139,6 +203,7 @@
 |------|------|
 | `calculate_schema.sql` | 全量建库建表（`fare_rule`，含 `company_id`、`company_no`，索引 `idx_fare_rule_company_scope`） |
 | `calculate_seed.sql` | 种子数据：演示计价规则（公司 id 与 `capacity_seed.sql` 对齐） |
+| `二期功能/车队营销优惠券_SQL.md` | 优惠券模板、用户券、用券流水、订单结算补充字段草案；后续需同步成正式迁移脚本 |
 
 测试用 H2：`calculate/src/test/resources/schema-test.sql` 中 `fare_rule` 定义需与线上一致。
 
@@ -150,7 +215,8 @@
 |------|------|------|
 | `/pricing/fare-rules` | `pricing/FareRuleListView.vue` | 列表 + 公司筛选 |
 | `/pricing/fare-rules/new` | `pricing/FareRuleEditView.vue` | 新建（公司下拉，选公司带出省/市） |
-| `/pricing/fare-rules/:id` | `pricing/FareRuleEditView.vue` | 编辑 |
+| `/pricing/fare-rules/:id` | `pricing/FareRuleEditView.vue` | 编辑，并提供优惠券方案入口 |
+| `/pricing/fare-rules/:id/coupons` | 待定 | 查看同范围优惠券方案；超管可进入创建、发布、下架 |
 
 菜单与权限标识以 `sys_menu.perms` 为准（含 `visible=0` 的按钮行），与《后台管理系统_权限与接口文档.md》§2 一致（如 `pricing:fare-rule:list`）。
 
@@ -162,4 +228,4 @@
 |------|------|
 | 2026-04-15 | 首版：计价规则绑定 `company_id` / `company_no` 与产品线；补充 BFF、calculate 路径与 VO |
 | 2026-04-17 | 权限与 `sys_menu.perms` 对齐；脚本合并为 `calculate_schema.sql` / `calculate_seed.sql` |
-
+| 2026-07-07 | 补充从计价规则详情页查看同范围车队营销优惠券方案；明确 `fare_rule` 不新增优惠券字段 |

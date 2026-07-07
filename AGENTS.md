@@ -4,7 +4,7 @@
 
 ## 项目定位
 
-`didi-taxi` 是一个仿滴滴出行后端项目，采用 Java 21、Spring Boot 3.3.5、Spring Cloud 2023.0.5、Maven 多模块组织。当前核心目标是支撑乘客下单、订单派发、司机听单接单、后台管理、计价、地图路线、网关鉴权与 WebSocket 通知等能力。
+`didi-taxi` 是一个仿滴滴出行后端项目，采用 Java 21、Spring Boot 3.3.5、Spring Cloud 2023.0.5、Maven 多模块组织。当前核心目标是支撑乘客下单、订单派发、司机听单接单、后台管理、计价、钱包支付、地图路线、网关鉴权与 WebSocket 通知等能力。
 
 主要设计原则：
 
@@ -12,6 +12,7 @@
 - BFF 只做端侧聚合编排，不做订单状态裁决。
 - `order-service` 是订单状态机和事件流水的权威来源。
 - `capacity-service` 维护司机在线/听单能力、Redis GEO 司机池和调度匹配。
+- `wallet-service` 维护免密支付协议和支付单；优惠券仍归 `calculate-service`，订单结算快照归 `order-service`。
 - Redis 用作索引、缓存和推送辅助，不替代 DB 权威状态。
 - 关键写操作必须走状态条件更新/CAS，避免并发接单、取消、改派导致状态错乱。
 
@@ -25,10 +26,11 @@
 | `driver-api` | 8101 | 司机端 BFF；登录注册、上线听单、待接单、接/拒/取消/到达/开始/完成、司机 WebSocket。 |
 | `order` | 8093 | 订单服务；订单主表、状态机、事件流水、超时取消、offer 超时、接单互斥。 |
 | `capacity` | 8090 | 运力/调度服务；司机、公司、车辆、Redis GEO 司机池、迟滞匹配、换队申请。 |
-| `calculate` | 8091 | 计价服务；预估价、计价规则 CRUD。 |
+| `calculate` | 8091 | 计价服务；预估价、计价规则 CRUD、优惠券模板/用户券/用券流水。 |
+| `wallet` | 8095 | 钱包服务；乘客支付宝/微信免密协议、默认免密渠道、钱包支付单、mock 自动扣款。 |
 | `map` | 8094 | 地图服务；路线、地理编码/逆地理编码等高德相关能力。 |
 | `passenger` | 8092 | 乘客核心服务；乘客账号、后台 `sys_*` 权限相关内部能力。 |
-| `xxl-job-admin` | 8080 | XXL-JOB 调度中心；访问路径 `/xxl-job-admin`，供 `order`、`capacity` 执行器注册和手动触发任务。 |
+| `xxl-job-admin` | 8081 | XXL-JOB 调度中心；访问路径 `/xxl-job-admin`，供 `order`、`capacity` 执行器注册和手动触发任务。 |
 
 根 `pom.xml` 管理 Spring Boot、Spring Cloud、Java 21、XXL-JOB 与 Gateway 兼容版本。注意当前固定 `spring-cloud-starter-gateway` / `spring-cloud-gateway-server` 为 `4.1.5`，用于避免 Boot 3.3.5 与 Gateway 4.1.6 的 Spring Web 方法兼容问题。
 
@@ -71,6 +73,16 @@
 - BFF 中的业务接口读取 `X-User-Id` 作为当前用户；直连 BFF 联调时需手动补头或关闭/绕过相关检查。
 - 本地临时无 token 联调可设置 `GATEWAY_JWT_REQUIRE_AUTH=false`，生产必须为 `true`。
 
+### 钱包、优惠券与结算
+
+- 乘客端只通过 `passenger-api` 的 `/app/api/v1/wallet/**` 访问钱包能力，不直连 `wallet`、`calculate`、`order`。
+- 免密支付协议和支付单在 `wallet` 库：`wallet_auto_pay_agreement`、`wallet_payment_order`。
+- 优惠券在 `calculate` 库：`coupon_template`、`user_coupon`、`coupon_use_record`；钱包页面只是展示用户资产。
+- 订单支付与用券后的金额快照在 `order` 库：`trip_order_settlement`，避免继续膨胀 `trip_order`。
+- 当前一期钱包实现是支付宝/微信免密 + 用户券列表 + 完单结算基础链路；银行卡、借钱、车险只保留前端入口。
+- 车队营销优惠券已拆分正式 PRD/TECH/API/SQL，产品与开发口径以 `二期功能/车队营销优惠券_*.md` 为准；讨论稿仅用于追溯决策来源。已确认 `fare_rule` 不新增字段，优惠券按 `company_id + city_code + product_code` 与计价规则并行匹配。
+- 优惠券影响真实金额，后续真实扣款、结算、退款、对账前必须复核收入分配口径；当前已定的讨论口径是平台服务费按“乘客优惠后实付车费”的 5% 计算。
+
 ## 接口入口速查
 
 所有接口统一返回类似：
@@ -104,6 +116,13 @@
 | `POST` | `/app/api/v1/orders/create` | 历史兼容或后续两段式/Outbox 演进入口，不作为当前 H5 推荐入口 |
 | `GET` | `/app/api/v1/orders/{orderNo}` | 订单详情 |
 | `POST` | `/app/api/v1/orders/{orderNo}/cancel` | 乘客取消 |
+| `GET` | `/app/api/v1/wallet/summary` | 钱包首页摘要 |
+| `GET` | `/app/api/v1/wallet/auto-pay/agreements` | 查询免密协议列表 |
+| `POST` | `/app/api/v1/wallet/auto-pay/agreements/sign` | 发起支付宝/微信免密签约 |
+| `POST` | `/app/api/v1/wallet/auto-pay/agreements/{agreementId}/default` | 设置默认免密渠道 |
+| `POST` | `/app/api/v1/wallet/auto-pay/agreements/{agreementId}/close` | 关闭免密协议 |
+| `GET` | `/app/api/v1/wallet/coupons` | 查询我的优惠券 |
+| `GET` | `/app/api/v1/wallet/coupons/available` | 查询某订单可用优惠券 |
 
 ### 司机端常用接口
 
@@ -155,6 +174,7 @@ mvn -pl passenger-api test
 mvn -pl order test
 mvn -pl gateway spring-boot:run
 mvn -pl passenger-api spring-boot:run
+mvn -pl wallet spring-boot:run
 ```
 
 ### 本地依赖
@@ -162,9 +182,10 @@ mvn -pl passenger-api spring-boot:run
 按模块功能不同，可能需要：
 
 - MySQL：各服务的业务库，配置在对应 `application.yml`。
+- MySQL 业务库目前包括 `capacity`、`calculate`、`order`、`passenger`、`wallet`、`xxl_job` 等；钱包二期 SQL 见 `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TECH.md`。
 - Redis：乘客/司机 token version、司机 GEO 池、WS/调度辅助键。
 - Kafka：order outbox / 派单异步化相关；乘客下单主链路已切换为创建订单后由 Outbox + Kafka + capacity consumer 异步派单。
-- XXL-JOB：调度中心已纳入 `xxl-job-admin` 子模块，默认 `http://127.0.0.1:8080/xxl-job-admin`；注意不要和 Spring 定时任务重复跑同一逻辑。
+- XXL-JOB：调度中心已纳入 `xxl-job-admin` 子模块，默认 `http://127.0.0.1:8081/xxl-job-admin`；注意不要和 Spring 定时任务重复跑同一逻辑。
 - 高德地图 Key：map 服务调用外部地图能力时需要。
 
 ### 日志
@@ -175,13 +196,15 @@ mvn -pl passenger-api spring-boot:run
 - `passenger-api/logs/passenger-api`
 - `driver-api/logs/driver-api`
 - `capacity/logs`
+- `wallet/logs` 如后续配置 logback/file path 时补充
 
 排查订单问题时优先按 `orderNo` 串联：
 
 1. `order` 主表状态与 `order_event`。
 2. `capacity` 派单/司机池日志。
-3. BFF 请求日志。
-4. 网关 401/403/502、CORS、WS 101 握手状态。
+3. 涉及支付/优惠时查看 `trip_order_settlement`、`wallet_payment_order`、`user_coupon`、`coupon_use_record`。
+4. BFF 请求日志。
+5. 网关 401/403/502、CORS、WS 101 握手状态。
 
 ## 开发约定
 
@@ -191,6 +214,8 @@ mvn -pl passenger-api spring-boot:run
 - 涉及网关鉴权时，同时核对 `aud`、密钥、白名单、`X-User-Id` 注入和 CORS。
 - 涉及 WebSocket 时，同时核对网关 Upgrade 转发、握手白名单、BFF 小票校验、心跳和多实例策略。
 - 涉及司机池/调度时，记住 Redis 是索引；最终合法性仍回到 order/capacity DB 状态。
+- 涉及钱包、优惠券、结算时，按服务边界落库：支付授权/支付单在 `wallet`，优惠券规则和用券流水在 `calculate`，订单金额快照在 `order`。
+- 涉及金额字段、优惠券、平台服务费、车队/司机收入时，必须先查 PRD/TECH 的金额口径；没有定版口径不要直接上线真实支付/结算。
 - 文档名大量使用中文，搜索时优先用 `rg`，不要只依赖 IDE 侧边栏。
 
 ## 重要文档索引
@@ -248,9 +273,29 @@ mvn -pl passenger-api spring-boot:run
 
 ### 司机换队
 
-- `司机_换队功能_PRD.md`
-- `司机_换队功能_TECH.md`
-- `司机_换队功能_API.md`
+- `二期功能/司机_换队功能_PRD.md`
+- `二期功能/司机_换队功能_TECH.md`
+- `二期功能/司机_换队功能_API.md`
+
+### 二期个人中心与钱包
+
+- `二期功能/乘客端_个人中心_我的订单_PRD.md`
+- `二期功能/乘客端_个人中心_我的订单_TECH.md`
+- `二期功能/乘客端_个人中心_我的订单_API.md`
+- `二期功能/乘客端_个人中心_我的订单_TEST.md`
+- `二期功能/乘客端_个人中心_设置_PRD.md`
+- `二期功能/乘客端_个人中心_设置_TECH.md`
+- `二期功能/乘客端_个人中心_设置_API.md`
+- `二期功能/乘客端_个人中心_设置_TEST.md`
+- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_PRD.md`
+- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TECH.md`
+- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_API.md`
+- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TEST.md`
+- `二期功能/车队营销优惠券_PRD.md`
+- `二期功能/车队营销优惠券_TECH.md`
+- `二期功能/车队营销优惠券_API.md`
+- `二期功能/车队营销优惠券_SQL.md`
+- `二期功能/车队营销优惠券规则_讨论稿.md`
 
 ## 当前已知差距摘录
 
@@ -261,4 +306,6 @@ mvn -pl passenger-api spring-boot:run
 - 接驾 ETA 仍需实时坐标和 matrix 能力补齐；当前阶段暂不继续接入高德地图服务，先保留为后续体验项。
 - 司机心跳续 GEO 与司机级 Presence 防僵尸策略已落地；XXL `capacityDriverPresenceCleanup` 仍需在运行环境配置启用。
 - 司机登出后 `ACCEPTED`（司机已接单）到达前自动释单口径已明确并落地：释放改派回 `CREATED`（待派单/重新派单），不是乘客侧 `CANCELLED`（已取消）终态。
+- 我的钱包已新增 `wallet` 微服务；当前支付渠道为 mock 免密扣款，接真实支付宝/微信前仍需补第三方签约/扣款/回调验签和补偿对账。
+- 优惠券功能与计价规则存在金额耦合；车队营销优惠券正式 PRD/TECH/API/SQL 已拆分，开发后台营销能力前需要先完成评审。
 - 近期候选开发点以 `TODO与差距总览.md` §2.6 为准：后台/运维排障页、订单时间线增强、DLQ / 坏消息处理、写接口幂等扩展。

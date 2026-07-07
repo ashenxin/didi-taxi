@@ -2,6 +2,7 @@
 
 > 本文档描述「我的钱包」中免密支付与优惠券的技术设计、库表归属、数据一致性和 SQL 草案。
 > 产品口径见《乘客端_个人中心_我的钱包_免密支付与优惠券_PRD.md》，接口契约见《乘客端_个人中心_我的钱包_免密支付与优惠券_API.md》。
+> 车队营销优惠券目标表结构、后台接口和规则计算以《车队营销优惠券_TECH.md》《车队营销优惠券_API.md》《车队营销优惠券_SQL.md》为准；本文保留钱包侧接入说明。
 
 ---
 
@@ -9,7 +10,7 @@
 
 - `passenger-api` 作为乘客端 BFF，对外提供钱包页面接口。
 - `wallet` 库承载免密支付授权协议、支付单，后续可独立为 `wallet-service`。
-- `calculate` 库承载优惠券模板、用户券、优惠券使用流水。
+- `calculate` 库承载优惠券模板、用户券、优惠券使用流水；车队营销优惠券是独立计价营销能力，不属于 `wallet`。
 - `order` 库承载订单主表、订单事件、订单结算快照表。
 - 本期不实现银行卡、借钱、车险真实业务，只保留入口。
 
@@ -20,10 +21,12 @@
 - 当前只做支付宝/微信免密支付，不单独拆 `wallet_payment_method`。
 - 使用 `wallet_auto_pay_agreement` 同时表达“用户支付方式”和“渠道免密协议”。
 - 支付单独立为 `wallet_payment_order`，不要和免密协议表混在一起。
-- 优惠券相关表放入 `calculate`，由 `calculate` 承担价格中心职责。
+- 优惠券相关表放入 `calculate`，由 `calculate` 承担价格中心职责；目标结构以《车队营销优惠券_SQL.md》为准。
 - `trip_order` 已有字段不迁移，后续也不继续追加支付/优惠字段。
 - 新增 `trip_order_settlement` 承载订单结算、优惠、支付状态快照。
 - `fare_rule_snapshot` 保持计价快照语义，不塞优惠券明细。
+- `fare_rule` 不新增优惠券字段，后台从计价规则详情页按 `company_id + city_code + product_code` 查看优惠券方案。
+- 平台服务费按 `payable_amount * 5%` 计算，承运侧收入为 `payable_amount - platform_service_fee_amount`。
 
 ---
 
@@ -64,6 +67,7 @@
 - `coupon_template`：优惠券模板。
 - `user_coupon`：用户持有的券，保存模板关键字段快照。
 - `coupon_use_record`：优惠券状态变更流水。
+- 车队营销优惠券目标字段需支持 `company_id`、车队快照、`coupon_type`、`discount_rate`、`max_discount_amount`、`per_user_limit`、`activity_code`、`rule_config`、`rule_snapshot` 等，详见《车队营销优惠券_SQL.md》。
 
 用户券状态：
 
@@ -85,6 +89,9 @@
 - `coupon_id`：本单使用的用户券 ID。
 - `coupon_discount_amount`：优惠券抵扣金额。
 - `payable_amount`：应付金额。
+- `platform_service_fee_rate`：平台服务费费率，本期 0.0500。
+- `platform_service_fee_amount`：平台服务费金额。
+- `carrier_income_amount`：承运侧收入。
 - `payment_no`：支付单号。
 - `payment_status`：订单结算视角支付状态。
 - `settlement_status`：结算状态。
@@ -114,25 +121,29 @@
 ### 4.3 完单结算与自动扣款
 
 1. 订单完单，`trip_order.final_amount` 已写入。
-2. `calculate` 查询并锁定可用优惠券。
-3. 写入或更新 `trip_order_settlement`：
+2. order 确认最终承运 `company_id`，不能使用下单预估阶段候选司机 `company_id` 作为最终用券依据。
+3. `calculate` 按最终 `company_id + city_code + product_code + final_amount` 查询并锁定可用优惠券。
+4. 写入或更新 `trip_order_settlement`：
    - `final_amount`
    - `coupon_id`
    - `coupon_discount_amount`
    - `payable_amount`
-4. `wallet` 查询默认 `ACTIVE` 免密协议。
-5. 创建 `wallet_payment_order`，状态为 `CREATED`。
-6. 更新 `trip_order_settlement.payment_no` 与 `payment_status=1`。
-7. 发起渠道免密扣款。
-8. 支付成功：
+   - `platform_service_fee_rate`
+   - `platform_service_fee_amount`
+   - `carrier_income_amount`
+5. `wallet` 查询默认 `ACTIVE` 免密协议。
+6. 创建 `wallet_payment_order`，状态为 `CREATED`。
+7. 更新 `trip_order_settlement.payment_no` 与 `payment_status=1`。
+8. 发起渠道免密扣款。
+9. 支付成功：
    - `wallet_payment_order.status=SUCCESS`
    - `trip_order_settlement.payment_status=2`
    - `trip_order_settlement.settlement_status=PAID`
    - `calculate.user_coupon.status=USED`
-9. 支付失败：
+10. 支付失败：
    - `wallet_payment_order.status=FAILED`
    - `trip_order_settlement.payment_status=3`
-   - 优惠券按策略释放或短时保留锁定。
+   - 优惠券立即释放。
 
 ---
 
@@ -252,6 +263,8 @@ CREATE TABLE IF NOT EXISTS `wallet_payment_order` (
 
 ### 7.2 calculate 库优惠券表
 
+以下为钱包二期早期草案，已不能完整覆盖车队营销优惠券。正式开发车队营销优惠券时，以《车队营销优惠券_SQL.md》为准。
+
 ```sql
 USE `calculate`;
 
@@ -322,6 +335,8 @@ CREATE TABLE IF NOT EXISTS `coupon_use_record` (
 
 ### 7.3 order 库订单结算表
 
+以下为钱包二期早期草案，正式开发时需要合并《车队营销优惠券_SQL.md》中 `platform_service_fee_*`、`carrier_income_amount`、优惠券快照等字段。
+
 ```sql
 USE `order`;
 
@@ -357,4 +372,3 @@ CREATE TABLE IF NOT EXISTS `trip_order_settlement` (
     KEY `idx_settlement_status` (`settlement_status`, `updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单结算快照表';
 ```
-

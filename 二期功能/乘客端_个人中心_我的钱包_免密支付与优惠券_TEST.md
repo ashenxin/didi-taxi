@@ -2,6 +2,7 @@
 
 > 本文档用于「我的钱包」免密支付与优惠券功能的验收回归。
 > 接口见《乘客端_个人中心_我的钱包_免密支付与优惠券_API.md》，产品口径见《乘客端_个人中心_我的钱包_免密支付与优惠券_PRD.md》。
+> 车队营销优惠券后台配置、登录领券、最优券计算等专项测试还需参考《车队营销优惠券_PRD.md》《车队营销优惠券_API.md》。
 
 ---
 
@@ -27,6 +28,7 @@
 - 结算：
   - 不新增 `trip_order` 支付/优惠字段
   - 使用 `trip_order_settlement` 保存结算快照
+  - 保存平台服务费与承运侧收入快照
 
 ---
 
@@ -38,6 +40,7 @@
 - 准备乘客账号 A，可正常登录。
 - 准备账号 A 的可完单订单。
 - 准备至少一张账号 A 可用优惠券。
+- 准备一张与最终承运 `company_id + city_code + product_code` 匹配的车队券。
 - 支付宝/微信渠道本期可使用 mock 实现签约与扣款。
 
 ---
@@ -139,6 +142,7 @@
 - **预期**
   - 返回账号 A 的可用券。
   - 券状态为 `UNUSED`。
+  - 返回 `couponType`、`companyId`、`cityCode`、`productCode` 等规则展示字段。
   - 不返回其他用户券。
 
 ### T-WALLET-11 查询已使用优惠券
@@ -154,9 +158,11 @@
 - **前置**
   - 订单属于账号 A。
   - 订单金额、城市、产品线满足券规则。
+  - 订单最终承运 `company_id` 与发券车队匹配。
 - **预期**
   - 返回可用于该订单的券。
-  - 不满足门槛、城市、产品线、有效期的券不返回。
+  - 不满足门槛、车队、城市、产品线、有效期的券不返回。
+  - 返回的最优券符合“实际优惠金额最大、优惠相同优先快过期、再按券 ID 小者优先”。
 
 ### T-WALLET-13 查询他人订单可用券失败
 
@@ -178,7 +184,8 @@
   - `user_coupon.status` 从 `UNUSED` 变为 `LOCKED`。
   - `user_coupon.locked_order_no` 写入订单号。
   - `coupon_use_record` 写入 `LOCK` 流水。
-  - `trip_order_settlement` 写入 `coupon_id`、`coupon_discount_amount`、`payable_amount`。
+  - `trip_order_settlement` 写入 `coupon_id`、`coupon_discount_amount`、`payable_amount`、`platform_service_fee_amount`、`carrier_income_amount`。
+  - 锁券使用最终 `trip_order.company_id` 校验，不使用预估阶段候选司机 `company_id`。
 
 ### T-WALLET-15 支付成功后核销优惠券
 
@@ -200,8 +207,8 @@
 - **预期**
   - `wallet_payment_order.status=FAILED`。
   - `trip_order_settlement.payment_status=3`。
-  - 优惠券按本期策略释放为 `UNUSED` 或保持短时锁定。
-  - 若释放，`coupon_use_record` 写入 `RELEASE` 流水。
+  - 优惠券立即释放为 `UNUSED`；若释放时已过期，则按退券策略置为 `EXPIRED`。
+  - `coupon_use_record` 写入 `RELEASE` 流水。
 
 ### T-WALLET-17 无默认免密渠道
 
@@ -212,6 +219,17 @@
   - 不创建免密扣款请求。
   - `trip_order_settlement.payment_status=0` 或保持待支付。
   - 优惠券锁定策略符合 TECH 约定。
+
+### T-WALLET-17A 平台服务费与承运侧收入
+
+- **前置**
+  - 订单 `final_amount=35.00`。
+  - 优惠券抵扣 `coupon_discount_amount=5.00`。
+- **预期**
+  - `payable_amount=30.00`。
+  - `platform_service_fee_rate=0.0500`。
+  - `platform_service_fee_amount=1.50`。
+  - `carrier_income_amount=28.50`。
 
 ---
 
@@ -245,6 +263,17 @@
   - 优惠券只核销一次。
   - 不重复写入有副作用的核销逻辑。
 
+### T-WALLET-20A 异步派单最终车队校验
+
+- **步骤**
+  1. 构造预估阶段候选司机属于 A 车队、最终接单司机属于 B 车队的订单。
+  2. 账号 A 同时持有 A 车队券和 B 车队券。
+  3. 查询订单可用券并触发结算锁券。
+- **预期**
+  - A 车队券不参与最终可用券。
+  - B 车队券可参与计算。
+  - 结算快照中保存最终承运车队和实际使用券快照。
+
 ---
 
 ## 7. 表结构验收
@@ -254,6 +283,7 @@
 - **预期**
   - 不新增 `coupon_id`、`coupon_discount_amount`、`payable_amount`、`payment_status`、`payment_no`、`paid_at` 等字段到 `trip_order`。
   - 已有 `estimated_amount`、`final_amount`、`fare_rule_snapshot` 保持不迁移。
+  - 不新增优惠券字段到 `fare_rule`。
 
 ### T-WALLET-22 trip_order_settlement 存在且唯一关联订单
 
@@ -261,4 +291,4 @@
   - `order.trip_order_settlement` 存在。
   - `order_no` 唯一。
   - 同一订单只有一条结算快照。
-
+  - 表中可保存优惠券快照、平台服务费、承运侧收入。
