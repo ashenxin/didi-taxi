@@ -26,5 +26,6 @@ public class CouponUseRecord {
     private String beforeStatus;
     private String afterStatus;
     private String reason;
+    private String ruleSnapshot;
     private LocalDateTime createdAt;
 }

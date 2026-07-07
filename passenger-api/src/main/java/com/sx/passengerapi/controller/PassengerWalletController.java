@@ -7,6 +7,8 @@ import com.sx.passengerapi.model.wallet.AutoPayAgreementVO;
 import com.sx.passengerapi.model.wallet.AutoPaySignRequest;
 import com.sx.passengerapi.model.wallet.AutoPaySignResult;
 import com.sx.passengerapi.model.wallet.CouponPageVO;
+import com.sx.passengerapi.model.wallet.CouponClaimResult;
+import com.sx.passengerapi.model.wallet.CouponTemplateVO;
 import com.sx.passengerapi.model.wallet.CouponVO;
 import com.sx.passengerapi.model.wallet.WalletSummaryVO;
 import com.sx.passengerapi.service.PassengerWalletService;
@@ -73,6 +75,16 @@ public class PassengerWalletController {
     public ResponseVo<List<CouponVO>> availableCoupons(@RequestHeader(value = USER_ID_HEADER, required = false) Long customerId,
                                                        @RequestParam String orderNo) {
         return ResultUtil.success(passengerWalletService.availableCoupons(requireCustomerId(customerId), orderNo));
+    }
+
+    @GetMapping("/coupons/claimable")
+    public ResponseVo<List<CouponTemplateVO>> claimableCoupons(@RequestHeader(value = USER_ID_HEADER, required = false) Long customerId) {
+        return ResultUtil.success(passengerWalletService.claimableCoupons(requireCustomerId(customerId)));
+    }
+
+    @PostMapping("/coupons/claim-all")
+    public ResponseVo<CouponClaimResult> claimAllCoupons(@RequestHeader(value = USER_ID_HEADER, required = false) Long customerId) {
+        return ResultUtil.success(passengerWalletService.claimAllCoupons(requireCustomerId(customerId)));
     }
 
     private static long requireCustomerId(Long customerId) {

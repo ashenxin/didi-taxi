@@ -1,30 +1,21 @@
-package com.sx.calculate.model;
+package com.sx.calculate.model.dto;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.Setter;
-import lombok.experimental.Accessors;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Getter
 @Setter
-@Accessors(chain = true)
-@TableName("user_coupon")
-public class UserCoupon {
-    @TableId(type = IdType.AUTO)
+public class CouponTemplateVO {
     private Long id;
-    private Long templateId;
-    private Long passengerId;
     private Long companyId;
     private String companyNo;
     private String companyNameSnapshot;
     private String teamIdSnapshot;
     private String teamNameSnapshot;
-    private String couponName;
+    private String name;
     private String couponType;
     private BigDecimal thresholdAmount;
     private BigDecimal discountAmount;
@@ -32,13 +23,22 @@ public class UserCoupon {
     private BigDecimal maxDiscountAmount;
     private String cityCode;
     private String productCode;
-    private String status;
-    private String lockedOrderNo;
-    private LocalDateTime receivedAt;
+    private Integer validDays;
     private LocalDateTime validStartAt;
     private LocalDateTime validEndAt;
-    private LocalDateTime usedAt;
-    private String ruleSnapshot;
+    private Integer totalCount;
+    private Integer receivedCount;
+    private Integer usedCount;
+    private Integer perUserLimit;
+    private String issueType;
+    private String sourceType;
+    private String activityCode;
+    private String ruleConfig;
+    private String status;
+    private Long createdBy;
+    private Long updatedBy;
+    private LocalDateTime publishedAt;
+    private LocalDateTime offlineAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

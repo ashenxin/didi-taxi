@@ -7,8 +7,10 @@ public class CouponLockRequest {
     private String orderNo;
     private Long couponId;
     private BigDecimal finalAmount;
+    private Long companyId;
     private String cityCode;
     private String productCode;
+    private Boolean manualNoCoupon;
 
     public Long getPassengerId() {
         return passengerId;
@@ -42,6 +44,14 @@ public class CouponLockRequest {
         this.finalAmount = finalAmount;
     }
 
+    public Long getCompanyId() {
+        return companyId;
+    }
+
+    public void setCompanyId(Long companyId) {
+        this.companyId = companyId;
+    }
+
     public String getCityCode() {
         return cityCode;
     }
@@ -56,5 +66,13 @@ public class CouponLockRequest {
 
     public void setProductCode(String productCode) {
         this.productCode = productCode;
+    }
+
+    public Boolean getManualNoCoupon() {
+        return manualNoCoupon;
+    }
+
+    public void setManualNoCoupon(Boolean manualNoCoupon) {
+        this.manualNoCoupon = manualNoCoupon;
     }
 }

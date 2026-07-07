@@ -6,6 +6,8 @@ import com.sx.passengerapi.model.calculate.EstimateFareResult;
 import com.sx.passengerapi.model.wallet.CouponLockRequest;
 import com.sx.passengerapi.model.wallet.CouponLockResult;
 import com.sx.passengerapi.model.wallet.CouponPageVO;
+import com.sx.passengerapi.model.wallet.CouponClaimResult;
+import com.sx.passengerapi.model.wallet.CouponTemplateVO;
 import com.sx.passengerapi.model.wallet.CouponUseRequest;
 import com.sx.passengerapi.model.wallet.CouponVO;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -31,9 +33,16 @@ public interface CalculateClient {
 
     @GetMapping("/api/v1/coupons/available")
     ResponseVo<List<CouponVO>> availableCoupons(@RequestParam("passengerId") Long passengerId,
+                                                @RequestParam("companyId") Long companyId,
                                                 @RequestParam("finalAmount") BigDecimal finalAmount,
-                                                @RequestParam(value = "cityCode", required = false) String cityCode,
-                                                @RequestParam(value = "productCode", required = false) String productCode);
+                                                @RequestParam("cityCode") String cityCode,
+                                                @RequestParam("productCode") String productCode);
+
+    @GetMapping("/api/v1/coupons/claimable")
+    ResponseVo<List<CouponTemplateVO>> claimableCoupons(@RequestParam("passengerId") Long passengerId);
+
+    @PostMapping("/api/v1/coupons/claim-all")
+    ResponseVo<CouponClaimResult> claimAllCoupons(@RequestParam("passengerId") Long passengerId);
 
     @PostMapping("/internal/calculate/coupons/lock")
     ResponseVo<CouponLockResult> lockCoupon(@RequestBody CouponLockRequest request);

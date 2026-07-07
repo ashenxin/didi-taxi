@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Map;
+
 /**
  * 管理后台：计价规则 BFF，转发 {@code calculate-service} 的 fare_rule CRUD。
  * 统一前缀：{@code /admin/api/v1/pricing/fare-rules}。
@@ -85,5 +87,37 @@ public class AdminPricingController {
         adminPricingService.delete(id);
         return ResultUtil.success(null);
     }
-}
 
+    @GetMapping("/{id}/coupons")
+    public ResponseVo<Map<String, Object>> couponTemplates(@PathVariable Long id,
+                                                           @RequestParam(required = false) String status,
+                                                           @RequestParam(defaultValue = "1") Integer pageNo,
+                                                           @RequestParam(defaultValue = "20") Integer pageSize) {
+        return ResultUtil.success(adminPricingService.couponTemplates(id, status, pageNo, pageSize));
+    }
+
+    @PostMapping("/{id}/coupons")
+    public ResponseVo<Map<String, Object>> createCouponTemplate(@PathVariable Long id,
+                                                                @RequestBody Map<String, Object> body) {
+        return ResultUtil.success(adminPricingService.createCouponTemplate(id, body));
+    }
+
+    @PutMapping("/{id}/coupons/{templateId}")
+    public ResponseVo<Map<String, Object>> updateCouponTemplate(@PathVariable Long id,
+                                                                @PathVariable Long templateId,
+                                                                @RequestBody Map<String, Object> body) {
+        return ResultUtil.success(adminPricingService.updateCouponTemplate(id, templateId, body));
+    }
+
+    @PostMapping("/{id}/coupons/{templateId}/publish")
+    public ResponseVo<Map<String, Object>> publishCouponTemplate(@PathVariable Long id,
+                                                                 @PathVariable Long templateId) {
+        return ResultUtil.success(adminPricingService.publishCouponTemplate(id, templateId));
+    }
+
+    @PostMapping("/{id}/coupons/{templateId}/offline")
+    public ResponseVo<Map<String, Object>> offlineCouponTemplate(@PathVariable Long id,
+                                                                 @PathVariable Long templateId) {
+        return ResultUtil.success(adminPricingService.offlineCouponTemplate(id, templateId));
+    }
+}

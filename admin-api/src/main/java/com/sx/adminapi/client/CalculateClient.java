@@ -28,5 +28,22 @@ public interface CalculateClient {
 
     @DeleteMapping("/api/v1/fare-rules/{id}")
     Map<String, Object> delete(@PathVariable("id") Long id);
-}
 
+    @GetMapping("/api/v1/coupons/templates")
+    Map<String, Object> pageCouponTemplates(@RequestParam Map<String, Object> params);
+
+    @PostMapping("/api/v1/coupons/templates")
+    Map<String, Object> createCouponTemplate(@RequestBody Map<String, Object> body);
+
+    @PutMapping("/api/v1/coupons/templates/{templateId}")
+    Map<String, Object> updateCouponTemplate(@PathVariable("templateId") Long templateId,
+                                             @RequestBody Map<String, Object> body);
+
+    @PostMapping("/api/v1/coupons/templates/{templateId}/publish")
+    Map<String, Object> publishCouponTemplate(@PathVariable("templateId") Long templateId,
+                                              @RequestParam(value = "operatorId", required = false) Long operatorId);
+
+    @PostMapping("/api/v1/coupons/templates/{templateId}/offline")
+    Map<String, Object> offlineCouponTemplate(@PathVariable("templateId") Long templateId,
+                                              @RequestParam(value = "operatorId", required = false) Long operatorId);
+}

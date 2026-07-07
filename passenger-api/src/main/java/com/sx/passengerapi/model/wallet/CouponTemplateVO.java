@@ -3,39 +3,28 @@ package com.sx.passengerapi.model.wallet;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
-public class CouponVO {
-    private Long couponId;
-    private Long templateId;
+public class CouponTemplateVO {
+    private Long id;
     private Long companyId;
     private String companyNameSnapshot;
-    private String couponName;
+    private String name;
     private String couponType;
     private BigDecimal thresholdAmount;
     private BigDecimal discountAmount;
     private BigDecimal discountRate;
     private BigDecimal maxDiscountAmount;
-    private BigDecimal actualDiscountAmount;
-    private BigDecimal payableAmount;
     private String cityCode;
     private String productCode;
-    private String status;
     private LocalDateTime validStartAt;
     private LocalDateTime validEndAt;
+    private String status;
 
-    public Long getCouponId() {
-        return couponId;
+    public Long getId() {
+        return id;
     }
 
-    public void setCouponId(Long couponId) {
-        this.couponId = couponId;
-    }
-
-    public Long getTemplateId() {
-        return templateId;
-    }
-
-    public void setTemplateId(Long templateId) {
-        this.templateId = templateId;
+    public void setId(Long id) {
+        this.id = id;
     }
 
     public Long getCompanyId() {
@@ -54,12 +43,12 @@ public class CouponVO {
         this.companyNameSnapshot = companyNameSnapshot;
     }
 
-    public String getCouponName() {
-        return couponName;
+    public String getName() {
+        return name;
     }
 
-    public void setCouponName(String couponName) {
-        this.couponName = couponName;
+    public void setName(String name) {
+        this.name = name;
     }
 
     public String getCouponType() {
@@ -102,22 +91,6 @@ public class CouponVO {
         this.maxDiscountAmount = maxDiscountAmount;
     }
 
-    public BigDecimal getActualDiscountAmount() {
-        return actualDiscountAmount;
-    }
-
-    public void setActualDiscountAmount(BigDecimal actualDiscountAmount) {
-        this.actualDiscountAmount = actualDiscountAmount;
-    }
-
-    public BigDecimal getPayableAmount() {
-        return payableAmount;
-    }
-
-    public void setPayableAmount(BigDecimal payableAmount) {
-        this.payableAmount = payableAmount;
-    }
-
     public String getCityCode() {
         return cityCode;
     }
@@ -134,14 +107,6 @@ public class CouponVO {
         this.productCode = productCode;
     }
 
-    public String getStatus() {
-        return status;
-    }
-
-    public void setStatus(String status) {
-        this.status = status;
-    }
-
     public LocalDateTime getValidStartAt() {
         return validStartAt;
     }
@@ -156,5 +121,13 @@ public class CouponVO {
 
     public void setValidEndAt(LocalDateTime validEndAt) {
         this.validEndAt = validEndAt;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
     }
 }

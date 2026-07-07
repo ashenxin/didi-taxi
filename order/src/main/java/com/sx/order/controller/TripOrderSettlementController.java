@@ -18,11 +18,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 
 @RestController
 @RequestMapping("/api/v1/orders/internal/settlements")
 public class TripOrderSettlementController {
+    private static final BigDecimal DEFAULT_SERVICE_FEE_RATE = new BigDecimal("0.0500");
+
     private final TripOrderSettlementMapper settlementMapper;
 
     public TripOrderSettlementController(TripOrderSettlementMapper settlementMapper) {
@@ -44,8 +47,31 @@ public class TripOrderSettlementController {
         settlement.setEstimatedAmount(request.getEstimatedAmount());
         settlement.setFinalAmount(request.getFinalAmount());
         settlement.setCouponId(request.getCouponId());
+        settlement.setCouponTemplateId(request.getCouponTemplateId());
+        settlement.setCouponCompanyId(request.getCouponCompanyId());
+        settlement.setCouponCompanyNo(request.getCouponCompanyNo());
+        settlement.setCouponCompanyNameSnapshot(request.getCouponCompanyNameSnapshot());
+        settlement.setCouponTeamIdSnapshot(request.getCouponTeamIdSnapshot());
+        settlement.setCouponTeamNameSnapshot(request.getCouponTeamNameSnapshot());
+        settlement.setCouponType(request.getCouponType());
         settlement.setCouponDiscountAmount(defaultAmount(request.getCouponDiscountAmount()));
-        settlement.setPayableAmount(request.getPayableAmount());
+        settlement.setCouponRuleSnapshot(request.getCouponRuleSnapshot());
+        BigDecimal payableAmount = request.getPayableAmount() == null
+                ? defaultAmount(request.getFinalAmount()).subtract(defaultAmount(request.getCouponDiscountAmount())).max(BigDecimal.ZERO)
+                : request.getPayableAmount();
+        settlement.setPayableAmount(scale(payableAmount));
+        BigDecimal feeRate = request.getPlatformServiceFeeRate() == null
+                ? DEFAULT_SERVICE_FEE_RATE
+                : request.getPlatformServiceFeeRate();
+        BigDecimal feeAmount = request.getPlatformServiceFeeAmount() == null
+                ? scale(payableAmount.multiply(feeRate))
+                : request.getPlatformServiceFeeAmount();
+        settlement.setPlatformServiceFeeRate(feeRate);
+        settlement.setPlatformServiceFeeAmount(scale(feeAmount));
+        settlement.setCarrierIncomeAmount(request.getCarrierIncomeAmount() == null
+                ? scale(payableAmount.subtract(feeAmount).max(BigDecimal.ZERO))
+                : scale(request.getCarrierIncomeAmount()));
+        settlement.setSettlementSnapshot(request.getSettlementSnapshot());
         if (request.getSettlementStatus() != null && !request.getSettlementStatus().isBlank()) {
             settlement.setSettlementStatus(request.getSettlementStatus());
         }
@@ -114,6 +140,10 @@ public class TripOrderSettlementController {
 
     private BigDecimal defaultAmount(BigDecimal amount) {
         return amount == null ? BigDecimal.ZERO : amount;
+    }
+
+    private BigDecimal scale(BigDecimal amount) {
+        return defaultAmount(amount).setScale(2, RoundingMode.HALF_UP);
     }
 
     private String defaultStatus(String value, String fallback) {

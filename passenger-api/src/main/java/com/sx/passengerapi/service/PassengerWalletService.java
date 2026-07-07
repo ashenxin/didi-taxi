@@ -10,11 +10,14 @@ import com.sx.passengerapi.model.wallet.AutoPayAgreementVO;
 import com.sx.passengerapi.model.wallet.AutoPaySignRequest;
 import com.sx.passengerapi.model.wallet.AutoPaySignResult;
 import com.sx.passengerapi.model.wallet.CouponPageVO;
+import com.sx.passengerapi.model.wallet.CouponClaimResult;
+import com.sx.passengerapi.model.wallet.CouponTemplateVO;
 import com.sx.passengerapi.model.wallet.CouponVO;
 import com.sx.passengerapi.model.wallet.WalletSummaryVO;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.Collections;
 import java.util.List;
 
 @Service
@@ -73,8 +76,20 @@ public class PassengerWalletService {
         if (amount == null) {
             amount = BigDecimal.ZERO;
         }
-        return unwrap(calculateClient.availableCoupons(passengerId, amount, order.getCityCode(), order.getProductCode()),
+        if (order.getCompanyId() == null || order.getCityCode() == null || order.getProductCode() == null) {
+            return Collections.emptyList();
+        }
+        return unwrap(calculateClient.availableCoupons(passengerId, order.getCompanyId(), amount,
+                        order.getCityCode(), order.getProductCode()),
                 "计价服务调用失败");
+    }
+
+    public List<CouponTemplateVO> claimableCoupons(long passengerId) {
+        return unwrap(calculateClient.claimableCoupons(passengerId), "计价服务调用失败");
+    }
+
+    public CouponClaimResult claimAllCoupons(long passengerId) {
+        return unwrap(calculateClient.claimAllCoupons(passengerId), "计价服务调用失败");
     }
 
     private <T> T unwrap(ResponseVo<T> response, String fallbackMessage) {

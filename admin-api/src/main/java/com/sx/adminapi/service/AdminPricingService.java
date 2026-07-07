@@ -138,6 +138,63 @@ public class AdminPricingService {
         log.info("管理端计价规则已删除 id={}", id);
     }
 
+    public Map<String, Object> couponTemplates(Long fareRuleId, String status, Integer pageNo, Integer pageSize) {
+        AdminFareRuleVO fareRule = detail(fareRuleId);
+        if (fareRule == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "规则不存在");
+        }
+        Map<String, Object> params = new HashMap<>();
+        params.put("companyId", fareRule.getCompanyId());
+        params.put("cityCode", fareRule.getCityCode());
+        params.put("productCode", fareRule.getProductCode());
+        params.put("pageNo", pageNo);
+        params.put("pageSize", pageSize);
+        putIfNotBlank(params, "status", status);
+        return castMap(unwrapData(calculateClient.pageCouponTemplates(params)));
+    }
+
+    public Map<String, Object> createCouponTemplate(Long fareRuleId, Map<String, Object> body) {
+        AdminLoginUser login = requireSuper();
+        AdminFareRuleVO fareRule = detail(fareRuleId);
+        if (fareRule == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "规则不存在");
+        }
+        Map<String, Object> scoped = enrichCouponBody(fareRule, body);
+        scoped.put("operatorId", login.userId());
+        Map<String, Object> wrapper = calculateClient.createCouponTemplate(scoped);
+        return castMap(unwrapData(wrapper));
+    }
+
+    public Map<String, Object> updateCouponTemplate(Long fareRuleId, Long templateId, Map<String, Object> body) {
+        AdminLoginUser login = requireSuper();
+        AdminFareRuleVO fareRule = detail(fareRuleId);
+        if (fareRule == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "规则不存在");
+        }
+        Map<String, Object> scoped = enrichCouponBody(fareRule, body);
+        scoped.put("operatorId", login.userId());
+        Map<String, Object> wrapper = calculateClient.updateCouponTemplate(templateId, scoped);
+        return castMap(unwrapData(wrapper));
+    }
+
+    public Map<String, Object> publishCouponTemplate(Long fareRuleId, Long templateId) {
+        AdminLoginUser login = requireSuper();
+        AdminFareRuleVO fareRule = detail(fareRuleId);
+        if (fareRule == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "规则不存在");
+        }
+        return castMap(unwrapData(calculateClient.publishCouponTemplate(templateId, login.userId())));
+    }
+
+    public Map<String, Object> offlineCouponTemplate(Long fareRuleId, Long templateId) {
+        AdminLoginUser login = requireSuper();
+        AdminFareRuleVO fareRule = detail(fareRuleId);
+        if (fareRule == null) {
+            throw new BizErrorException(ExceptionCode.NOT_FOUND.getValue(), "规则不存在");
+        }
+        return castMap(unwrapData(calculateClient.offlineCouponTemplate(templateId, login.userId())));
+    }
+
     private void validateCompanyForFareRule(FareRuleUpsertBody scoped) {
         if (scoped == null || scoped.getCompanyId() == null) {
             throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "请选择运力公司");
@@ -159,6 +216,33 @@ public class AdminPricingService {
             throw new BizErrorException(ExceptionCode.BAD_REQUEST.getValue(), "运力公司编号缺失");
         }
         scoped.setCompanyNo(c.getCompanyNo().trim());
+    }
+
+    private Map<String, Object> enrichCouponBody(AdminFareRuleVO fareRule, Map<String, Object> body) {
+        Map<String, Object> scoped = body == null ? new HashMap<>() : new HashMap<>(body);
+        AdminCompanyVO company = null;
+        if (fareRule.getCompanyId() != null) {
+            Object data = unwrapData(capacityClient.companyDetail(fareRule.getCompanyId()));
+            if (data != null) {
+                company = objectMapper.convertValue(data, AdminCompanyVO.class);
+            }
+        }
+        scoped.put("companyId", fareRule.getCompanyId());
+        scoped.put("companyNo", fareRule.getCompanyNo());
+        scoped.put("companyNameSnapshot", company == null ? fareRule.getCompanyName() : company.getCompanyName());
+        scoped.put("teamIdSnapshot", company == null || company.getTeamId() == null ? null : String.valueOf(company.getTeamId()));
+        scoped.put("teamNameSnapshot", company == null ? null : company.getTeam());
+        scoped.put("cityCode", fareRule.getCityCode());
+        scoped.put("productCode", fareRule.getProductCode());
+        return scoped;
+    }
+
+    private AdminLoginUser requireSuper() {
+        AdminLoginUser login = AdminDataScope.requireUser();
+        if (!AdminDataScope.isSuper(login)) {
+            throw new BizErrorException(ExceptionCode.FORBIDDEN.getValue(), "仅超管可操作优惠券方案");
+        }
+        return login;
     }
 
     private void enrichCompanyNames(List<AdminFareRuleVO> list) {
@@ -288,4 +372,3 @@ public class AdminPricingService {
         }
     }
 }
-

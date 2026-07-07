@@ -1,9 +1,12 @@
 package com.sx.passengerapi.model.wallet;
 
+import java.math.BigDecimal;
+
 public class CouponUseRequest {
     private Long passengerId;
     private Long couponId;
     private String orderNo;
+    private BigDecimal discountAmount;
 
     public Long getPassengerId() {
         return passengerId;
@@ -27,5 +30,13 @@ public class CouponUseRequest {
 
     public void setOrderNo(String orderNo) {
         this.orderNo = orderNo;
+    }
+
+    public BigDecimal getDiscountAmount() {
+        return discountAmount;
+    }
+
+    public void setDiscountAmount(BigDecimal discountAmount) {
+        this.discountAmount = discountAmount;
     }
 }

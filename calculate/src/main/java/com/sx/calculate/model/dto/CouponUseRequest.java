@@ -3,6 +3,8 @@ package com.sx.calculate.model.dto;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
+import java.math.BigDecimal;
+
 public class CouponUseRequest {
     @NotNull
     private Long passengerId;
@@ -10,6 +12,7 @@ public class CouponUseRequest {
     private Long couponId;
     @NotBlank
     private String orderNo;
+    private BigDecimal discountAmount;
 
     public Long getPassengerId() {
         return passengerId;
@@ -33,5 +36,13 @@ public class CouponUseRequest {
 
     public void setOrderNo(String orderNo) {
         this.orderNo = orderNo;
+    }
+
+    public BigDecimal getDiscountAmount() {
+        return discountAmount;
+    }
+
+    public void setDiscountAmount(BigDecimal discountAmount) {
+        this.discountAmount = discountAmount;
     }
 }
