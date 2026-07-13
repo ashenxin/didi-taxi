@@ -131,3 +131,45 @@ CREATE TABLE IF NOT EXISTS `order_idempotent_record` (
     UNIQUE KEY `uk_order_idem_request_id` (`request_id`),
     KEY `idx_order_idem_passenger` (`passenger_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单写接口幂等记录';
+
+-- =============================================================================
+-- 订单结算快照（优惠券、实付、平台服务费、承运侧收入、支付状态）
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS `trip_order_settlement` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `order_no` VARCHAR(64) NOT NULL COMMENT '订单号',
+    `passenger_id` BIGINT NOT NULL COMMENT '乘客ID，对应 passenger.customer.id',
+    `estimated_amount` DECIMAL(10,2) NULL COMMENT '预估金额',
+    `final_amount` DECIMAL(10,2) NULL COMMENT '最终车费',
+    `coupon_id` BIGINT NULL COMMENT '本单使用的用户券ID，calculate.user_coupon.id',
+    `coupon_template_id` BIGINT NULL COMMENT '本单使用优惠券模板ID',
+    `coupon_company_id` BIGINT NULL COMMENT '发券车队承运单元ID快照',
+    `coupon_company_no` VARCHAR(64) NULL COMMENT '发券公司编号快照',
+    `coupon_company_name_snapshot` VARCHAR(128) NULL COMMENT '发券公司名称快照',
+    `coupon_team_id_snapshot` VARCHAR(64) NULL COMMENT '发券车队业务编码快照',
+    `coupon_team_name_snapshot` VARCHAR(128) NULL COMMENT '发券车队名称快照',
+    `coupon_type` VARCHAR(32) NULL COMMENT '优惠券类型快照',
+    `coupon_discount_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00 COMMENT '优惠券抵扣金额',
+    `coupon_rule_snapshot` JSON NULL COMMENT '本单用券规则快照',
+    `payable_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00 COMMENT '乘客应付金额',
+    `platform_service_fee_rate` DECIMAL(6,4) NULL COMMENT '平台服务费费率',
+    `platform_service_fee_amount` DECIMAL(10,2) NULL COMMENT '平台服务费金额',
+    `carrier_income_amount` DECIMAL(10,2) NULL COMMENT '承运侧收入金额',
+    `settlement_snapshot` JSON NULL COMMENT '结算快照',
+    `payment_no` VARCHAR(64) NULL COMMENT '钱包支付单号',
+    `payment_status` INT NOT NULL DEFAULT 0 COMMENT '支付状态：0待支付 1支付中 2成功 3失败',
+    `paid_amount` DECIMAL(10,2) NULL COMMENT '已支付金额',
+    `paid_at` DATETIME NULL COMMENT '支付完成时间',
+    `settlement_status` VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/PAID/CLOSED',
+    `settled_at` DATETIME NULL COMMENT '结算完成时间',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_trip_order_settlement_order_no` (`order_no`),
+    KEY `idx_settlement_passenger` (`passenger_id`, `created_at`),
+    KEY `idx_settlement_coupon` (`coupon_id`),
+    KEY `idx_settlement_coupon_template` (`coupon_template_id`),
+    KEY `idx_settlement_coupon_company` (`coupon_company_id`),
+    KEY `idx_settlement_payment_no` (`payment_no`),
+    KEY `idx_settlement_status` (`settlement_status`, `payment_status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单结算快照';

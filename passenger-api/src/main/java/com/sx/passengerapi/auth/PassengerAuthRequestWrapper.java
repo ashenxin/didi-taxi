@@ -11,21 +11,27 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 校验 JWT 后注入 {@code X-User-Id}，与网关转发行为对齐，供 Controller 沿用 {@code @RequestHeader}。
+ * 校验 JWT 后注入 {@code X-User-Id}/{@code X-User-Phone}，
+ * 与网关转发行为对齐，供 Controller 沿用 {@code @RequestHeader}。
  */
 public class PassengerAuthRequestWrapper extends HttpServletRequestWrapper {
 
     private final String userIdHeaderValue;
+    private final String userPhoneHeaderValue;
 
-    public PassengerAuthRequestWrapper(HttpServletRequest request, long customerId) {
+    public PassengerAuthRequestWrapper(HttpServletRequest request, long customerId, String phone) {
         super(request);
         this.userIdHeaderValue = String.valueOf(customerId);
+        this.userPhoneHeaderValue = phone == null ? "" : phone;
     }
 
     @Override
     public String getHeader(String name) {
         if ("X-User-Id".equalsIgnoreCase(name)) {
             return userIdHeaderValue;
+        }
+        if ("X-User-Phone".equalsIgnoreCase(name)) {
+            return userPhoneHeaderValue;
         }
         return super.getHeader(name);
     }
@@ -34,6 +40,9 @@ public class PassengerAuthRequestWrapper extends HttpServletRequestWrapper {
     public Enumeration<String> getHeaders(String name) {
         if ("X-User-Id".equalsIgnoreCase(name)) {
             return Collections.enumeration(List.of(userIdHeaderValue));
+        }
+        if ("X-User-Phone".equalsIgnoreCase(name)) {
+            return Collections.enumeration(List.of(userPhoneHeaderValue));
         }
         return super.getHeaders(name);
     }
@@ -46,6 +55,7 @@ public class PassengerAuthRequestWrapper extends HttpServletRequestWrapper {
             names.add(e.nextElement());
         }
         names.add("X-User-Id");
+        names.add("X-User-Phone");
         return Collections.enumeration(new ArrayList<>(names));
     }
 }

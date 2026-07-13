@@ -85,3 +85,146 @@ WHERE NOT EXISTS (
     AND `city_code` = '330100'
     AND `product_code` = 'ECONOMY'
 );
+
+-- ---------------------------------------------------------------------------
+-- 登录弹窗优惠券联调兜底（幂等：按 activity_code 跳过）
+-- ---------------------------------------------------------------------------
+INSERT INTO `coupon_template` (
+  `company_id`,
+  `company_no`,
+  `company_name_snapshot`,
+  `team_id_snapshot`,
+  `team_name_snapshot`,
+  `name`,
+  `coupon_type`,
+  `threshold_amount`,
+  `discount_amount`,
+  `discount_rate`,
+  `max_discount_amount`,
+  `city_code`,
+  `product_code`,
+  `valid_days`,
+  `valid_start_at`,
+  `valid_end_at`,
+  `total_count`,
+  `received_count`,
+  `used_count`,
+  `per_user_limit`,
+  `issue_type`,
+  `source_type`,
+  `activity_code`,
+  `rule_config`,
+  `status`,
+  `published_at`,
+  `created_at`,
+  `updated_at`,
+  `is_deleted`
+)
+SELECT *
+FROM (
+  SELECT
+    800001 AS company_id,
+    'CP-HZ-001' AS company_no,
+    '杭州一队出行' AS company_name_snapshot,
+    '800001' AS team_id_snapshot,
+    '杭州一队' AS team_name_snapshot,
+    '杭州快车满35减5' AS name,
+    'AMOUNT_OFF' AS coupon_type,
+    35.00 AS threshold_amount,
+    5.00 AS discount_amount,
+    NULL AS discount_rate,
+    NULL AS max_discount_amount,
+    '330100' AS city_code,
+    'ECONOMY' AS product_code,
+    NULL AS valid_days,
+    NOW() AS valid_start_at,
+    DATE_ADD(NOW(), INTERVAL 30 DAY) AS valid_end_at,
+    1000 AS total_count,
+    0 AS received_count,
+    0 AS used_count,
+    1 AS per_user_limit,
+    'LOGIN_POPUP' AS issue_type,
+    'NORMAL' AS source_type,
+    'SEED_HZ_ECONOMY_35_5' AS activity_code,
+    NULL AS rule_config,
+    'PUBLISHED' AS status,
+    NOW() AS published_at,
+    NOW() AS created_at,
+    NOW() AS updated_at,
+    0 AS is_deleted
+) t
+WHERE NOT EXISTS (
+  SELECT 1 FROM `coupon_template`
+  WHERE `activity_code` = 'SEED_HZ_ECONOMY_35_5'
+    AND `is_deleted` = 0
+);
+
+INSERT INTO `coupon_template` (
+  `company_id`,
+  `company_no`,
+  `company_name_snapshot`,
+  `team_id_snapshot`,
+  `team_name_snapshot`,
+  `name`,
+  `coupon_type`,
+  `threshold_amount`,
+  `discount_amount`,
+  `discount_rate`,
+  `max_discount_amount`,
+  `city_code`,
+  `product_code`,
+  `valid_days`,
+  `valid_start_at`,
+  `valid_end_at`,
+  `total_count`,
+  `received_count`,
+  `used_count`,
+  `per_user_limit`,
+  `issue_type`,
+  `source_type`,
+  `activity_code`,
+  `rule_config`,
+  `status`,
+  `published_at`,
+  `created_at`,
+  `updated_at`,
+  `is_deleted`
+)
+SELECT *
+FROM (
+  SELECT
+    800001 AS company_id,
+    'CP-HZ-001' AS company_no,
+    '杭州一队出行' AS company_name_snapshot,
+    '800001' AS team_id_snapshot,
+    '杭州一队' AS team_name_snapshot,
+    '杭州专车满60减10' AS name,
+    'AMOUNT_OFF' AS coupon_type,
+    60.00 AS threshold_amount,
+    10.00 AS discount_amount,
+    NULL AS discount_rate,
+    NULL AS max_discount_amount,
+    '330100' AS city_code,
+    'COMFORT' AS product_code,
+    NULL AS valid_days,
+    NOW() AS valid_start_at,
+    DATE_ADD(NOW(), INTERVAL 30 DAY) AS valid_end_at,
+    1000 AS total_count,
+    0 AS received_count,
+    0 AS used_count,
+    1 AS per_user_limit,
+    'LOGIN_POPUP' AS issue_type,
+    'NORMAL' AS source_type,
+    'SEED_HZ_COMFORT_60_10' AS activity_code,
+    NULL AS rule_config,
+    'PUBLISHED' AS status,
+    NOW() AS published_at,
+    NOW() AS created_at,
+    NOW() AS updated_at,
+    0 AS is_deleted
+) t
+WHERE NOT EXISTS (
+  SELECT 1 FROM `coupon_template`
+  WHERE `activity_code` = 'SEED_HZ_COMFORT_60_10'
+    AND `is_deleted` = 0
+);

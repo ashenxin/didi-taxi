@@ -1,6 +1,7 @@
 package com.sx.passengerapi.service;
 
 import com.sx.passengerapi.auth.PassengerTokenVersionStore;
+import com.sx.passengerapi.client.CalculateClient;
 import com.sx.passengerapi.client.OrderClient;
 import com.sx.passengerapi.client.PassengerCoreSettingsClient;
 import com.sx.passengerapi.client.dto.AppAccountCancelConfirmRequest;
@@ -24,6 +25,7 @@ import com.sx.passengerapi.model.settings.PhoneChangeResultVO;
 import com.sx.passengerapi.model.settings.PhoneChangeSmsSendRequest;
 import com.sx.passengerapi.model.settings.SettingsProfileVO;
 import com.sx.passengerapi.model.settings.SettingsSmsSendResultVO;
+import com.sx.passengerapi.model.wallet.CouponInvalidateRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -35,14 +37,17 @@ import java.util.List;
 public class PassengerSettingsService {
     private final PassengerCoreSettingsClient passengerCoreSettingsClient;
     private final OrderClient orderClient;
+    private final CalculateClient calculateClient;
     private final PassengerTokenVersionStore tokenVersionStore;
 
     public PassengerSettingsService(
             PassengerCoreSettingsClient passengerCoreSettingsClient,
             OrderClient orderClient,
+            CalculateClient calculateClient,
             PassengerTokenVersionStore tokenVersionStore) {
         this.passengerCoreSettingsClient = passengerCoreSettingsClient;
         this.orderClient = orderClient;
+        this.calculateClient = calculateClient;
         this.tokenVersionStore = tokenVersionStore;
     }
 
@@ -94,8 +99,12 @@ public class PassengerSettingsService {
         if (hasUnsettledOrder(customerId)) {
             throw new BizErrorException(409, "当前存在未结清订单，请结清后再注销");
         }
+        if (hasLockedCoupon(customerId)) {
+            throw new BizErrorException(409, "当前存在订单锁定中的优惠券，请先完成或取消相关订单后再注销");
+        }
         AppAccountCancelResult data = unwrap(passengerCoreSettingsClient.confirmAccountCancel(
                 new AppAccountCancelConfirmRequest(customerId, req.getCode(), req.getConfirm())));
+        invalidateUnusedCoupons(customerId);
         // 注销生效后旧 token 立即失效；后台历史数据仍按原 customerId 可查。
         tokenVersionStore.nextVersion(customerId);
 
@@ -129,6 +138,27 @@ public class PassengerSettingsService {
         }
         UnsettledOrderCheckResult data = resp.getData();
         return data != null && Boolean.TRUE.equals(data.getExists());
+    }
+
+    private boolean hasLockedCoupon(long customerId) {
+        ResponseVo<Boolean> resp = calculateClient.lockedCouponsExists(customerId);
+        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+            log.warn("注销前查询锁定优惠券失败 passengerId={} code={} msg={}",
+                    customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+            throw new BizErrorException(502, "优惠券服务暂时不可用，请稍后重试");
+        }
+        return Boolean.TRUE.equals(resp.getData());
+    }
+
+    private void invalidateUnusedCoupons(long customerId) {
+        ResponseVo<Integer> resp = calculateClient.invalidateCouponsByPassenger(
+                new CouponInvalidateRequest(customerId, "ACCOUNT_CANCEL"));
+        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+            log.error("注销后作废未使用优惠券失败 passengerId={} code={} msg={}",
+                    customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+            throw new BizErrorException(502, "账号已注销，但优惠券作废失败，请联系管理员处理");
+        }
+        log.info("注销后作废未使用优惠券完成 passengerId={} count={}", customerId, resp.getData());
     }
 
     private List<TripOrderRow> loadAllPassengerOrders(Long passengerId) {

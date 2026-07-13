@@ -7,6 +7,7 @@ import com.sx.passengerapi.model.wallet.AutoPayAgreementVO;
 import com.sx.passengerapi.model.wallet.AutoPaySignRequest;
 import com.sx.passengerapi.model.wallet.AutoPaySignResult;
 import com.sx.passengerapi.model.wallet.CouponPageVO;
+import com.sx.passengerapi.model.wallet.CouponClaimRequest;
 import com.sx.passengerapi.model.wallet.CouponClaimResult;
 import com.sx.passengerapi.model.wallet.CouponTemplateVO;
 import com.sx.passengerapi.model.wallet.CouponVO;
@@ -28,6 +29,7 @@ import java.util.List;
 @RequestMapping("/app/api/v1/wallet")
 public class PassengerWalletController {
     private static final String USER_ID_HEADER = "X-User-Id";
+    private static final String USER_PHONE_HEADER = "X-User-Phone";
 
     private final PassengerWalletService passengerWalletService;
 
@@ -78,13 +80,22 @@ public class PassengerWalletController {
     }
 
     @GetMapping("/coupons/claimable")
-    public ResponseVo<List<CouponTemplateVO>> claimableCoupons(@RequestHeader(value = USER_ID_HEADER, required = false) Long customerId) {
-        return ResultUtil.success(passengerWalletService.claimableCoupons(requireCustomerId(customerId)));
+    public ResponseVo<List<CouponTemplateVO>> claimableCoupons(@RequestHeader(value = USER_ID_HEADER, required = false) Long customerId,
+                                                               @RequestHeader(value = USER_PHONE_HEADER, required = false) String phone) {
+        return ResultUtil.success(passengerWalletService.claimableCoupons(requireCustomerId(customerId), phone));
     }
 
     @PostMapping("/coupons/claim-all")
-    public ResponseVo<CouponClaimResult> claimAllCoupons(@RequestHeader(value = USER_ID_HEADER, required = false) Long customerId) {
-        return ResultUtil.success(passengerWalletService.claimAllCoupons(requireCustomerId(customerId)));
+    public ResponseVo<CouponClaimResult> claimAllCoupons(@RequestHeader(value = USER_ID_HEADER, required = false) Long customerId,
+                                                        @RequestHeader(value = USER_PHONE_HEADER, required = false) String phone) {
+        return ResultUtil.success(passengerWalletService.claimAllCoupons(requireCustomerId(customerId), phone));
+    }
+
+    @PostMapping("/coupons/claim")
+    public ResponseVo<CouponClaimResult> claimCoupons(@RequestHeader(value = USER_ID_HEADER, required = false) Long customerId,
+                                                      @RequestHeader(value = USER_PHONE_HEADER, required = false) String phone,
+                                                      @RequestBody CouponClaimRequest request) {
+        return ResultUtil.success(passengerWalletService.claimCoupons(requireCustomerId(customerId), request, phone));
     }
 
     private static long requireCustomerId(Long customerId) {

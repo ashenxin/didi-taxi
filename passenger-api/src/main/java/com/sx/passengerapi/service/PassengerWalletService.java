@@ -10,21 +10,31 @@ import com.sx.passengerapi.model.wallet.AutoPayAgreementVO;
 import com.sx.passengerapi.model.wallet.AutoPaySignRequest;
 import com.sx.passengerapi.model.wallet.AutoPaySignResult;
 import com.sx.passengerapi.model.wallet.CouponPageVO;
+import com.sx.passengerapi.model.wallet.CouponClaimRequest;
 import com.sx.passengerapi.model.wallet.CouponClaimResult;
 import com.sx.passengerapi.model.wallet.CouponTemplateVO;
 import com.sx.passengerapi.model.wallet.CouponVO;
 import com.sx.passengerapi.model.wallet.WalletSummaryVO;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.List;
 
 @Service
 public class PassengerWalletService {
+    private static final String CLAIM_IDENTITY_PHONE = "PHONE";
+
     private final WalletClient walletClient;
     private final CalculateClient calculateClient;
     private final OrderClient orderClient;
+
+    @Value("${coupon.claim-identity.phone-hash-secret:dev-coupon-claim-secret-change-me}")
+    private String phoneHashSecret;
 
     public PassengerWalletService(WalletClient walletClient, CalculateClient calculateClient, OrderClient orderClient) {
         this.walletClient = walletClient;
@@ -84,12 +94,43 @@ public class PassengerWalletService {
                 "计价服务调用失败");
     }
 
-    public List<CouponTemplateVO> claimableCoupons(long passengerId) {
-        return unwrap(calculateClient.claimableCoupons(passengerId), "计价服务调用失败");
+    public List<CouponTemplateVO> claimableCoupons(long passengerId, String phone) {
+        return unwrap(calculateClient.claimableCoupons(passengerId, CLAIM_IDENTITY_PHONE, phoneIdentityHash(phone)), "计价服务调用失败");
     }
 
-    public CouponClaimResult claimAllCoupons(long passengerId) {
-        return unwrap(calculateClient.claimAllCoupons(passengerId), "计价服务调用失败");
+    public CouponClaimResult claimAllCoupons(long passengerId, String phone) {
+        CouponClaimRequest request = new CouponClaimRequest();
+        fillClaimIdentity(request, phone);
+        return unwrap(calculateClient.claimAllCoupons(passengerId, request), "计价服务调用失败");
+    }
+
+    public CouponClaimResult claimCoupons(long passengerId, CouponClaimRequest request, String phone) {
+        CouponClaimRequest safeRequest = request == null ? new CouponClaimRequest() : request;
+        fillClaimIdentity(safeRequest, phone);
+        return unwrap(calculateClient.claimCoupons(passengerId, safeRequest), "计价服务调用失败");
+    }
+
+    private void fillClaimIdentity(CouponClaimRequest request, String phone) {
+        request.setClaimIdentityType(CLAIM_IDENTITY_PHONE);
+        request.setClaimIdentityHash(phoneIdentityHash(phone));
+    }
+
+    private String phoneIdentityHash(String phone) {
+        if (phone == null || phone.isBlank()) {
+            throw new BizErrorException(401, "登录信息已失效，请重新登录");
+        }
+        String normalizedPhone = phone.trim();
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest((phoneHashSecret + ":" + normalizedPhone).getBytes(StandardCharsets.UTF_8));
+            StringBuilder out = new StringBuilder(bytes.length * 2);
+            for (byte item : bytes) {
+                out.append(String.format("%02x", item));
+            }
+            return out.toString();
+        } catch (NoSuchAlgorithmException ex) {
+            throw new BizErrorException(500, "优惠券领取身份计算失败");
+        }
     }
 
     private <T> T unwrap(ResponseVo<T> response, String fallbackMessage) {

@@ -5,7 +5,9 @@ import com.sx.calculate.common.vo.ResponseVo;
 import com.sx.calculate.model.dto.CouponLockRequest;
 import com.sx.calculate.model.dto.CouponLockResult;
 import com.sx.calculate.model.dto.CouponPageVO;
+import com.sx.calculate.model.dto.CouponClaimRequest;
 import com.sx.calculate.model.dto.CouponClaimResult;
+import com.sx.calculate.model.dto.CouponInvalidateRequest;
 import com.sx.calculate.model.dto.CouponTemplatePageVO;
 import com.sx.calculate.model.dto.CouponTemplateUpsertRequest;
 import com.sx.calculate.model.dto.CouponTemplateVO;
@@ -50,13 +52,27 @@ public class CouponController {
     }
 
     @GetMapping("/api/v1/coupons/claimable")
-    public ResponseVo<List<CouponTemplateVO>> claimable(@RequestParam Long passengerId) {
-        return ResultUtil.success(couponService.claimable(passengerId));
+    public ResponseVo<List<CouponTemplateVO>> claimable(@RequestParam Long passengerId,
+                                                        @RequestParam(required = false) String claimIdentityType,
+                                                        @RequestParam(required = false) String claimIdentityHash) {
+        return ResultUtil.success(couponService.claimable(passengerId, claimIdentityType, claimIdentityHash));
     }
 
     @PostMapping("/api/v1/coupons/claim-all")
-    public ResponseVo<CouponClaimResult> claimAll(@RequestParam Long passengerId) {
-        return ResultUtil.success(couponService.claimAll(passengerId));
+    public ResponseVo<CouponClaimResult> claimAll(@RequestParam Long passengerId,
+                                                  @RequestBody(required = false) CouponClaimRequest request) {
+        return ResultUtil.success(couponService.claimAll(passengerId,
+                request == null ? null : request.getClaimIdentityType(),
+                request == null ? null : request.getClaimIdentityHash()));
+    }
+
+    @PostMapping("/api/v1/coupons/claim")
+    public ResponseVo<CouponClaimResult> claim(@RequestParam Long passengerId,
+                                               @RequestBody CouponClaimRequest request) {
+        return ResultUtil.success(couponService.claimSelected(passengerId,
+                request == null ? null : request.getTemplateIds(),
+                request == null ? null : request.getClaimIdentityType(),
+                request == null ? null : request.getClaimIdentityHash()));
     }
 
     @GetMapping("/api/v1/coupons/templates")
@@ -132,6 +148,33 @@ public class CouponController {
         try {
             couponService.release(request);
             return ResultUtil.success(null);
+        } catch (IllegalArgumentException ex) {
+            return ResultUtil.requestError(ex.getMessage());
+        }
+    }
+
+    @GetMapping("/internal/calculate/coupons/locked-exists")
+    public ResponseVo<Boolean> lockedExists(@RequestParam Long passengerId) {
+        try {
+            if (passengerId == null || passengerId <= 0) {
+                return ResultUtil.requestError("passengerId不能为空");
+            }
+            couponService.assertNoLockedCoupons(passengerId);
+            return ResultUtil.success(false);
+        } catch (IllegalArgumentException ex) {
+            return ResultUtil.success(true);
+        }
+    }
+
+    @PostMapping("/internal/calculate/coupons/invalidate-by-passenger")
+    public ResponseVo<Integer> invalidateByPassenger(@RequestBody CouponInvalidateRequest request) {
+        try {
+            if (request == null || request.getPassengerId() == null || request.getPassengerId() <= 0) {
+                return ResultUtil.requestError("passengerId不能为空");
+            }
+            return ResultUtil.success(couponService.invalidateByPassenger(
+                    request.getPassengerId(),
+                    request.getReason()));
         } catch (IllegalArgumentException ex) {
             return ResultUtil.requestError(ex.getMessage());
         }

@@ -19,6 +19,8 @@ public class UserCoupon {
     private Long id;
     private Long templateId;
     private Long passengerId;
+    private String claimIdentityType;
+    private String claimIdentityHash;
     private Long companyId;
     private String companyNo;
     private String companyNameSnapshot;
@@ -38,6 +40,8 @@ public class UserCoupon {
     private LocalDateTime validStartAt;
     private LocalDateTime validEndAt;
     private LocalDateTime usedAt;
+    private String invalidReason;
+    private LocalDateTime invalidAt;
     private String ruleSnapshot;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

@@ -2,7 +2,6 @@ package com.sx.calculate.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sx.calculate.dao.CouponTemplateMapper;
 import com.sx.calculate.dao.CouponUseRecordMapper;
 import com.sx.calculate.dao.UserCouponMapper;
@@ -33,10 +32,13 @@ public class CouponService {
     private static final String UNUSED = "UNUSED";
     private static final String LOCKED = "LOCKED";
     private static final String USED = "USED";
+    private static final String INVALID = "INVALID";
     private static final String EXPIRED = "EXPIRED";
     private static final String TEMPLATE_DRAFT = "DRAFT";
     private static final String TEMPLATE_PUBLISHED = "PUBLISHED";
     private static final String TEMPLATE_OFFLINE = "OFFLINE";
+    private static final String CLAIM_IDENTITY_PHONE = "PHONE";
+    private static final String INVALID_REASON_ACCOUNT_CANCEL = "ACCOUNT_CANCEL";
     private static final String TYPE_AMOUNT_OFF = "AMOUNT_OFF";
     private static final String TYPE_PERCENT_OFF = "PERCENT_OFF";
 
@@ -55,19 +57,24 @@ public class CouponService {
     public CouponPageVO page(Long passengerId, String status, int pageNo, int pageSize) {
         int safePageNo = Math.max(pageNo, 1);
         int safePageSize = Math.min(Math.max(pageSize, 1), 50);
+        LambdaQueryWrapper<UserCoupon> countWrapper = Wrappers.<UserCoupon>lambdaQuery()
+                .eq(UserCoupon::getPassengerId, passengerId);
         LambdaQueryWrapper<UserCoupon> wrapper = Wrappers.<UserCoupon>lambdaQuery()
-                .eq(UserCoupon::getPassengerId, passengerId)
-                .orderByAsc(UserCoupon::getValidEndAt)
-                .orderByDesc(UserCoupon::getId);
+                .eq(UserCoupon::getPassengerId, passengerId);
         if (status != null && !status.isBlank()) {
+            countWrapper.eq(UserCoupon::getStatus, status);
             wrapper.eq(UserCoupon::getStatus, status);
         }
-        Page<UserCoupon> page = userCouponMapper.selectPage(Page.of(safePageNo, safePageSize), wrapper);
+        long offset = (long) (safePageNo - 1) * safePageSize;
+        wrapper.orderByAsc(UserCoupon::getValidEndAt)
+                .orderByDesc(UserCoupon::getId)
+                .last("LIMIT " + offset + "," + safePageSize);
+        Long total = userCouponMapper.selectCount(countWrapper);
         CouponPageVO vo = new CouponPageVO();
         vo.setPageNo(safePageNo);
         vo.setPageSize(safePageSize);
-        vo.setTotal(page.getTotal());
-        vo.setList(page.getRecords().stream().map(coupon -> toVO(coupon, null)).toList());
+        vo.setTotal(total == null ? 0 : total);
+        vo.setList(userCouponMapper.selectList(wrapper).stream().map(coupon -> toVO(coupon, null)).toList());
         return vo;
     }
 
@@ -84,27 +91,35 @@ public class CouponService {
                                               int pageNo, int pageSize) {
         int safePageNo = Math.max(pageNo, 1);
         int safePageSize = Math.min(Math.max(pageSize, 1), 50);
+        LambdaQueryWrapper<CouponTemplate> countWrapper = Wrappers.<CouponTemplate>lambdaQuery()
+                .eq(CouponTemplate::getIsDeleted, 0);
         LambdaQueryWrapper<CouponTemplate> wrapper = Wrappers.<CouponTemplate>lambdaQuery()
-                .eq(CouponTemplate::getIsDeleted, 0)
-                .orderByDesc(CouponTemplate::getId);
+                .eq(CouponTemplate::getIsDeleted, 0);
         if (companyId != null) {
+            countWrapper.eq(CouponTemplate::getCompanyId, companyId);
             wrapper.eq(CouponTemplate::getCompanyId, companyId);
         }
         if (cityCode != null && !cityCode.isBlank()) {
+            countWrapper.eq(CouponTemplate::getCityCode, cityCode);
             wrapper.eq(CouponTemplate::getCityCode, cityCode);
         }
         if (productCode != null && !productCode.isBlank()) {
+            countWrapper.eq(CouponTemplate::getProductCode, productCode);
             wrapper.eq(CouponTemplate::getProductCode, productCode);
         }
         if (status != null && !status.isBlank()) {
+            countWrapper.eq(CouponTemplate::getStatus, status);
             wrapper.eq(CouponTemplate::getStatus, status);
         }
-        Page<CouponTemplate> page = templateMapper.selectPage(Page.of(safePageNo, safePageSize), wrapper);
+        long offset = (long) (safePageNo - 1) * safePageSize;
+        wrapper.orderByDesc(CouponTemplate::getId)
+                .last("LIMIT " + offset + "," + safePageSize);
+        Long total = templateMapper.selectCount(countWrapper);
         CouponTemplatePageVO vo = new CouponTemplatePageVO();
         vo.setPageNo(safePageNo);
         vo.setPageSize(safePageSize);
-        vo.setTotal(page.getTotal());
-        vo.setList(page.getRecords().stream().map(this::toTemplateVO).toList());
+        vo.setTotal(total == null ? 0 : total);
+        vo.setList(templateMapper.selectList(wrapper).stream().map(this::toTemplateVO).toList());
         return vo;
     }
 
@@ -208,6 +223,10 @@ public class CouponService {
     }
 
     public List<CouponTemplateVO> claimable(Long passengerId) {
+        return claimable(passengerId, null, null);
+    }
+
+    public List<CouponTemplateVO> claimable(Long passengerId, String claimIdentityType, String claimIdentityHash) {
         LocalDateTime now = LocalDateTime.now();
         return templateMapper.selectList(Wrappers.<CouponTemplate>lambdaQuery()
                         .eq(CouponTemplate::getStatus, TEMPLATE_PUBLISHED)
@@ -218,60 +237,145 @@ public class CouponService {
                         .orderByAsc(CouponTemplate::getValidEndAt)
                         .orderByDesc(CouponTemplate::getId))
                 .stream()
-                .filter(template -> !hasClaimed(passengerId, template.getId()))
+                .filter(template -> !hasClaimed(passengerId, template.getId(), claimIdentityType, claimIdentityHash))
                 .map(this::toTemplateVO)
                 .toList();
     }
 
     @Transactional
     public CouponClaimResult claimAll(Long passengerId) {
+        return claimAll(passengerId, null, null);
+    }
+
+    @Transactional
+    public CouponClaimResult claimAll(Long passengerId, String claimIdentityType, String claimIdentityHash) {
         CouponClaimResult result = new CouponClaimResult();
         int claimed = 0;
         int skipped = 0;
-        for (CouponTemplateVO item : claimable(passengerId)) {
-            CouponTemplate template = templateMapper.selectById(item.getId());
-            if (template == null || hasClaimed(passengerId, template.getId())) {
+        for (CouponTemplateVO item : claimable(passengerId, claimIdentityType, claimIdentityHash)) {
+            if (claimOne(passengerId, item.getId(), claimIdentityType, claimIdentityHash)) {
+                claimed++;
+            } else {
                 skipped++;
-                continue;
             }
-            int received = templateMapper.update(null, Wrappers.<CouponTemplate>lambdaUpdate()
-                    .eq(CouponTemplate::getId, template.getId())
-                    .eq(CouponTemplate::getStatus, TEMPLATE_PUBLISHED)
-                    .eq(CouponTemplate::getIsDeleted, 0)
-                    .apply("received_count < total_count")
-                    .setSql("received_count = received_count + 1")
-                    .set(CouponTemplate::getUpdatedAt, LocalDateTime.now()));
-            if (received != 1) {
-                skipped++;
-                continue;
-            }
-            userCouponMapper.insert(new UserCoupon()
-                    .setTemplateId(template.getId())
-                    .setPassengerId(passengerId)
-                    .setCompanyId(template.getCompanyId())
-                    .setCompanyNo(template.getCompanyNo())
-                    .setCompanyNameSnapshot(template.getCompanyNameSnapshot())
-                    .setTeamIdSnapshot(template.getTeamIdSnapshot())
-                    .setTeamNameSnapshot(template.getTeamNameSnapshot())
-                    .setCouponName(template.getName())
-                    .setCouponType(template.getCouponType())
-                    .setThresholdAmount(template.getThresholdAmount())
-                    .setDiscountAmount(template.getDiscountAmount())
-                    .setDiscountRate(template.getDiscountRate())
-                    .setMaxDiscountAmount(template.getMaxDiscountAmount())
-                    .setCityCode(template.getCityCode())
-                    .setProductCode(template.getProductCode())
-                    .setValidStartAt(template.getValidStartAt())
-                    .setValidEndAt(template.getValidEndAt())
-                    .setRuleSnapshot(template.getRuleConfig())
-                    .setStatus(UNUSED)
-                    .setCreatedAt(LocalDateTime.now())
-                    .setUpdatedAt(LocalDateTime.now()));
-            claimed++;
         }
         result.setClaimedCount(claimed);
         result.setSkippedCount(skipped);
         return result;
+    }
+
+    @Transactional
+    public CouponClaimResult claimSelected(Long passengerId, List<Long> templateIds,
+                                           String claimIdentityType, String claimIdentityHash) {
+        CouponClaimResult result = new CouponClaimResult();
+        if (templateIds == null || templateIds.isEmpty()) {
+            return result;
+        }
+        int claimed = 0;
+        int skipped = 0;
+        for (Long templateId : templateIds.stream().filter(Objects::nonNull).distinct().toList()) {
+            if (claimOne(passengerId, templateId, claimIdentityType, claimIdentityHash)) {
+                claimed++;
+            } else {
+                skipped++;
+            }
+        }
+        result.setClaimedCount(claimed);
+        result.setSkippedCount(skipped);
+        return result;
+    }
+
+    private boolean claimOne(Long passengerId, Long templateId) {
+        return claimOne(passengerId, templateId, null, null);
+    }
+
+    private boolean claimOne(Long passengerId, Long templateId, String claimIdentityType, String claimIdentityHash) {
+        CouponTemplate template = templateMapper.selectById(templateId);
+        LocalDateTime now = LocalDateTime.now();
+        String safeIdentityType = normalizeClaimIdentityType(claimIdentityType);
+        String safeIdentityHash = normalizeClaimIdentityHash(claimIdentityHash);
+        if (template == null
+                || !TEMPLATE_PUBLISHED.equals(template.getStatus())
+                || template.getIsDeleted() == null
+                || template.getIsDeleted() != 0
+                || template.getValidStartAt() == null
+                || template.getValidEndAt() == null
+                || template.getValidStartAt().isAfter(now)
+                || !template.getValidEndAt().isAfter(now)
+                || hasClaimed(passengerId, template.getId(), safeIdentityType, safeIdentityHash)) {
+            return false;
+        }
+        int received = templateMapper.update(null, Wrappers.<CouponTemplate>lambdaUpdate()
+                .eq(CouponTemplate::getId, template.getId())
+                .eq(CouponTemplate::getStatus, TEMPLATE_PUBLISHED)
+                .eq(CouponTemplate::getIsDeleted, 0)
+                .apply("received_count < total_count")
+                .setSql("received_count = received_count + 1")
+                .set(CouponTemplate::getUpdatedAt, LocalDateTime.now()));
+        if (received != 1) {
+            return false;
+        }
+        userCouponMapper.insert(new UserCoupon()
+                .setTemplateId(template.getId())
+                .setPassengerId(passengerId)
+                .setClaimIdentityType(safeIdentityType)
+                .setClaimIdentityHash(safeIdentityHash)
+                .setCompanyId(template.getCompanyId())
+                .setCompanyNo(template.getCompanyNo())
+                .setCompanyNameSnapshot(template.getCompanyNameSnapshot())
+                .setTeamIdSnapshot(template.getTeamIdSnapshot())
+                .setTeamNameSnapshot(template.getTeamNameSnapshot())
+                .setCouponName(template.getName())
+                .setCouponType(template.getCouponType())
+                .setThresholdAmount(template.getThresholdAmount())
+                .setDiscountAmount(template.getDiscountAmount())
+                .setDiscountRate(template.getDiscountRate())
+                .setMaxDiscountAmount(template.getMaxDiscountAmount())
+                .setCityCode(template.getCityCode())
+                .setProductCode(template.getProductCode())
+                .setValidStartAt(template.getValidStartAt())
+                .setValidEndAt(template.getValidEndAt())
+                .setRuleSnapshot(template.getRuleConfig())
+                .setStatus(UNUSED)
+                .setCreatedAt(LocalDateTime.now())
+                .setUpdatedAt(LocalDateTime.now()));
+        return true;
+    }
+
+    @Transactional
+    public void assertNoLockedCoupons(Long passengerId) {
+        Long locked = userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
+                .eq(UserCoupon::getPassengerId, passengerId)
+                .eq(UserCoupon::getStatus, LOCKED));
+        if (locked != null && locked > 0) {
+            throw new IllegalArgumentException("存在锁定中的优惠券，请先完成或取消相关订单");
+        }
+    }
+
+    @Transactional
+    public int invalidateByPassenger(Long passengerId, String reason) {
+        assertNoLockedCoupons(passengerId);
+        List<UserCoupon> coupons = userCouponMapper.selectList(Wrappers.<UserCoupon>lambdaQuery()
+                .eq(UserCoupon::getPassengerId, passengerId)
+                .eq(UserCoupon::getStatus, UNUSED));
+        LocalDateTime now = LocalDateTime.now();
+        int count = 0;
+        String safeReason = reason == null || reason.isBlank() ? INVALID_REASON_ACCOUNT_CANCEL : reason.trim();
+        for (UserCoupon coupon : coupons) {
+            int updated = userCouponMapper.update(null, Wrappers.<UserCoupon>lambdaUpdate()
+                    .eq(UserCoupon::getId, coupon.getId())
+                    .eq(UserCoupon::getPassengerId, passengerId)
+                    .eq(UserCoupon::getStatus, UNUSED)
+                    .set(UserCoupon::getStatus, INVALID)
+                    .set(UserCoupon::getInvalidReason, safeReason)
+                    .set(UserCoupon::getInvalidAt, now)
+                    .set(UserCoupon::getUpdatedAt, now));
+            if (updated == 1) {
+                record(coupon, null, "INVALIDATE", UNUSED, INVALID, BigDecimal.ZERO, safeReason);
+                count++;
+            }
+        }
+        return count;
     }
 
     @Transactional
@@ -453,10 +557,38 @@ public class CouponService {
                 .setCreatedAt(LocalDateTime.now()));
     }
 
-    private boolean hasClaimed(Long passengerId, Long templateId) {
-        return userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
+    private boolean hasClaimed(Long passengerId, Long templateId, String claimIdentityType, String claimIdentityHash) {
+        Long passengerClaimed = userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
                 .eq(UserCoupon::getPassengerId, passengerId)
-                .eq(UserCoupon::getTemplateId, templateId)) > 0;
+                .eq(UserCoupon::getTemplateId, templateId));
+        if (passengerClaimed != null && passengerClaimed > 0) {
+            return true;
+        }
+        String safeIdentityType = normalizeClaimIdentityType(claimIdentityType);
+        String safeIdentityHash = normalizeClaimIdentityHash(claimIdentityHash);
+        if (safeIdentityType == null || safeIdentityHash == null) {
+            return false;
+        }
+        Long identityClaimed = userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
+                .eq(UserCoupon::getTemplateId, templateId)
+                .eq(UserCoupon::getClaimIdentityType, safeIdentityType)
+                .eq(UserCoupon::getClaimIdentityHash, safeIdentityHash));
+        return identityClaimed != null && identityClaimed > 0;
+    }
+
+    private String normalizeClaimIdentityType(String claimIdentityType) {
+        if (claimIdentityType == null || claimIdentityType.isBlank()) {
+            return null;
+        }
+        String normalized = claimIdentityType.trim().toUpperCase();
+        return CLAIM_IDENTITY_PHONE.equals(normalized) ? CLAIM_IDENTITY_PHONE : normalized;
+    }
+
+    private String normalizeClaimIdentityHash(String claimIdentityHash) {
+        if (claimIdentityHash == null || claimIdentityHash.isBlank()) {
+            return null;
+        }
+        return claimIdentityHash.trim();
     }
 
     private CouponTemplate requireTemplate(Long templateId) {

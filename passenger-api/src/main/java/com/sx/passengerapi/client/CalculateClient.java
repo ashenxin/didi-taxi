@@ -6,7 +6,9 @@ import com.sx.passengerapi.model.calculate.EstimateFareResult;
 import com.sx.passengerapi.model.wallet.CouponLockRequest;
 import com.sx.passengerapi.model.wallet.CouponLockResult;
 import com.sx.passengerapi.model.wallet.CouponPageVO;
+import com.sx.passengerapi.model.wallet.CouponClaimRequest;
 import com.sx.passengerapi.model.wallet.CouponClaimResult;
+import com.sx.passengerapi.model.wallet.CouponInvalidateRequest;
 import com.sx.passengerapi.model.wallet.CouponTemplateVO;
 import com.sx.passengerapi.model.wallet.CouponUseRequest;
 import com.sx.passengerapi.model.wallet.CouponVO;
@@ -39,10 +41,17 @@ public interface CalculateClient {
                                                 @RequestParam("productCode") String productCode);
 
     @GetMapping("/api/v1/coupons/claimable")
-    ResponseVo<List<CouponTemplateVO>> claimableCoupons(@RequestParam("passengerId") Long passengerId);
+    ResponseVo<List<CouponTemplateVO>> claimableCoupons(@RequestParam("passengerId") Long passengerId,
+                                                        @RequestParam(value = "claimIdentityType", required = false) String claimIdentityType,
+                                                        @RequestParam(value = "claimIdentityHash", required = false) String claimIdentityHash);
 
     @PostMapping("/api/v1/coupons/claim-all")
-    ResponseVo<CouponClaimResult> claimAllCoupons(@RequestParam("passengerId") Long passengerId);
+    ResponseVo<CouponClaimResult> claimAllCoupons(@RequestParam("passengerId") Long passengerId,
+                                                  @RequestBody CouponClaimRequest request);
+
+    @PostMapping("/api/v1/coupons/claim")
+    ResponseVo<CouponClaimResult> claimCoupons(@RequestParam("passengerId") Long passengerId,
+                                               @RequestBody CouponClaimRequest request);
 
     @PostMapping("/internal/calculate/coupons/lock")
     ResponseVo<CouponLockResult> lockCoupon(@RequestBody CouponLockRequest request);
@@ -52,4 +61,10 @@ public interface CalculateClient {
 
     @PostMapping("/internal/calculate/coupons/release")
     ResponseVo<Void> releaseCoupon(@RequestBody CouponUseRequest request);
+
+    @GetMapping("/internal/calculate/coupons/locked-exists")
+    ResponseVo<Boolean> lockedCouponsExists(@RequestParam("passengerId") Long passengerId);
+
+    @PostMapping("/internal/calculate/coupons/invalidate-by-passenger")
+    ResponseVo<Integer> invalidateCouponsByPassenger(@RequestBody CouponInvalidateRequest request);
 }

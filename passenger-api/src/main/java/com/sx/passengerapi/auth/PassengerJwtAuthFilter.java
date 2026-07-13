@@ -15,7 +15,7 @@ import java.io.IOException;
 import java.util.Map;
 
 /**
- * 校验乘客 JWT 签名、aud、{@code tv} 与 Redis 当前版本一致；通过后注入 {@code X-User-Id}。
+ * 校验乘客 JWT 签名、aud、{@code tv} 与 Redis 当前版本一致；通过后注入 {@code X-User-Id}/{@code X-User-Phone}。
  * 公开路径：登录、发短信；{@code POST /app/api/v1/auth/logout} 须鉴权。
  */
 @Component
@@ -90,7 +90,7 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        filterChain.doFilter(new PassengerAuthRequestWrapper(request, parsed.customerId()), response);
+        filterChain.doFilter(new PassengerAuthRequestWrapper(request, parsed.customerId(), parsed.phone()), response);
     }
 
     private static boolean isPublicAuth(String path, String method) {
