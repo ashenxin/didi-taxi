@@ -12,6 +12,28 @@ spring:
     druid:
       validation-query: SELECT 1
       test-while-idle: true
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DB:0}
+
+benefit:
+  sign-in:
+    enabled: true
+    timezone: Asia/Shanghai
+    cycle: MONTHLY
+    display-days: 28
+    sign-days:
+      start-day-of-month: 1
+      end-day-of-month: 28
+    rewards:
+      default:
+        points: 5
+      continuous:
+        - every-days: 7
+          points: 35
+          include-default: false
 
 logging:
   config: classpath:logback-spring.xml

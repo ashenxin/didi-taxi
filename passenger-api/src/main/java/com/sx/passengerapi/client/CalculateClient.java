@@ -1,6 +1,10 @@
 package com.sx.passengerapi.client;
 
 import com.sx.passengerapi.common.vo.ResponseVo;
+import com.sx.passengerapi.model.benefit.BenefitClearPointsRequest;
+import com.sx.passengerapi.model.benefit.BenefitOverviewVO;
+import com.sx.passengerapi.model.benefit.BenefitPointsVO;
+import com.sx.passengerapi.model.benefit.BenefitSignInResult;
 import com.sx.passengerapi.model.calculate.EstimateFareBody;
 import com.sx.passengerapi.model.calculate.EstimateFareResult;
 import com.sx.passengerapi.model.wallet.CouponLockRequest;
@@ -67,4 +71,17 @@ public interface CalculateClient {
 
     @PostMapping("/internal/calculate/coupons/invalidate-by-passenger")
     ResponseVo<Integer> invalidateCouponsByPassenger(@RequestBody CouponInvalidateRequest request);
+
+    @GetMapping("/api/v1/benefits/overview")
+    ResponseVo<BenefitOverviewVO> benefitOverview(@RequestParam("customerId") Long customerId);
+
+    @GetMapping("/api/v1/benefits/points")
+    ResponseVo<BenefitPointsVO> benefitPoints(@RequestParam("customerId") Long customerId);
+
+    @PostMapping("/api/v1/benefits/sign-in")
+    ResponseVo<BenefitSignInResult> benefitSignIn(@RequestParam("customerId") Long customerId,
+                                                  @org.springframework.web.bind.annotation.RequestHeader(value = "X-Request-Id", required = false) String requestId);
+
+    @PostMapping("/internal/calculate/benefits/points/clear-by-account-cancel")
+    ResponseVo<Void> clearBenefitPointsByAccountCancel(@RequestBody BenefitClearPointsRequest request);
 }

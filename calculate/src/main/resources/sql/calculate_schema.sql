@@ -1,5 +1,5 @@
 -- =============================================================================
--- calculate 库：建表（fare_rule / coupon_template / user_coupon / coupon_use_record）
+-- calculate 库：建表（fare_rule / coupon_template / user_coupon / coupon_use_record / benefit_*）
 -- 种子数据见 calculate_seed.sql
 -- =============================================================================
 -- 业务唯一维度：运力公司 + 省 + 市 + 产品线（product_code）；同一维度下生效区间不可重叠（由计费服务校验）
@@ -152,3 +152,79 @@ CREATE TABLE IF NOT EXISTS `coupon_use_record` (
     KEY `idx_coupon_record_template` (`template_id`, `action_type`, `created_at`),
     KEY `idx_coupon_record_passenger` (`passenger_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='优惠券用券动作流水';
+
+-- =============================================================================
+-- 乘客福利签到记录
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS `benefit_sign_record` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `customer_id` BIGINT NOT NULL COMMENT '乘客ID，对应 passenger.customer.id',
+    `sign_date` DATE NOT NULL COMMENT '签到日期，业务时区 Asia/Shanghai',
+    `sign_year_month` CHAR(6) NOT NULL COMMENT '签到年月 yyyyMM',
+    `day_of_month` TINYINT NOT NULL COMMENT '自然月日期，1-28 可领奖签到',
+    `bitmap_offset` TINYINT NOT NULL COMMENT 'Redis Bitmap offset，day_of_month - 1',
+    `continuous_days` INT NOT NULL DEFAULT 1 COMMENT '当月连续签到天数，月初重新计算',
+    `reward_points` INT NOT NULL DEFAULT 0 COMMENT '本次签到总奖励积分',
+    `reward_rule_code` VARCHAR(64) NOT NULL COMMENT '命中奖励规则编码，如 SIGN_IN_DAILY/SIGN_IN_CONTINUOUS_7',
+    `reward_snapshot` JSON NULL COMMENT '本次签到奖励规则快照',
+    `points_flow_id` BIGINT NULL COMMENT '关联积分流水ID，写入流水后回填',
+    `source_type` VARCHAR(32) NOT NULL DEFAULT 'APP' COMMENT '签到来源：APP/ADMIN_REPAIR/SYSTEM_REPAIR',
+    `request_id` VARCHAR(64) NULL COMMENT '请求ID，便于排查幂等与链路',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_sign_customer_date` (`customer_id`, `sign_date`),
+    KEY `idx_sign_customer_month` (`customer_id`, `sign_year_month`, `day_of_month`),
+    KEY `idx_sign_month_date` (`sign_year_month`, `sign_date`),
+    KEY `idx_sign_points_flow` (`points_flow_id`),
+    KEY `idx_sign_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='乘客福利签到记录';
+
+-- =============================================================================
+-- 乘客福利积分账户
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS `benefit_points_account` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `customer_id` BIGINT NOT NULL COMMENT '乘客ID，对应 passenger.customer.id',
+    `available_points` INT NOT NULL DEFAULT 0 COMMENT '当前可用积分',
+    `total_earned_points` INT NOT NULL DEFAULT 0 COMMENT '历史累计获得积分',
+    `total_used_points` INT NOT NULL DEFAULT 0 COMMENT '历史累计消耗积分；第一期不做兑换，默认0',
+    `total_cleared_points` INT NOT NULL DEFAULT 0 COMMENT '历史累计清零积分，主要用于注销',
+    `status` VARCHAR(32) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE/CANCELLED/FROZEN',
+    `last_sign_date` DATE NULL COMMENT '最近一次签到日期',
+    `last_points_flow_id` BIGINT NULL COMMENT '最近一笔积分流水ID',
+    `version` INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_points_account_customer` (`customer_id`),
+    KEY `idx_points_account_status` (`status`, `updated_at`),
+    KEY `idx_points_account_last_sign` (`last_sign_date`),
+    KEY `idx_points_account_last_flow` (`last_points_flow_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='乘客福利积分账户';
+
+-- =============================================================================
+-- 乘客福利积分流水
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS `benefit_points_flow` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `customer_id` BIGINT NOT NULL COMMENT '乘客ID，对应 passenger.customer.id',
+    `account_id` BIGINT NOT NULL COMMENT '积分账户ID',
+    `biz_type` VARCHAR(32) NOT NULL COMMENT '业务类型：SIGN_IN_DAILY/SIGN_IN_CONTINUOUS_7/ACCOUNT_CANCEL_CLEAR',
+    `biz_id` VARCHAR(64) NOT NULL COMMENT '业务ID：签到记录ID或注销业务号',
+    `points_delta` INT NOT NULL COMMENT '积分变化，正数增加，负数扣减/清零',
+    `balance_before` INT NOT NULL COMMENT '变更前可用积分',
+    `balance_after` INT NOT NULL COMMENT '变更后可用积分',
+    `flow_direction` VARCHAR(16) NOT NULL COMMENT '方向：IN/OUT',
+    `sign_record_id` BIGINT NULL COMMENT '签到记录ID，签到类流水必填',
+    `remark` VARCHAR(255) NULL COMMENT '备注',
+    `rule_snapshot` JSON NULL COMMENT '规则快照或清零上下文',
+    `request_id` VARCHAR(64) NULL COMMENT '请求ID，便于排查幂等与链路',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_points_flow_biz` (`customer_id`, `biz_type`, `biz_id`),
+    KEY `idx_points_flow_customer_time` (`customer_id`, `created_at`),
+    KEY `idx_points_flow_account_time` (`account_id`, `created_at`),
+    KEY `idx_points_flow_sign_record` (`sign_record_id`),
+    KEY `idx_points_flow_biz_type` (`biz_type`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='乘客福利积分流水';
