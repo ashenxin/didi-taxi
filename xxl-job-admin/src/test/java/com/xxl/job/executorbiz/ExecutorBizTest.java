@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
  *
  * Created by xuxueli on 17/5/12.
  */
+@org.junit.jupiter.api.Disabled("Requires a running xxl-job executor on localhost:9999; keep out of the default unit-test suite.")
 public class ExecutorBizTest {
 
     // admin-client

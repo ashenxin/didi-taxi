@@ -107,7 +107,8 @@ public class DispatchRequestedConsumer {
                 msg.getProductCode(),
                 msg.getOrigin().getLat(),
                 msg.getOrigin().getLng(),
-                Math.max(1, candidateLimit));
+                Math.max(1, candidateLimit),
+                msg.getPassengerId());
 
         if (candidates == null || candidates.isEmpty()) {
             processedEventService.recordResult(consumerGroup, msg.getEventId(), RESULT_NO_DRIVER, msg.getOrderNo(), null, "no eligible driver");

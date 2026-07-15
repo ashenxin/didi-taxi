@@ -12,6 +12,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * @author xuxueli 2017-12-22 17:16:23
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@org.junit.jupiter.api.Disabled("Bootstraps xxl-job-admin and its database-backed scheduler; keep out of the default unit-test suite.")
 public class I18nUtilTest {
     private static Logger logger = LoggerFactory.getLogger(I18nUtilTest.class);
 

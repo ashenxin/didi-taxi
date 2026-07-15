@@ -24,7 +24,7 @@ app:
 logging:
   config: classpath:logback-spring.xml
   file:
-    path: /Users/sx/Documents/workSpace/didi-taxi/driver-api/logs/driver-api
+    path: ./logs/driver-api
 
 management:
   tracing:

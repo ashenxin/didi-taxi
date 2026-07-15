@@ -32,7 +32,7 @@ passenger:
 logging:
   config: classpath:logback-spring.xml
   file:
-    path: /Users/sx/Documents/workSpace/didi-taxi/passenger-api/logs/passenger-api
+    path: ./logs/passenger-api
 
 management:
   tracing:

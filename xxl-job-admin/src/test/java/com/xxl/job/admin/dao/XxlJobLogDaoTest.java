@@ -9,6 +9,7 @@ import java.util.Date;
 import java.util.List;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@org.junit.jupiter.api.Disabled("Requires a real xxl_job database; keep out of the default unit-test suite.")
 public class XxlJobLogDaoTest {
 
     @Resource

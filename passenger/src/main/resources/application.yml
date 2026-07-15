@@ -22,7 +22,7 @@ spring:
 logging:
   config: classpath:logback-spring.xml
   file:
-    path: /Users/sx/Documents/workSpace/didi-taxi/passenger/logs/passenger-service
+    path: ./logs/passenger-service
 
 management:
   tracing:

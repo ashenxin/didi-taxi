@@ -26,7 +26,7 @@ spring:
 logging:
   config: classpath:logback-spring.xml
   file:
-    path: /Users/sx/Documents/workSpace/didi-taxi/order/logs/order-service
+    path: ./logs/order-service
 
 management:
   tracing:
@@ -71,7 +71,7 @@ xxl:
     admin:
       addresses: http://127.0.0.1:8081/xxl-job-admin
     executor:
-      app name: order-executor
+      appname: order-executor
       address: ${XXL_JOB_EXECUTOR_ADDRESS:http://127.0.0.1:9998}
       port: 9998
       log-path: ./logs/xxl-job

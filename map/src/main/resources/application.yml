@@ -14,7 +14,7 @@ map:
 logging:
   config: classpath:logback-spring.xml
   file:
-    path: /Users/sx/Documents/workSpace/didi-taxi/map/logs/map-service
+    path: ./logs/map-service
 
 management:
   tracing:
@@ -27,4 +27,3 @@ management:
   zipkin:
     tracing:
       endpoint: http://127.0.0.1:9411/api/v2/spans
-

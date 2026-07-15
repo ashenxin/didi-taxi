@@ -105,8 +105,8 @@ public class PassengerSettingsService {
         }
         AppAccountCancelResult data = unwrap(passengerCoreSettingsClient.confirmAccountCancel(
                 new AppAccountCancelConfirmRequest(customerId, req.getCode(), req.getConfirm())));
-        invalidateUnusedCoupons(customerId);
-        clearBenefitPoints(customerId);
+        tryInvalidateUnusedCoupons(customerId);
+        tryClearBenefitPoints(customerId);
         // 注销生效后旧 token 立即失效；后台历史数据仍按原 customerId 可查。
         tokenVersionStore.nextVersion(customerId);
 
@@ -152,26 +152,34 @@ public class PassengerSettingsService {
         return Boolean.TRUE.equals(resp.getData());
     }
 
-    private void invalidateUnusedCoupons(long customerId) {
-        ResponseVo<Integer> resp = calculateClient.invalidateCouponsByPassenger(
-                new CouponInvalidateRequest(customerId, "ACCOUNT_CANCEL"));
-        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-            log.error("注销后作废未使用优惠券失败 passengerId={} code={} msg={}",
-                    customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-            throw new BizErrorException(502, "账号已注销，但优惠券作废失败，请联系管理员处理");
+    private void tryInvalidateUnusedCoupons(long customerId) {
+        try {
+            ResponseVo<Integer> resp = calculateClient.invalidateCouponsByPassenger(
+                    new CouponInvalidateRequest(customerId, "ACCOUNT_CANCEL"));
+            if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+                log.error("注销后作废未使用优惠券失败，账号注销结果仍返回成功 passengerId={} code={} msg={}",
+                        customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+                return;
+            }
+            log.info("注销后作废未使用优惠券完成 passengerId={} count={}", customerId, resp.getData());
+        } catch (RuntimeException ex) {
+            log.error("注销后作废未使用优惠券异常，账号注销结果仍返回成功 passengerId={}", customerId, ex);
         }
-        log.info("注销后作废未使用优惠券完成 passengerId={} count={}", customerId, resp.getData());
     }
 
-    private void clearBenefitPoints(long customerId) {
-        ResponseVo<Void> resp = calculateClient.clearBenefitPointsByAccountCancel(
-                new BenefitClearPointsRequest(customerId, "settings-cancel-" + customerId));
-        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-            log.error("注销后清零福利积分失败 passengerId={} code={} msg={}",
-                    customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-            throw new BizErrorException(502, "账号已注销，但积分清零失败，请联系管理员处理");
+    private void tryClearBenefitPoints(long customerId) {
+        try {
+            ResponseVo<Void> resp = calculateClient.clearBenefitPointsByAccountCancel(
+                    new BenefitClearPointsRequest(customerId, "settings-cancel-" + customerId));
+            if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+                log.error("注销后清零福利积分失败，账号注销结果仍返回成功 passengerId={} code={} msg={}",
+                        customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+                return;
+            }
+            log.info("注销后清零福利积分完成 passengerId={}", customerId);
+        } catch (RuntimeException ex) {
+            log.error("注销后清零福利积分异常，账号注销结果仍返回成功 passengerId={}", customerId, ex);
         }
-        log.info("注销后清零福利积分完成 passengerId={}", customerId);
     }
 
     private List<TripOrderRow> loadAllPassengerOrders(Long passengerId) {

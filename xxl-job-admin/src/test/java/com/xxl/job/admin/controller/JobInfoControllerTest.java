@@ -13,6 +13,7 @@ import org.springframework.util.MultiValueMap;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
+@org.junit.jupiter.api.Disabled("Requires a real xxl_job database; keep out of the default unit-test suite.")
 public class JobInfoControllerTest extends AbstractSpringMvcTest {
   private static Logger logger = LoggerFactory.getLogger(JobInfoControllerTest.class);
 

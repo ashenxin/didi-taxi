@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @author xuxueli 2017-07-28 22:14:52
  */
+@org.junit.jupiter.api.Disabled("Requires a running xxl-job-admin service and database; keep out of the default unit-test suite.")
 public class AdminBizTest {
 
     // admin-client

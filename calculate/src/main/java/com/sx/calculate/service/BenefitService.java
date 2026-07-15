@@ -19,6 +19,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -44,11 +46,7 @@ public class BenefitService {
     private static final DateTimeFormatter DATE = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final DateTimeFormatter YEAR_MONTH = DateTimeFormatter.ofPattern("yyyyMM");
     private static final DateTimeFormatter DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-    private static final DefaultRedisScript<Long> SIGN_SCRIPT = new DefaultRedisScript<>("""
-            local signed = redis.call('GETBIT', KEYS[1], tonumber(ARGV[1]))
-            if signed == 1 then
-              return 0
-            end
+    private static final DefaultRedisScript<Long> RECORD_SIGN_SCRIPT = new DefaultRedisScript<>("""
             redis.call('SETBIT', KEYS[1], tonumber(ARGV[1]), 1)
             return 1
             """, Long.class);
@@ -130,11 +128,9 @@ public class BenefitService {
         if (today.getDayOfMonth() < signStartDay() || today.getDayOfMonth() > signEndDay()) {
             return disabledSignIn(today, "本月签到已结束，下月 1 号刷新", DISABLED_MONTH_CLOSED);
         }
-        String key = bitmapKey(customerId, today);
-        int offset = today.getDayOfMonth() - 1;
-        Long redisResult = redisTemplate.execute(SIGN_SCRIPT, List.of(key), String.valueOf(offset));
-        if (redisResult == null || redisResult == 0L) {
-            BenefitSignRecord existing = findSignRecord(customerId, today);
+        BenefitSignRecord existing = findSignRecord(customerId, today);
+        if (existing != null) {
+            recordRedisSignedAfterCommit(customerId, today, requestId);
             BenefitPointsVO current = points(customerId);
             return new BenefitSignInResult()
                     .setNewSigned(false)
@@ -142,20 +138,16 @@ public class BenefitService {
                     .setBusinessDate(today.format(DATE))
                     .setYearMonth(today.format(YEAR_MONTH))
                     .setSignedToday(true)
-                    .setContinuousDays(existing == null ? 0 : safeInt(existing.getContinuousDays()))
+                    .setContinuousDays(safeInt(existing.getContinuousDays()))
                     .setRewardPoints(0)
                     .setRewardRuleCode(null)
                     .setAvailablePoints(current.getAvailablePoints())
                     .setSignEnabled(true)
                     .setDisabledReason(null);
         }
-        try {
-            return doSignIn(customerId, today, requestId);
-        } catch (RuntimeException ex) {
-            log.error("福利签到 Redis 已写入但 MySQL 入账失败 customerId={} signDate={} requestId={}",
-                    customerId, today, requestId, ex);
-            throw ex;
-        }
+        BenefitSignInResult result = doSignIn(customerId, today, requestId);
+        recordRedisSignedAfterCommit(customerId, today, requestId);
+        return result;
     }
 
     @Transactional
@@ -221,17 +213,21 @@ public class BenefitService {
 
         BenefitPointsAccount account = accountMapper.selectByCustomerIdForUpdate(customerId);
         if (account == null) {
-            account = new BenefitPointsAccount()
-                    .setCustomerId(customerId)
-                    .setAvailablePoints(0)
-                    .setTotalEarnedPoints(0)
-                    .setTotalUsedPoints(0)
-                    .setTotalClearedPoints(0)
-                    .setStatus(ACCOUNT_ACTIVE)
-                    .setVersion(0)
-                    .setCreatedAt(now)
-                    .setUpdatedAt(now);
-            accountMapper.insert(account);
+            try {
+                account = new BenefitPointsAccount()
+                        .setCustomerId(customerId)
+                        .setAvailablePoints(0)
+                        .setTotalEarnedPoints(0)
+                        .setTotalUsedPoints(0)
+                        .setTotalClearedPoints(0)
+                        .setStatus(ACCOUNT_ACTIVE)
+                        .setVersion(0)
+                        .setCreatedAt(now)
+                        .setUpdatedAt(now);
+                accountMapper.insert(account);
+            } catch (DuplicateKeyException ex) {
+                log.info("福利积分账户并发创建命中唯一键，改为重新锁定读取 customerId={}", customerId);
+            }
             account = accountMapper.selectByCustomerIdForUpdate(customerId);
         }
         if (account == null || !ACCOUNT_ACTIVE.equals(account.getStatus())) {
@@ -317,11 +313,11 @@ public class BenefitService {
         return new BenefitOverviewVO()
                 .setBusinessDate(today.format(DATE))
                 .setYearMonth(today.format(YEAR_MONTH))
-                .setDisplayDays(displayDays());
+                .setDisplayDays(displayDays(today));
     }
 
     private List<BenefitDayVO> monthDays(LocalDate today, Map<Integer, BenefitSignRecord> records) {
-        return java.util.stream.IntStream.rangeClosed(1, displayDays())
+        return java.util.stream.IntStream.rangeClosed(1, displayDays(today))
                 .mapToObj(day -> {
                     BenefitSignRecord item = records.get(day);
                     return new BenefitDayVO()
@@ -418,6 +414,31 @@ public class BenefitService {
         return "benefit:sign:bitmap:" + customerId + ":" + date.format(YEAR_MONTH);
     }
 
+    private void recordRedisSignedAfterCommit(Long customerId, LocalDate date, String requestId) {
+        Runnable task = () -> recordRedisSigned(customerId, date, requestId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    task.run();
+                }
+            });
+            return;
+        }
+        task.run();
+    }
+
+    private void recordRedisSigned(Long customerId, LocalDate date, String requestId) {
+        try {
+            String key = bitmapKey(customerId, date);
+            int offset = date.getDayOfMonth() - 1;
+            redisTemplate.execute(RECORD_SIGN_SCRIPT, List.of(key), String.valueOf(offset));
+        } catch (RuntimeException ex) {
+            log.warn("福利签到 MySQL 已入账但 Redis Bitmap 写入失败 customerId={} signDate={} requestId={}",
+                    customerId, date, requestId, ex);
+        }
+    }
+
     private boolean isConfigValid(boolean logError) {
         boolean ok = Boolean.TRUE.equals(properties.getEnabled())
                 && "Asia/Shanghai".equals(timezone())
@@ -439,6 +460,10 @@ public class BenefitService {
 
     private int displayDays() {
         return properties.getDisplayDays() == null ? 28 : properties.getDisplayDays();
+    }
+
+    private int displayDays(LocalDate today) {
+        return Math.max(0, Math.min(displayDays(), today.lengthOfMonth()));
     }
 
     private int signStartDay() {

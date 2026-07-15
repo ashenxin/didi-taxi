@@ -84,6 +84,12 @@ public class NearestDriverQueryService {
     public List<NearestDriverResult> findNearestEligibleDrivers(String cityCode, String productCode,
                                                                 Double originLat, Double originLng,
                                                                 int limit) {
+        return findNearestEligibleDrivers(cityCode, productCode, originLat, originLng, limit, null);
+    }
+
+    public List<NearestDriverResult> findNearestEligibleDrivers(String cityCode, String productCode,
+                                                                Double originLat, Double originLng,
+                                                                int limit, Long passengerId) {
         int n = Math.max(1, Math.min(32, limit));
         if (cityCode == null || cityCode.isBlank()) {
             return List.of();
@@ -98,6 +104,10 @@ public class NearestDriverQueryService {
                 if (driverId == null) {
                     continue;
                 }
+                if (matchBlockService.isBlocked(driverId, passengerId)) {
+                    log.info("最近司机 TopN：跳过司乘隔离 driverId={} passengerId={}", driverId, passengerId);
+                    continue;
+                }
                 NearestDriverResult r = buildEligible(driverId, cityCode, productCode);
                 if (r != null) {
                     out.add(r);
@@ -108,7 +118,7 @@ public class NearestDriverQueryService {
             }
             return out;
         }
-        NearestDriverResult one = findNearestDbFallback(cityCode, productCode, null);
+        NearestDriverResult one = findNearestDbFallback(cityCode, productCode, passengerId);
         return one == null ? List.of() : List.of(one);
     }
 

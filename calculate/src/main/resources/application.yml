@@ -38,7 +38,7 @@ benefit:
 logging:
   config: classpath:logback-spring.xml
   file:
-    path: /Users/sx/Documents/workSpace/didi-taxi/calculate/logs/calculate-service
+    path: ./logs/calculate-service
 
 mybatis-plus:
   configuration:

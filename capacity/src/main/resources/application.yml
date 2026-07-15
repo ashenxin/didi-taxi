@@ -34,7 +34,7 @@ spring:
 logging:
   config: classpath:logback-spring.xml
   file:
-    path: /Users/sx/Documents/workSpace/didi-taxi/capacity/logs/capacity-service
+    path: ./logs/capacity-service
 
 mybatis-plus:
   configuration:
@@ -87,7 +87,7 @@ xxl:
     admin:
       addresses: http://127.0.0.1:8081/xxl-job-admin
     executor:
-      app name: capacity-executor
+      appname: capacity-executor
       address: ${XXL_JOB_EXECUTOR_ADDRESS:http://127.0.0.1:9999}
       port: 9999
       log-path: ./logs/xxl-job
