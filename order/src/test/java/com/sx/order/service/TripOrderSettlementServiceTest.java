@@ -4,10 +4,16 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.order.dao.TripOrderEntityMapper;
 import com.sx.order.dao.TripOrderSettlementMapper;
 import com.sx.order.client.CalculateSettlementClient;
+import com.sx.order.client.WalletPaymentClient;
+import com.sx.order.dao.OrderOutboxEventMapper;
 import com.sx.order.model.TripOrder;
 import com.sx.order.model.TripOrderSettlement;
+import com.sx.order.model.OrderOutboxEvent;
 import com.sx.order.model.dto.CouponLockResult;
 import com.sx.order.model.dto.FinalFareResult;
+import com.sx.order.model.dto.PaymentAttemptResult;
+import com.sx.order.model.dto.PaymentAttemptRequest;
+import com.sx.order.model.dto.PaymentResultNotification;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -48,15 +54,26 @@ class TripOrderSettlementServiceTest {
     private TripOrderSettlementMapper settlementMapper;
     @MockBean
     private CalculateSettlementClient calculateClient;
+    @MockBean
+    private WalletPaymentClient walletClient;
+    @Autowired
+    private OrderOutboxEventMapper outboxMapper;
 
     @BeforeEach
     void clean() {
         settlementMapper.delete(null);
         orderMapper.delete(null);
-        reset(calculateClient);
+        outboxMapper.delete(null);
+        reset(calculateClient, walletClient);
         when(calculateClient.calculateFinalFare(any())).thenReturn(
                 new FinalFareResult(new BigDecimal("30.00"), "fare-v1", 12_340L, 1_560L));
         when(calculateClient.lockCoupon(any())).thenReturn(noCoupon("30.00"));
+        when(walletClient.createPaymentAttempt(any())).thenAnswer(invocation -> {
+            PaymentAttemptRequest request = invocation.getArgument(0);
+            PaymentAttemptResult result = payment("FAILED", "PAY-AUTO-1");
+            result.setAmount(request.amount());
+            return result;
+        });
     }
 
     @Test
@@ -175,7 +192,187 @@ class TripOrderSettlementServiceTest {
         assertThat(settlement.getPlatformServiceFeeRate()).isEqualByComparingTo("0.0500");
         assertThat(settlement.getPlatformServiceFeeAmount()).isEqualByComparingTo("500.00");
         assertThat(settlement.getCarrierIncomeAmount()).isEqualByComparingTo("9500.00");
-        assertThat(settlement.getSettlementStatus()).isEqualTo("CALCULATING");
+        assertThat(settlement.getSettlementStatus()).isEqualTo("PAYMENT_REQUIRED");
+    }
+
+    @ParameterizedTest
+    @MethodSource("nonSuccessPaymentStatuses")
+    void autoPayResultMapsToSettlementState(String paymentStatus, String settlementStatus) {
+        TripOrder order = finishedOrder();
+        orderMapper.insert(order);
+        settlementMapper.insert(calculatingSettlement());
+        PaymentAttemptResult mapped = payment(paymentStatus, "PAY-AUTO-2");
+        org.mockito.Mockito.doReturn(mapped).when(walletClient).createPaymentAttempt(any());
+
+        service.process(order.getOrderNo());
+
+        TripOrderSettlement settlement = settlement(order.getOrderNo());
+        assertThat(settlement.getSettlementStatus()).isEqualTo(settlementStatus);
+        assertThat(order(order.getOrderNo()).getBlocksNewOrder()).isEqualTo(1);
+        verify(calculateClient, never()).useCoupon(any());
+    }
+
+    @Test
+    void noDefaultAgreementRequiresManualPaymentWithoutReleasingCoupon() {
+        TripOrder order = finishedOrder();
+        orderMapper.insert(order);
+        settlementMapper.insert(calculatingSettlement());
+        when(calculateClient.lockCoupon(any())).thenReturn(coupon("5.00", "25.00"));
+        org.mockito.Mockito.doThrow(new WalletPaymentClient.NoDefaultAgreementException("未开通默认免密支付"))
+                .when(walletClient).createPaymentAttempt(any());
+
+        service.process(order.getOrderNo());
+
+        assertThat(settlement(order.getOrderNo()).getSettlementStatus()).isEqualTo("PAYMENT_REQUIRED");
+        verify(calculateClient, never()).releaseCoupon(any());
+        verify(calculateClient, never()).useCoupon(any());
+    }
+
+    @Test
+    void successFinalizesOnceConsumesCouponAndWritesOrderChangedOutbox() {
+        TripOrder order = finishedOrder();
+        orderMapper.insert(order);
+        settlementMapper.insert(calculatingSettlement());
+        when(calculateClient.lockCoupon(any())).thenReturn(coupon("5.00", "25.00"));
+        PaymentAttemptResult success = payment("SUCCESS", "PAY-SUCCESS-1");
+        success.setAmount(new BigDecimal("25.00"));
+        org.mockito.Mockito.doReturn(success).when(walletClient).createPaymentAttempt(any());
+        when(walletClient.getPaymentAttempt("PAY-SUCCESS-1")).thenReturn(success);
+
+        service.process(order.getOrderNo());
+        service.handlePaymentResult(notification(success));
+
+        TripOrderSettlement settlement = settlement(order.getOrderNo());
+        assertThat(settlement.getSettlementStatus()).isEqualTo("PAID");
+        assertThat(settlement.getPaymentNo()).isEqualTo("PAY-SUCCESS-1");
+        assertThat(settlement.getPaidAmount()).isEqualByComparingTo("25.00");
+        assertThat(order(order.getOrderNo()).getBlocksNewOrder()).isNull();
+        verify(calculateClient, times(1)).useCoupon(any());
+        assertThat(outboxMapper.selectCount(Wrappers.lambdaQuery()))
+                .isEqualTo(1);
+        OrderOutboxEvent event = outboxMapper.selectOne(Wrappers.<OrderOutboxEvent>lambdaQuery()
+                .eq(OrderOutboxEvent::getAggregateId, order.getOrderNo()));
+        assertThat(event.getPayload()).contains("\"eventId\":\"" + event.getId() + "\"")
+                .contains("\"eventType\":\"ORDER_CHANGED\"");
+    }
+
+    @Test
+    void couponUseFailureKeepsRecoverableFinalizeMarkerAndRetryDoesNotRepay() {
+        TripOrder order = finishedOrder();
+        orderMapper.insert(order);
+        settlementMapper.insert(calculatingSettlement());
+        when(calculateClient.lockCoupon(any())).thenReturn(coupon("5.00", "25.00"));
+        PaymentAttemptResult success = payment("SUCCESS", "PAY-SUCCESS-2");
+        success.setAmount(new BigDecimal("25.00"));
+        org.mockito.Mockito.doReturn(success).when(walletClient).createPaymentAttempt(any());
+        when(walletClient.getPaymentAttempt("PAY-SUCCESS-2")).thenReturn(success);
+        org.mockito.Mockito.doThrow(new IllegalStateException("calculate unavailable"))
+                .doNothing().when(calculateClient).useCoupon(any());
+
+        service.process(order.getOrderNo());
+        TripOrderSettlement pending = settlement(order.getOrderNo());
+        assertThat(pending.getPaymentNo()).isEqualTo("PAY-SUCCESS-2");
+        assertThat(pending.getSettlementStatus()).isEqualTo("PAY_CONFIRMING");
+        assertThat(pending.getFailureCode()).isEqualTo("PAYMENT_FINALIZE_PENDING");
+
+        service.handlePaymentResult(notification(success));
+
+        assertThat(settlement(order.getOrderNo()).getSettlementStatus()).isEqualTo("PAID");
+        verify(walletClient, times(1)).createPaymentAttempt(any());
+        verify(calculateClient, times(2)).useCoupon(any());
+    }
+
+    @Test
+    void secondSuccessCannotOverwriteFirstAndForgedNotificationIsRejected() {
+        TripOrder order = finishedOrder();
+        orderMapper.insert(order);
+        settlementMapper.insert(calculatingSettlement());
+        service.process(order.getOrderNo());
+
+        PaymentAttemptResult first = payment("SUCCESS", "PAY-FIRST");
+        PaymentAttemptResult second = payment("SUCCESS", "PAY-SECOND");
+        when(walletClient.getPaymentAttempt("PAY-FIRST")).thenReturn(first);
+        when(walletClient.getPaymentAttempt("PAY-SECOND")).thenReturn(second);
+
+        assertThat(service.handlePaymentResult(notification(first))).isEqualTo("PAID");
+        assertThat(service.handlePaymentResult(notification(second))).isEqualTo("DUPLICATE_SUCCESS");
+        assertThat(settlement(order.getOrderNo()).getPaymentNo()).isEqualTo("PAY-FIRST");
+
+        PaymentResultNotification forged = new PaymentResultNotification("PAY-FIRST", order.getOrderNo(),
+                order.getPassengerId(), "ALIPAY", new BigDecimal("29.99"), "SUCCESS",
+                "MOCK-TRADE-1", LocalDateTime.now());
+        assertThatThrownBy(() -> service.handlePaymentResult(forged))
+                .hasMessageContaining("钱包原交易不一致");
+
+        PaymentAttemptResult wrongAmount = payment("SUCCESS", "PAY-WRONG-AMOUNT");
+        wrongAmount.setAmount(new BigDecimal("29.99"));
+        when(walletClient.getPaymentAttempt("PAY-WRONG-AMOUNT")).thenReturn(wrongAmount);
+        assertThatThrownBy(() -> service.handlePaymentResult(notification(wrongAmount)))
+                .hasMessageContaining("支付金额或乘客");
+    }
+
+    @Test
+    void delayedFailureFromOldAttemptCannotOverwriteNewConfirmingAttempt() {
+        TripOrder order = finishedOrder();
+        orderMapper.insert(order);
+        TripOrderSettlement settlement = calculatingSettlement()
+                .setFinalAmount(new BigDecimal("30.00"))
+                .setPayableAmount(new BigDecimal("30.00"))
+                .setSettlementStatus("PAY_CONFIRMING")
+                .setActivePaymentNo("PAY-B");
+        settlementMapper.insert(settlement);
+        PaymentAttemptResult oldFailure = payment("FAILED", "PAY-A");
+        when(walletClient.getPaymentAttempt("PAY-A")).thenReturn(oldFailure);
+
+        assertThat(service.handlePaymentResult(notification(oldFailure)))
+                .isEqualTo("STALE_PAYMENT_RESULT");
+
+        TripOrderSettlement unchanged = settlement(order.getOrderNo());
+        assertThat(unchanged.getSettlementStatus()).isEqualTo("PAY_CONFIRMING");
+        assertThat(unchanged.getActivePaymentNo()).isEqualTo("PAY-B");
+    }
+
+    @Test
+    void transientWalletFailureKeepsFrozenBillAndRecoveryOnlyRetriesPayment() {
+        TripOrder order = finishedOrder();
+        orderMapper.insert(order);
+        settlementMapper.insert(calculatingSettlement());
+        org.mockito.Mockito.doThrow(new IllegalStateException("wallet unavailable"))
+                .doReturn(payment("FAILED", "PAY-RECOVERED"))
+                .when(walletClient).createPaymentAttempt(any());
+
+        service.process(order.getOrderNo());
+        TripOrderSettlement pending = settlement(order.getOrderNo());
+        assertThat(pending.getFinalAmount()).isEqualByComparingTo("30.00");
+        assertThat(pending.getFailureCode()).isEqualTo("AUTO_PAY_REQUEST_FAILED");
+        assertThat(pending.getSettlementStatus()).isEqualTo("CALCULATING");
+
+        service.process(order.getOrderNo());
+
+        assertThat(settlement(order.getOrderNo()).getSettlementStatus()).isEqualTo("PAYMENT_REQUIRED");
+        verify(calculateClient, times(1)).calculateFinalFare(any());
+        verify(calculateClient, times(1)).lockCoupon(any());
+        verify(calculateClient, never()).releaseCoupon(any());
+        verify(walletClient, times(2)).createPaymentAttempt(any());
+    }
+
+    @Test
+    void confirmingRecoveryRejectsWalletResultFromAnotherPaymentOrOrder() {
+        TripOrder order = finishedOrder();
+        orderMapper.insert(order);
+        TripOrderSettlement settlement = calculatingSettlement()
+                .setFinalAmount(new BigDecimal("30.00"))
+                .setPayableAmount(new BigDecimal("30.00"))
+                .setSettlementStatus("PAY_CONFIRMING")
+                .setActivePaymentNo("PAY-EXPECTED");
+        settlementMapper.insert(settlement);
+        PaymentAttemptResult wrong = payment("SUCCESS", "PAY-OTHER");
+        wrong.setOrderNo("OTHER-ORDER");
+        when(walletClient.getPaymentAttempt("PAY-EXPECTED")).thenReturn(wrong);
+
+        assertThat(service.recoverPayment(order.getOrderNo())).isEqualTo("PAYMENT_QUERY_MISMATCH");
+        assertThat(settlement(order.getOrderNo()).getSettlementStatus()).isEqualTo("PAY_CONFIRMING");
+        verify(calculateClient, never()).useCoupon(any());
     }
 
     @Test
@@ -286,6 +483,32 @@ class TripOrderSettlementServiceTest {
                 Arguments.of("-0.01", "30.01"),
                 Arguments.of("31.00", "-1.00"),
                 Arguments.of("5.00", "24.99"));
+    }
+
+    private static Stream<Arguments> nonSuccessPaymentStatuses() {
+        return Stream.of(
+                Arguments.of("FAILED", "PAYMENT_REQUIRED"),
+                Arguments.of("CANCELLED", "PAYMENT_REQUIRED"),
+                Arguments.of("CONFIRMING", "PAY_CONFIRMING"));
+    }
+
+    private static PaymentAttemptResult payment(String status, String paymentNo) {
+        PaymentAttemptResult result = new PaymentAttemptResult();
+        result.setPaymentNo(paymentNo);
+        result.setOrderNo("T202607170010");
+        result.setPassengerId(10001L);
+        result.setStatus(status);
+        result.setChannel("ALIPAY");
+        result.setAmount(new BigDecimal("30.00"));
+        result.setChannelTradeNo("MOCK-TRADE-1");
+        result.setOccurredAt(LocalDateTime.now());
+        return result;
+    }
+
+    private static PaymentResultNotification notification(PaymentAttemptResult result) {
+        return new PaymentResultNotification(result.getPaymentNo(), result.getOrderNo(),
+                result.getPassengerId(), result.getChannel(), result.getAmount(), result.getStatus(),
+                result.getChannelTradeNo(), result.getOccurredAt());
     }
 
     private static CouponLockResult noCoupon(String payableAmount) {

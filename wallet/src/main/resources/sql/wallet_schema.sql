@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS `wallet_payment_order` (
     `paid_at` DATETIME NULL COMMENT '支付成功时间',
     `failed_reason` VARCHAR(512) NULL COMMENT '失败原因',
     `notify_payload` JSON NULL COMMENT '渠道回调快照',
+    `notify_status` VARCHAR(16) NOT NULL DEFAULT 'NONE' COMMENT 'NONE/PENDING/FAILED/SENT',
+    `notify_retry_count` INT NOT NULL DEFAULT 0 COMMENT '订单结果通知重试次数',
+    `notify_version` INT NOT NULL DEFAULT 0 COMMENT '支付结果通知代次，状态变化时递增',
+    `next_notify_at` DATETIME NULL COMMENT '下次通知时间',
+    `last_notify_error` VARCHAR(512) NULL COMMENT '最近通知错误',
+    `notified_at` DATETIME NULL COMMENT '订单服务确认接收时间',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`id`),
@@ -60,5 +66,6 @@ CREATE TABLE IF NOT EXISTS `wallet_payment_order` (
     KEY `idx_wallet_payment_order_no` (`order_no`, `status`),
     KEY `idx_wallet_payment_passenger` (`passenger_id`, `created_at`),
     KEY `idx_wallet_payment_status` (`status`, `created_at`),
-    KEY `idx_wallet_payment_channel_trade` (`channel_trade_no`)
+    KEY `idx_wallet_payment_channel_trade` (`channel_trade_no`),
+    KEY `idx_wallet_payment_notify` (`notify_status`, `next_notify_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='钱包支付单';

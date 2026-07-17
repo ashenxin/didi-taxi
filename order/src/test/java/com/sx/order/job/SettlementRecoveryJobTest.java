@@ -22,12 +22,14 @@ class SettlementRecoveryJobTest {
         TripOrderSettlementService service = mock(TripOrderSettlementService.class);
         when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(
                 settlement("T-CALCULATING", "CALCULATING", 0),
+                settlement("T-CONFIRMING", "PAY_CONFIRMING", 0),
                 settlement("T-MANUAL", "CALCULATING", 1)));
         SettlementRecoveryJob job = new SettlementRecoveryJob(mapper, service, 50);
 
         job.recover();
 
         verify(service).process("T-CALCULATING");
+        verify(service).recoverPayment("T-CONFIRMING");
         verify(service, never()).process("T-MANUAL");
         verify(service, never()).process("T-PAYMENT-REQUIRED");
     }

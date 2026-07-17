@@ -4,15 +4,21 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.order.client.CalculateSettlementClient;
+import com.sx.order.client.WalletPaymentClient;
+import com.sx.order.dao.OrderOutboxEventMapper;
 import com.sx.order.dao.TripOrderEntityMapper;
 import com.sx.order.dao.TripOrderSettlementMapper;
 import com.sx.order.model.TripOrder;
 import com.sx.order.model.TripOrderSettlement;
+import com.sx.order.model.OrderOutboxEvent;
 import com.sx.order.model.dto.CouponLockRequest;
 import com.sx.order.model.dto.CouponLockResult;
 import com.sx.order.model.dto.CouponUseRequest;
 import com.sx.order.model.dto.FinalFareRequest;
 import com.sx.order.model.dto.FinalFareResult;
+import com.sx.order.model.dto.PaymentAttemptRequest;
+import com.sx.order.model.dto.PaymentAttemptResult;
+import com.sx.order.model.dto.PaymentResultNotification;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +29,7 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 
 @Service
 @Slf4j
@@ -36,6 +43,8 @@ public class TripOrderSettlementService {
     private final TripOrderSettlementMapper settlementMapper;
     private final MockTripMetricsProvider metricsProvider;
     private final CalculateSettlementClient calculateClient;
+    private final WalletPaymentClient walletClient;
+    private final OrderOutboxEventMapper outboxMapper;
     private final SettlementAmountValidator amountValidator;
     private final ObjectMapper objectMapper;
 
@@ -43,12 +52,16 @@ public class TripOrderSettlementService {
                                       TripOrderSettlementMapper settlementMapper,
                                       MockTripMetricsProvider metricsProvider,
                                       CalculateSettlementClient calculateClient,
+                                      WalletPaymentClient walletClient,
+                                      OrderOutboxEventMapper outboxMapper,
                                       SettlementAmountValidator amountValidator,
                                       ObjectMapper objectMapper) {
         this.orderMapper = orderMapper;
         this.settlementMapper = settlementMapper;
         this.metricsProvider = metricsProvider;
         this.calculateClient = calculateClient;
+        this.walletClient = walletClient;
+        this.outboxMapper = outboxMapper;
         this.amountValidator = amountValidator;
         this.objectMapper = objectMapper;
     }
@@ -79,6 +92,11 @@ public class TripOrderSettlementService {
         order = getOrder(orderNo);
         if (settlement.getFinalAmount() != null) {
             clearRecoverableFailure(settlement);
+            if (settlement.getPayableAmount() != null
+                    && settlement.getPayableAmount().compareTo(ZERO) > 0
+                    && "CALCULATING".equals(settlement.getSettlementStatus())) {
+                startAutoPay(order, settlement.getPayableAmount());
+            }
             return;
         }
         calculateAndFreezeBill(order, settlement);
@@ -109,6 +127,8 @@ public class TripOrderSettlementService {
             }
             if (amounts.payableAmount().compareTo(ZERO) == 0) {
                 finalizeZeroPayment(order, settlement, coupon, amounts);
+            } else {
+                startAutoPay(order, amounts.payableAmount());
             }
         } catch (IllegalArgumentException ex) {
             if (!isAmountOutOfRange(ex)) {
@@ -121,6 +141,278 @@ public class TripOrderSettlementService {
                 markFailure(settlement, "COUPON_RELEASE_FAILED",
                         ex.getMessage() + "; 优惠券释放失败，需要人工处理", true);
             }
+        }
+    }
+
+    private void startAutoPay(TripOrder order, BigDecimal payableAmount) {
+        PaymentAttemptResult result;
+        try {
+            result = walletClient.createPaymentAttempt(new PaymentAttemptRequest(
+                    order.getOrderNo(), order.getPassengerId(), payableAmount, "AUTO_PAY", null,
+                    "AUTO_PAY:" + order.getOrderNo()));
+        } catch (WalletPaymentClient.NoDefaultAgreementException ex) {
+            moveToPaymentRequired(order.getOrderNo(), null, "NO_DEFAULT_AGREEMENT");
+            return;
+        } catch (RuntimeException ex) {
+            TripOrderSettlement settlement = getSettlement(order.getOrderNo());
+            markFailure(settlement, "AUTO_PAY_REQUEST_FAILED", ex.getMessage(), false);
+            log.warn("免密支付请求失败，保留冻结账单等待恢复 orderNo={} err={}",
+                    order.getOrderNo(), ex.toString());
+            return;
+        }
+        if (result == null
+                || !Objects.equals(order.getOrderNo(), result.getOrderNo())
+                || !Objects.equals(order.getPassengerId(), result.getPassengerId())
+                || result.getAmount() == null || payableAmount.compareTo(result.getAmount()) != 0) {
+            TripOrderSettlement settlement = getSettlement(order.getOrderNo());
+            markFailure(settlement, "AUTO_PAY_RESULT_MISMATCH", "钱包创建结果与支付请求不一致", false);
+            return;
+        }
+        // 本地核券、解锁和出站事件失败必须让事务回滚，不能被当作钱包请求失败吞掉。
+        applyPaymentResult(result);
+    }
+
+    @Transactional
+    public String handlePaymentResult(PaymentResultNotification notification) {
+        if (notification == null || notification.paymentNo() == null || notification.paymentNo().isBlank()) {
+            throw new IllegalArgumentException("支付结果通知缺少paymentNo");
+        }
+        PaymentAttemptResult authoritative = walletClient.getPaymentAttempt(notification.paymentNo());
+        if (!samePayment(notification, authoritative)) {
+            throw new IllegalArgumentException("支付结果通知与钱包原交易不一致");
+        }
+        return applyPaymentResult(authoritative);
+    }
+
+    @Transactional
+    public String recoverPayment(String orderNo) {
+        TripOrderSettlement settlement = getSettlement(orderNo);
+        if (settlement == null || !"PAY_CONFIRMING".equals(settlement.getSettlementStatus())) {
+            return "SKIPPED";
+        }
+        String paymentNo = settlement.getPaymentNo() == null
+                ? settlement.getActivePaymentNo() : settlement.getPaymentNo();
+        if (paymentNo == null || paymentNo.isBlank()) {
+            log.error("PAY_CONFIRMING缺少原支付尝试号，不能创建第二笔支付 orderNo={}", orderNo);
+            return "MISSING_PAYMENT_NO";
+        }
+        PaymentAttemptResult result = walletClient.getPaymentAttempt(paymentNo);
+        boolean matches = result != null
+                && Objects.equals(paymentNo, result.getPaymentNo())
+                && Objects.equals(orderNo, result.getOrderNo())
+                && Objects.equals(settlement.getPassengerId(), result.getPassengerId())
+                && settlement.getPayableAmount() != null && result.getAmount() != null
+                && settlement.getPayableAmount().compareTo(result.getAmount()) == 0;
+        if (!matches) {
+            log.error("钱包原交易与待恢复结算不一致，保持PAY_CONFIRMING orderNo={} paymentNo={}",
+                    orderNo, paymentNo);
+            return "PAYMENT_QUERY_MISMATCH";
+        }
+        return applyPaymentResult(result);
+    }
+
+    private boolean samePayment(PaymentResultNotification notice, PaymentAttemptResult actual) {
+        return actual != null
+                && Objects.equals(notice.paymentNo(), actual.getPaymentNo())
+                && Objects.equals(notice.orderNo(), actual.getOrderNo())
+                && Objects.equals(notice.passengerId(), actual.getPassengerId())
+                && Objects.equals(notice.channel(), actual.getChannel())
+                && notice.amount() != null && actual.getAmount() != null
+                && notice.amount().compareTo(actual.getAmount()) == 0
+                && Objects.equals(notice.status(), actual.getStatus())
+                && Objects.equals(notice.channelTradeNo(), actual.getChannelTradeNo());
+    }
+
+    private String applyPaymentResult(PaymentAttemptResult result) {
+        if (result == null || result.getStatus() == null) {
+            throw new IllegalArgumentException("钱包未返回有效支付状态");
+        }
+        TripOrderSettlement settlement = getSettlement(result.getOrderNo());
+        if (settlement == null) {
+            throw new IllegalArgumentException("订单结算记录不存在");
+        }
+        validatePaymentIdentity(settlement, result);
+        return switch (result.getStatus()) {
+            case "SUCCESS" -> finalizeSuccessfulPayment(settlement, result);
+            case "CONFIRMING" -> moveToConfirming(settlement, result.getPaymentNo());
+            case "FAILED", "CANCELLED" -> moveToPaymentRequired(
+                    settlement.getOrderNo(), result.getPaymentNo(), result.getStatus());
+            case "DUPLICATE_SUCCESS" -> "DUPLICATE_SUCCESS";
+            default -> throw new IllegalArgumentException("未知支付状态: " + result.getStatus());
+        };
+    }
+
+    private void validatePaymentIdentity(TripOrderSettlement settlement, PaymentAttemptResult result) {
+        if (!Objects.equals(settlement.getPassengerId(), result.getPassengerId())
+                || settlement.getPayableAmount() == null || result.getAmount() == null
+                || settlement.getPayableAmount().compareTo(result.getAmount()) != 0) {
+            throw new IllegalArgumentException("支付金额或乘客与结算账单不一致");
+        }
+    }
+
+    private String moveToConfirming(TripOrderSettlement settlement, String paymentNo) {
+        settlementMapper.update(null, Wrappers.<TripOrderSettlement>lambdaUpdate()
+                .set(TripOrderSettlement::getActivePaymentNo, paymentNo)
+                .set(TripOrderSettlement::getPaymentStatus, 1)
+                .set(TripOrderSettlement::getSettlementStatus, "PAY_CONFIRMING")
+                .set(TripOrderSettlement::getFailureCode, null)
+                .set(TripOrderSettlement::getFailureSummary, null)
+                .set(TripOrderSettlement::getUpdatedAt, LocalDateTime.now())
+                .eq(TripOrderSettlement::getId, settlement.getId())
+                .isNull(TripOrderSettlement::getPaymentNo)
+                .ne(TripOrderSettlement::getSettlementStatus, "PAID"));
+        return "PAY_CONFIRMING";
+    }
+
+    private String moveToPaymentRequired(String orderNo, String paymentNo, String reason) {
+        TripOrderSettlement settlement = getSettlement(orderNo);
+        if (settlement == null) {
+            throw new IllegalArgumentException("订单结算记录不存在");
+        }
+        var update = Wrappers.<TripOrderSettlement>lambdaUpdate()
+                .set(TripOrderSettlement::getActivePaymentNo, null)
+                .set(TripOrderSettlement::getPaymentStatus, 3)
+                .set(TripOrderSettlement::getSettlementStatus, "PAYMENT_REQUIRED")
+                .set(TripOrderSettlement::getFailureCode, reason)
+                .set(TripOrderSettlement::getFailureSummary,
+                        paymentNo == null ? reason : reason + " paymentNo=" + paymentNo)
+                .set(TripOrderSettlement::getUpdatedAt, LocalDateTime.now())
+                .eq(TripOrderSettlement::getId, settlement.getId())
+                .isNull(TripOrderSettlement::getPaymentNo)
+                .ne(TripOrderSettlement::getSettlementStatus, "PAID");
+        if (paymentNo == null) {
+            update.isNull(TripOrderSettlement::getActivePaymentNo);
+        } else {
+            update.and(active -> active.isNull(TripOrderSettlement::getActivePaymentNo)
+                    .or().eq(TripOrderSettlement::getActivePaymentNo, paymentNo));
+        }
+        if (settlementMapper.update(null, update) != 1) {
+            TripOrderSettlement latest = getSettlementForUpdate(orderNo);
+            if (latest != null && latest.getActivePaymentNo() != null
+                    && !Objects.equals(latest.getActivePaymentNo(), paymentNo)) {
+                log.info("忽略旧支付尝试的延迟失败结果 orderNo={} stalePaymentNo={} activePaymentNo={}",
+                        orderNo, paymentNo, latest.getActivePaymentNo());
+                return "STALE_PAYMENT_RESULT";
+            }
+            return latest == null ? "SETTLEMENT_NOT_FOUND" : latest.getSettlementStatus();
+        }
+        return "PAYMENT_REQUIRED";
+    }
+
+    private String finalizeSuccessfulPayment(TripOrderSettlement settlement, PaymentAttemptResult payment) {
+        if ("PAID".equals(settlement.getSettlementStatus())) {
+            return Objects.equals(settlement.getPaymentNo(), payment.getPaymentNo())
+                    ? "PAID" : "DUPLICATE_SUCCESS";
+        }
+        if (settlement.getPaymentNo() != null
+                && !Objects.equals(settlement.getPaymentNo(), payment.getPaymentNo())) {
+            log.error("检测到订单第二笔成功支付，保留首笔 orderNo={} first={} duplicate={}",
+                    settlement.getOrderNo(), settlement.getPaymentNo(), payment.getPaymentNo());
+            return "DUPLICATE_SUCCESS";
+        }
+        LocalDateTime now = LocalDateTime.now();
+        if (settlement.getPaymentNo() == null) {
+            int claimed = settlementMapper.update(null, Wrappers.<TripOrderSettlement>lambdaUpdate()
+                    .set(TripOrderSettlement::getPaymentNo, payment.getPaymentNo())
+                    .set(TripOrderSettlement::getActivePaymentNo, payment.getPaymentNo())
+                    .set(TripOrderSettlement::getPaymentStatus, 1)
+                    .set(TripOrderSettlement::getSettlementStatus, "PAY_CONFIRMING")
+                    .set(TripOrderSettlement::getFailureCode, "PAYMENT_FINALIZE_PENDING")
+                    .set(TripOrderSettlement::getFailureSummary, "支付成功，等待核券和结算收尾")
+                    .set(TripOrderSettlement::getUpdatedAt, now)
+                    .eq(TripOrderSettlement::getId, settlement.getId())
+                    .isNull(TripOrderSettlement::getPaymentNo)
+                    .ne(TripOrderSettlement::getSettlementStatus, "PAID"));
+            if (claimed != 1) {
+                TripOrderSettlement winner = getSettlementForUpdate(settlement.getOrderNo());
+                return winner != null && Objects.equals(winner.getPaymentNo(), payment.getPaymentNo())
+                        ? finalizeSuccessfulPayment(winner, payment) : "DUPLICATE_SUCCESS";
+            }
+            settlement.setPaymentNo(payment.getPaymentNo());
+        }
+        try {
+            if (settlement.getCouponId() != null) {
+                calculateClient.useCoupon(new CouponUseRequest(settlement.getPassengerId(),
+                        settlement.getCouponId(), settlement.getOrderNo(),
+                        settlement.getCouponDiscountAmount()));
+            }
+        } catch (RuntimeException ex) {
+            log.error("支付成功后核销优惠券失败，保留收尾恢复标记 orderNo={} paymentNo={}",
+                    settlement.getOrderNo(), payment.getPaymentNo(), ex);
+            return "PAYMENT_FINALIZE_PENDING";
+        }
+        int unblocked = orderMapper.update(null, Wrappers.<TripOrder>lambdaUpdate()
+                .set(TripOrder::getBlocksNewOrder, null)
+                .set(TripOrder::getUpdatedAt, now)
+                .eq(TripOrder::getOrderNo, settlement.getOrderNo())
+                .eq(TripOrder::getBlocksNewOrder, 1));
+        if (unblocked != 1) {
+            TripOrder currentOrder = getOrder(settlement.getOrderNo());
+            if (currentOrder == null || currentOrder.getBlocksNewOrder() != null) {
+                settlementMapper.update(null, Wrappers.<TripOrderSettlement>lambdaUpdate()
+                        .set(TripOrderSettlement::getFailureSummary, "支付成功但解除下单阻塞失败，等待恢复")
+                        .set(TripOrderSettlement::getUpdatedAt, now)
+                        .eq(TripOrderSettlement::getId, settlement.getId())
+                        .eq(TripOrderSettlement::getPaymentNo, payment.getPaymentNo()));
+                return "PAYMENT_FINALIZE_PENDING";
+            }
+        }
+        int finalized = settlementMapper.update(null, Wrappers.<TripOrderSettlement>lambdaUpdate()
+                .set(TripOrderSettlement::getActivePaymentNo, null)
+                .set(TripOrderSettlement::getPaymentStatus, 2)
+                .set(TripOrderSettlement::getPaidAmount, payment.getAmount())
+                .set(TripOrderSettlement::getPaidAt,
+                        payment.getOccurredAt() == null ? now : payment.getOccurredAt())
+                .set(TripOrderSettlement::getSettlementStatus, "PAID")
+                .set(TripOrderSettlement::getFailureCode, null)
+                .set(TripOrderSettlement::getFailureSummary, null)
+                .set(TripOrderSettlement::getSettledAt, now)
+                .set(TripOrderSettlement::getUpdatedAt, now)
+                .eq(TripOrderSettlement::getId, settlement.getId())
+                .eq(TripOrderSettlement::getPaymentNo, payment.getPaymentNo())
+                .ne(TripOrderSettlement::getSettlementStatus, "PAID"));
+        if (finalized != 1) {
+            TripOrderSettlement latest = getSettlementForUpdate(settlement.getOrderNo());
+            if (latest != null && "PAID".equals(latest.getSettlementStatus())) {
+                return "PAID";
+            }
+            orderMapper.update(null, Wrappers.<TripOrder>lambdaUpdate()
+                    .set(TripOrder::getBlocksNewOrder, 1)
+                    .set(TripOrder::getUpdatedAt, LocalDateTime.now())
+                    .eq(TripOrder::getOrderNo, settlement.getOrderNo())
+                    .isNull(TripOrder::getBlocksNewOrder));
+            return "PAYMENT_FINALIZE_PENDING";
+        }
+        insertOrderChangedOutbox(settlement, now);
+        return "PAID";
+    }
+
+    private void insertOrderChangedOutbox(TripOrderSettlement settlement, LocalDateTime now) {
+        OrderOutboxEvent outbox = new OrderOutboxEvent()
+                .setTopic("order.changed.v1")
+                .setEventType("ORDER_CHANGED")
+                .setAggregateId(settlement.getOrderNo())
+                .setPayload("{}")
+                .setStatus("PENDING")
+                .setRetryCount(0)
+                .setNextRetryAt(now)
+                .setCreatedAt(now)
+                .setUpdatedAt(now);
+        outboxMapper.insert(outbox);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("schemaVersion", "1.0");
+        payload.put("eventId", String.valueOf(outbox.getId()));
+        payload.put("eventType", "ORDER_CHANGED");
+        payload.put("orderNo", settlement.getOrderNo());
+        payload.put("passengerId", settlement.getPassengerId());
+        payload.put("occurredAt", now.toString());
+        try {
+            outbox.setPayload(objectMapper.writeValueAsString(payload));
+            if (outboxMapper.updateById(outbox) != 1) {
+                throw new IllegalStateException("订单变化事件payload回写失败");
+            }
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("订单变化事件序列化失败", ex);
         }
     }
 
@@ -303,5 +595,14 @@ public class TripOrderSettlementService {
         return settlementMapper.selectOne(Wrappers.<TripOrderSettlement>lambdaQuery()
                 .eq(TripOrderSettlement::getOrderNo, orderNo)
                 .last("LIMIT 1"));
+    }
+
+    /**
+     * CAS 失败后使用当前读，避免 MySQL REPEATABLE READ 继续看到事务开始时的旧快照。
+     */
+    private TripOrderSettlement getSettlementForUpdate(String orderNo) {
+        return settlementMapper.selectOne(Wrappers.<TripOrderSettlement>lambdaQuery()
+                .eq(TripOrderSettlement::getOrderNo, orderNo)
+                .last("LIMIT 1 FOR UPDATE"));
     }
 }

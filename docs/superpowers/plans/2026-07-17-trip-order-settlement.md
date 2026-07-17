@@ -506,23 +506,23 @@ git commit -m "feat: add environment-gated mock cashier"
 - Modify: `wallet/pom.xml`
 - Test: `wallet/src/test/java/com/sx/wallet/service/PaymentResultNotificationTest.java`
 
-- [ ] **Step 1: 写免密结果映射测试**
+- [x] **Step 1: 写免密结果映射测试**
 
 `SUCCESS -> PAID`；`FAILED/CANCELLED/无默认协议 -> PAYMENT_REQUIRED`；`CONFIRMING -> PAY_CONFIRMING`。失败不释放券且不安排自动重试。
 
-- [ ] **Step 2: 写成功收尾幂等测试**
+- [x] **Step 2: 写成功收尾幂等测试**
 
 校验 `paidAmount == payableAmount`；先以 CAS 竞争订单级成功，再核销券，最后 settlement 进入 PAID、记录成功 paymentNo、清空 `blocks_new_order`、写 ORDER_CHANGED outbox。重复通知不重复核券。核券失败时状态保留可恢复收尾标记，重试只执行 use/finalize，不创建新支付。
 
-- [ ] **Step 3: 实现钱包到订单的可信结果通知**
+- [x] **Step 3: 实现钱包到订单的可信结果通知**
 
 wallet 在 mock 尝试进入终态或 CONFIRMING 时调用 order 内部接口。通知包含 paymentNo/orderNo/passengerId/channel/amount/status/channelTradeNo/occurredAt；order 必须与账单和钱包查询结果交叉校验，拒绝客户端伪造。
 
-- [ ] **Step 4: 实现双成功原子竞争**
+- [x] **Step 4: 实现双成功原子竞争**
 
 只有 `payment_no IS NULL AND settlement_status <> 'PAID'` 的 CAS 可以接受首笔 SUCCESS。第二笔 mock 成功写为 `DUPLICATE_SUCCESS` 并告警，不覆盖首笔；本 MVP 无真实资金退款，但保留异常标记。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 Run: `mvn -pl order,wallet -am test`
 

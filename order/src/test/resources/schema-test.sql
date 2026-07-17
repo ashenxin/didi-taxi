@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS trip_order_settlement (
     carrier_income_amount DECIMAL(10, 2) NULL,
     settlement_snapshot VARCHAR(8000) NULL,
     payment_no VARCHAR(64) NULL,
+    active_payment_no VARCHAR(64) NULL,
     payment_status INT NOT NULL DEFAULT 0,
     paid_amount DECIMAL(10, 2) NULL,
     paid_at TIMESTAMP NULL,

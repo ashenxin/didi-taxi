@@ -59,6 +59,8 @@ order:
       max-retry-count: 10
 
 services:
+  wallet:
+    base-url: http://127.0.0.1:8095
   passenger-api:
     # 走网关，由 passenger-api 内部通知入口推送乘客 WS。
     base-url: http://127.0.0.1:18080

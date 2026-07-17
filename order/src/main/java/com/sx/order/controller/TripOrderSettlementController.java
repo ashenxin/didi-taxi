@@ -5,7 +5,6 @@ import com.sx.order.common.util.ResultUtil;
 import com.sx.order.common.vo.ResponseVo;
 import com.sx.order.dao.TripOrderSettlementMapper;
 import com.sx.order.model.TripOrderSettlement;
-import com.sx.order.model.dto.SettlementPaymentUpdateRequest;
 import com.sx.order.model.dto.SettlementUpsertRequest;
 import com.sx.order.model.dto.UnsettledOrderCheckResult;
 import com.sx.order.service.SettlementAmountValidator;
@@ -77,26 +76,6 @@ public class TripOrderSettlementController {
         } else {
             settlementMapper.updateById(settlement);
         }
-        return ResultUtil.success(settlement);
-    }
-
-    @PostMapping("/{orderNo}/payment")
-    public ResponseVo<TripOrderSettlement> updatePayment(@PathVariable String orderNo,
-                                                         @RequestBody SettlementPaymentUpdateRequest request) {
-        TripOrderSettlement settlement = getByOrderNo(orderNo);
-        if (settlement == null) {
-            return ResultUtil.error(404, "订单结算记录不存在");
-        }
-        settlement.setPaymentNo(request.getPaymentNo());
-        settlement.setPaymentStatus(request.getPaymentStatus());
-        settlement.setPaidAmount(request.getPaidAmount());
-        settlement.setPaidAt(request.getPaidAt());
-        settlement.setSettlementStatus(request.getSettlementStatus());
-        if ("PAID".equals(request.getSettlementStatus())) {
-            settlement.setSettledAt(request.getPaidAt() == null ? LocalDateTime.now() : request.getPaidAt());
-        }
-        settlement.setUpdatedAt(LocalDateTime.now());
-        settlementMapper.updateById(settlement);
         return ResultUtil.success(settlement);
     }
 

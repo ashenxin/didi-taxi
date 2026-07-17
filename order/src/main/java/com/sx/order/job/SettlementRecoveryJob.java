@@ -29,7 +29,7 @@ public class SettlementRecoveryJob {
     public void recover() {
         List<TripOrderSettlement> candidates = settlementMapper.selectList(
                 new QueryWrapper<TripOrderSettlement>()
-                        .eq("settlement_status", "CALCULATING")
+                        .in("settlement_status", "CALCULATING", "PAY_CONFIRMING")
                         .eq("manual_action_required", 0)
                         .orderByAsc("updated_at")
                         .last("LIMIT " + batchSize));
@@ -37,7 +37,11 @@ public class SettlementRecoveryJob {
             if (Integer.valueOf(1).equals(settlement.getManualActionRequired())) {
                 continue;
             }
-            settlementService.process(settlement.getOrderNo());
+            if ("PAY_CONFIRMING".equals(settlement.getSettlementStatus())) {
+                settlementService.recoverPayment(settlement.getOrderNo());
+            } else {
+                settlementService.process(settlement.getOrderNo());
+            }
         }
     }
 }

@@ -37,6 +37,7 @@ public class TripOrderSettlement {
     private BigDecimal carrierIncomeAmount;
     private String settlementSnapshot;
     private String paymentNo;
+    private String activePaymentNo;
     private Integer paymentStatus;
     private BigDecimal paidAmount;
     private LocalDateTime paidAt;

@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS `trip_order_settlement` (
     `carrier_income_amount` DECIMAL(10,2) NULL COMMENT '承运侧收入金额',
     `settlement_snapshot` JSON NULL COMMENT '结算快照',
     `payment_no` VARCHAR(64) NULL COMMENT '钱包支付单号',
+    `active_payment_no` VARCHAR(64) NULL COMMENT '当前处理中支付尝试号，用于PAY_CONFIRMING原交易查询',
     `payment_status` INT NOT NULL DEFAULT 0 COMMENT '支付状态：0待支付 1支付中 2成功 3失败',
     `paid_amount` DECIMAL(10,2) NULL COMMENT '已支付金额',
     `paid_at` DATETIME NULL COMMENT '支付完成时间',
@@ -185,5 +186,6 @@ CREATE TABLE IF NOT EXISTS `trip_order_settlement` (
     KEY `idx_settlement_coupon_template` (`coupon_template_id`),
     KEY `idx_settlement_coupon_company` (`coupon_company_id`),
     KEY `idx_settlement_payment_no` (`payment_no`),
+    KEY `idx_settlement_active_payment_no` (`active_payment_no`),
     KEY `idx_settlement_status` (`settlement_status`, `payment_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单结算快照';

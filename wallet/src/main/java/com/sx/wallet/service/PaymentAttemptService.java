@@ -165,6 +165,11 @@ public class PaymentAttemptService {
         var update = Wrappers.<WalletPaymentOrder>lambdaUpdate()
                 .set(WalletPaymentOrder::getStatus, target)
                 .set(WalletPaymentOrder::getResolvedAt, "CONFIRMING".equals(target) ? null : now)
+                .set(WalletPaymentOrder::getNotifyStatus, "PENDING")
+                .set(WalletPaymentOrder::getNotifyRetryCount, 0)
+                .setSql("notify_version = notify_version + 1")
+                .set(WalletPaymentOrder::getNextNotifyAt, now)
+                .set(WalletPaymentOrder::getLastNotifyError, null)
                 .set(WalletPaymentOrder::getUpdatedAt, now)
                 .eq(WalletPaymentOrder::getId, attempt.getId())
                 .eq(WalletPaymentOrder::getStatus, current);
@@ -180,7 +185,10 @@ public class PaymentAttemptService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "支付状态并发冲突");
         }
         attempt.setStatus(target).setUpdatedAt(now)
-                .setResolvedAt("CONFIRMING".equals(target) ? null : now);
+                .setResolvedAt("CONFIRMING".equals(target) ? null : now)
+                .setNotifyStatus("PENDING").setNotifyRetryCount(0)
+                .setNotifyVersion((attempt.getNotifyVersion() == null ? 0 : attempt.getNotifyVersion()) + 1)
+                .setNextNotifyAt(now).setLastNotifyError(null);
         if ("SUCCESS".equals(target)) {
             attempt.setPaidAt(now).setChannelTradeNo("MOCK_CASHIER_" + paymentNo);
         }
@@ -207,6 +215,9 @@ public class PaymentAttemptService {
                 .setChannelRequestNo("REQ" + UUID.randomUUID().toString().replace("-", ""))
                 .setIdempotencyKey(request.getIdempotencyKey())
                 .setNotifyPayload("{}")
+                .setNotifyStatus("NONE")
+                .setNotifyRetryCount(0)
+                .setNotifyVersion(0)
                 .setCreatedAt(now)
                 .setUpdatedAt(now);
         if ("MANUAL".equals(triggerType)) {
@@ -226,6 +237,10 @@ public class PaymentAttemptService {
             attempt.setStatus("FAILED")
                     .setFailedReason("CHANNEL_CALL_FAILED: " + ex.getMessage())
                     .setResolvedAt(now)
+                    .setNotifyStatus("PENDING")
+                    .setNotifyRetryCount(0)
+                    .setNotifyVersion((attempt.getNotifyVersion() == null ? 0 : attempt.getNotifyVersion()) + 1)
+                    .setNextNotifyAt(now)
                     .setUpdatedAt(now);
         }
         if (paymentMapper.updateById(attempt) != 1) {
@@ -245,6 +260,11 @@ public class PaymentAttemptService {
         attempt.setStatus(status)
                 .setChannelTradeNo(result.channelTradeNo())
                 .setFailedReason(result.failedReason())
+                .setNotifyStatus("PENDING")
+                .setNotifyRetryCount(0)
+                .setNotifyVersion((attempt.getNotifyVersion() == null ? 0 : attempt.getNotifyVersion()) + 1)
+                .setNextNotifyAt(now)
+                .setLastNotifyError(null)
                 .setUpdatedAt(now);
         if ("SUCCESS".equals(status)) {
             attempt.setPaidAt(now).setResolvedAt(now);
@@ -376,10 +396,13 @@ public class PaymentAttemptService {
         PaymentResult result = new PaymentResult();
         result.setPaymentNo(attempt.getPaymentNo());
         result.setOrderNo(attempt.getOrderNo());
+        result.setPassengerId(attempt.getPassengerId());
         result.setStatus(attempt.getStatus());
         result.setChannel(attempt.getChannel());
         result.setAttemptNo(attempt.getAttemptNo());
         result.setAmount(attempt.getAmount());
+        result.setChannelTradeNo(attempt.getChannelTradeNo());
+        result.setOccurredAt(attempt.getResolvedAt() == null ? attempt.getUpdatedAt() : attempt.getResolvedAt());
         if (includeCheckoutUrl && "MANUAL".equals(attempt.getTriggerType())
                 && "PAYING".equals(attempt.getStatus())
                 && attempt.getCheckoutTokenExpiresAt() != null

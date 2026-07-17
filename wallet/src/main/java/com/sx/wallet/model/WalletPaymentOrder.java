@@ -35,6 +35,12 @@ public class WalletPaymentOrder {
     private LocalDateTime paidAt;
     private String failedReason;
     private String notifyPayload;
+    private String notifyStatus;
+    private Integer notifyRetryCount;
+    private Integer notifyVersion;
+    private LocalDateTime nextNotifyAt;
+    private String lastNotifyError;
+    private LocalDateTime notifiedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }
