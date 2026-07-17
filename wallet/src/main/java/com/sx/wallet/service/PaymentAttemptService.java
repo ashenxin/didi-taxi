@@ -67,6 +67,7 @@ public class PaymentAttemptService {
         }
         WalletPaymentOrder idempotent = findByIdempotencyKey(request.getIdempotencyKey());
         if (idempotent != null) {
+            expirePayingCheckout(idempotent);
             return idempotentResult(request, idempotent);
         }
         WalletPaymentOrder success = findByOrderAndStatus(request.getOrderNo(), "SUCCESS");
@@ -75,6 +76,10 @@ public class PaymentAttemptService {
         }
         WalletPaymentOrder active = findActive(request.getOrderNo());
         if (active != null) {
+            expirePayingCheckout(active);
+            if ("CANCELLED".equals(active.getStatus())) {
+                throw new IllegalArgumentException("原收银台已过期，请重新发起支付");
+            }
             throw new IllegalArgumentException("订单支付处理中，请勿重复发起");
         }
 
@@ -126,6 +131,7 @@ public class PaymentAttemptService {
         if (attempt == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "支付尝试不存在");
         }
+        expirePayingCheckout(attempt);
         return toResult(attempt, false);
     }
 
@@ -367,12 +373,41 @@ public class PaymentAttemptService {
         }
         if (attempt.getCheckoutTokenExpiresAt() == null
                 || !attempt.getCheckoutTokenExpiresAt().isAfter(LocalDateTime.now())) {
+            expirePayingCheckout(attempt);
             throw new ResponseStatusException(HttpStatus.GONE, "收银台token已过期");
         }
         if (token == null || attempt.getCheckoutTokenHash() == null
                 || !MessageDigest.isEqual(sha256(token).getBytes(StandardCharsets.UTF_8),
                 attempt.getCheckoutTokenHash().getBytes(StandardCharsets.UTF_8))) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收银台不存在");
+        }
+    }
+
+    private void expirePayingCheckout(WalletPaymentOrder attempt) {
+        if (!"PAYING".equals(attempt.getStatus())
+                || !"MANUAL".equals(attempt.getTriggerType())
+                || attempt.getCheckoutTokenExpiresAt() == null
+                || attempt.getCheckoutTokenExpiresAt().isAfter(LocalDateTime.now())) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int nextVersion = (attempt.getNotifyVersion() == null ? 0 : attempt.getNotifyVersion()) + 1;
+        int updated = paymentMapper.update(null, Wrappers.<WalletPaymentOrder>lambdaUpdate()
+                .set(WalletPaymentOrder::getStatus, "CANCELLED")
+                .set(WalletPaymentOrder::getFailedReason, "CHECKOUT_TOKEN_EXPIRED")
+                .set(WalletPaymentOrder::getResolvedAt, now)
+                .set(WalletPaymentOrder::getNotifyStatus, "PENDING")
+                .set(WalletPaymentOrder::getNotifyRetryCount, 0)
+                .set(WalletPaymentOrder::getNotifyVersion, nextVersion)
+                .set(WalletPaymentOrder::getNextNotifyAt, now)
+                .set(WalletPaymentOrder::getLastNotifyError, null)
+                .set(WalletPaymentOrder::getUpdatedAt, now)
+                .eq(WalletPaymentOrder::getId, attempt.getId())
+                .eq(WalletPaymentOrder::getStatus, "PAYING"));
+        if (updated == 1) {
+            attempt.setStatus("CANCELLED").setFailedReason("CHECKOUT_TOKEN_EXPIRED")
+                    .setResolvedAt(now).setNotifyStatus("PENDING").setNotifyRetryCount(0)
+                    .setNotifyVersion(nextVersion).setNextNotifyAt(now).setUpdatedAt(now);
         }
     }
 

@@ -15,6 +15,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.HttpClientErrorException;
@@ -147,6 +148,13 @@ public class GlobalExceptionHandler {
         return entity(ResultUtil.requestError(errMsg));
     }
 
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ResponseVo<?>> httpMessageNotReadableExceptionHandler(
+            HttpMessageNotReadableException e, HttpServletRequest request) {
+        log.warn("请求体不可读 path={} detail={}", request.getRequestURI(), e.getMostSpecificCause().getMessage());
+        return entity(ResultUtil.requestError("请求体包含不支持的字段或格式错误"));
+    }
+
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ResponseEntity<ResponseVo<?>> missingServletRequestParameterExceptionHandler(MissingServletRequestParameterException e, HttpServletRequest request) {
         String errMsg = String.format("参数[%s]不能为空", e.getParameterName());
@@ -177,4 +185,3 @@ public class GlobalExceptionHandler {
         return entity(ResultUtil.error(ExceptionCode.SERVER_ERROR.getValue(), "页面异常，请稍后重试"));
     }
 }
-

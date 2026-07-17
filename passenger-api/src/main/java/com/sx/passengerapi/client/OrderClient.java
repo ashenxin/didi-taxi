@@ -11,6 +11,9 @@ import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
 import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
 import com.sx.passengerapi.model.ordercore.BlockingOrderResult;
+import com.sx.passengerapi.model.settlement.ManualPaymentCommand;
+import com.sx.passengerapi.model.settlement.OrderSettlementRow;
+import com.sx.passengerapi.model.settlement.PaymentAttemptRow;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -59,4 +62,16 @@ public interface OrderClient {
     ResponseVo<BlockingOrderResult> blockingOrder(
             @RequestParam("passengerId") Long passengerId,
             @RequestHeader("Idempotency-Key") String idempotencyKey);
+
+    @GetMapping("/api/v1/orders/internal/settlements/{orderNo}/passenger")
+    ResponseVo<OrderSettlementRow> passengerSettlement(
+            @PathVariable("orderNo") String orderNo,
+            @RequestParam("passengerId") Long passengerId);
+
+    @PostMapping("/api/v1/orders/internal/settlements/{orderNo}/payments")
+    ResponseVo<PaymentAttemptRow> createManualPayment(
+            @PathVariable("orderNo") String orderNo,
+            @RequestParam("passengerId") Long passengerId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody ManualPaymentCommand command);
 }

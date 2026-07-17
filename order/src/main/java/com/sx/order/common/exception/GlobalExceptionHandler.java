@@ -71,6 +71,12 @@ public class GlobalExceptionHandler {
         return ResultUtil.requestError(e.getMessage());
     }
 
+    @ExceptionHandler(SecurityException.class)
+    public ResponseVo<?> securityExceptionHandler(SecurityException e) {
+        log.warn("权限校验失败：{}", e.getMessage());
+        return ResultUtil.error(403, e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseVo<?> exceptionHandler(Exception e) {
         log.error("未处理异常 type={} msg={}", e.getClass().getName(), e.getMessage(), e);

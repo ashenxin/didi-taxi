@@ -8,8 +8,11 @@ import com.sx.order.model.TripOrderSettlement;
 import com.sx.order.model.dto.SettlementUpsertRequest;
 import com.sx.order.model.dto.UnsettledOrderCheckResult;
 import com.sx.order.model.dto.BlockingOrderResult;
+import com.sx.order.model.dto.ManualPaymentCommand;
+import com.sx.order.model.dto.PaymentAttemptResult;
 import com.sx.order.service.SettlementAmountValidator;
 import com.sx.order.service.TripOrderWriteService;
+import com.sx.order.service.TripOrderSettlementService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,13 +32,16 @@ public class TripOrderSettlementController {
     private final TripOrderSettlementMapper settlementMapper;
     private final SettlementAmountValidator amountValidator;
     private final TripOrderWriteService orderWriteService;
+    private final TripOrderSettlementService settlementService;
 
     public TripOrderSettlementController(TripOrderSettlementMapper settlementMapper,
                                          SettlementAmountValidator amountValidator,
-                                         TripOrderWriteService orderWriteService) {
+                                         TripOrderWriteService orderWriteService,
+                                         TripOrderSettlementService settlementService) {
         this.settlementMapper = settlementMapper;
         this.amountValidator = amountValidator;
         this.orderWriteService = orderWriteService;
+        this.settlementService = settlementService;
     }
 
     @PostMapping
@@ -113,6 +119,23 @@ public class TripOrderSettlementController {
             @RequestParam("passengerId") Long passengerId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         return ResultUtil.success(orderWriteService.findBlockingOrder(passengerId, idempotencyKey));
+    }
+
+    @GetMapping("/{orderNo}/passenger")
+    public ResponseVo<TripOrderSettlement> passengerSettlement(
+            @PathVariable String orderNo,
+            @RequestParam("passengerId") Long passengerId) {
+        return ResultUtil.success(settlementService.getPassengerSettlement(orderNo, passengerId));
+    }
+
+    @PostMapping("/{orderNo}/payments")
+    public ResponseVo<PaymentAttemptResult> createManualPayment(
+            @PathVariable String orderNo,
+            @RequestParam("passengerId") Long passengerId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody ManualPaymentCommand command) {
+        return ResultUtil.success(settlementService.createManualPayment(
+                orderNo, passengerId, idempotencyKey, command));
     }
 
     private TripOrderSettlement getByOrderNo(String orderNo) {

@@ -19,6 +19,7 @@ import com.sx.order.model.dto.FinalFareResult;
 import com.sx.order.model.dto.PaymentAttemptRequest;
 import com.sx.order.model.dto.PaymentAttemptResult;
 import com.sx.order.model.dto.PaymentResultNotification;
+import com.sx.order.model.dto.ManualPaymentCommand;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -211,6 +212,104 @@ public class TripOrderSettlementService {
         return applyPaymentResult(result);
     }
 
+    public TripOrderSettlement getPassengerSettlement(String orderNo, Long passengerId) {
+        TripOrderSettlement settlement = getSettlement(orderNo);
+        if (settlement == null) {
+            throw new IllegalArgumentException("订单结算记录不存在");
+        }
+        if (!Objects.equals(passengerId, settlement.getPassengerId())) {
+            throw new SecurityException("无权查看该订单结算");
+        }
+        return settlement;
+    }
+
+    @Transactional
+    public PaymentAttemptResult createManualPayment(String orderNo, Long passengerId,
+                                                    String idempotencyKey,
+                                                    ManualPaymentCommand command) {
+        if (!StringUtils.hasText(idempotencyKey)) {
+            throw new IllegalArgumentException("Idempotency-Key不能为空");
+        }
+        if (command == null || !StringUtils.hasText(command.channel())) {
+            throw new IllegalArgumentException("channel不能为空");
+        }
+        TripOrderSettlement settlement = getSettlementForUpdate(orderNo);
+        if (settlement == null) {
+            throw new IllegalArgumentException("订单结算记录不存在");
+        }
+        if (!Objects.equals(passengerId, settlement.getPassengerId())) {
+            throw new SecurityException("无权支付该订单");
+        }
+        if ("PAID".equals(settlement.getSettlementStatus())) {
+            PaymentAttemptResult paid = settlement.getPaymentNo() == null
+                    ? null : walletClient.getPaymentAttempt(settlement.getPaymentNo());
+            if (paid != null) {
+                return paid;
+            }
+            throw new IllegalStateException("订单已支付但缺少支付记录");
+        }
+        if (settlement.getActivePaymentNo() != null) {
+            PaymentAttemptResult active = walletClient.getPaymentAttempt(settlement.getActivePaymentNo());
+            validatePaymentIdentity(settlement, active);
+            if (!Objects.equals(orderNo, active.getOrderNo())
+                    || !Objects.equals(settlement.getActivePaymentNo(), active.getPaymentNo())) {
+                throw new IllegalArgumentException("钱包活动交易与订单不一致");
+            }
+            if ("SUCCESS".equals(active.getStatus())) {
+                applyPaymentResult(active);
+                return active;
+            }
+            if ("FAILED".equals(active.getStatus()) || "CANCELLED".equals(active.getStatus())) {
+                applyPaymentResult(active);
+                settlement = getSettlementForUpdate(orderNo);
+                if (settlement == null) {
+                    throw new IllegalStateException("主动支付状态恢复失败");
+                }
+            }
+        }
+        boolean paymentRequired = "PAYMENT_REQUIRED".equals(settlement.getSettlementStatus());
+        boolean confirmingReplay = "PAY_CONFIRMING".equals(settlement.getSettlementStatus())
+                && settlement.getActivePaymentNo() != null;
+        if ((!paymentRequired && !confirmingReplay)
+                || settlement.getPayableAmount() == null
+                || settlement.getPayableAmount().compareTo(ZERO) <= 0) {
+            throw new IllegalStateException("当前结算状态不允许主动支付");
+        }
+        PaymentAttemptResult result = walletClient.createPaymentAttempt(new PaymentAttemptRequest(
+                orderNo, passengerId, settlement.getPayableAmount(), "MANUAL",
+                command.channel().trim().toUpperCase(), idempotencyKey.trim()));
+        validatePaymentIdentity(settlement, result);
+        if (!Objects.equals(orderNo, result.getOrderNo())) {
+            throw new IllegalArgumentException("钱包创建结果与订单不一致");
+        }
+        if (settlement.getActivePaymentNo() != null
+                && !Objects.equals(settlement.getActivePaymentNo(), result.getPaymentNo())) {
+            throw new IllegalStateException("订单已有另一笔支付处理中");
+        }
+        if (confirmingReplay) {
+            if (!"CONFIRMING".equals(result.getStatus())) {
+                applyPaymentResult(result);
+            }
+            return result;
+        }
+        if ("PAYING".equals(result.getStatus())) {
+            int claimed = settlementMapper.update(null, Wrappers.<TripOrderSettlement>lambdaUpdate()
+                    .set(TripOrderSettlement::getActivePaymentNo, result.getPaymentNo())
+                    .set(TripOrderSettlement::getPaymentStatus, 0)
+                    .set(TripOrderSettlement::getUpdatedAt, LocalDateTime.now())
+                    .eq(TripOrderSettlement::getId, settlement.getId())
+                    .and(active -> active.isNull(TripOrderSettlement::getActivePaymentNo)
+                            .or().eq(TripOrderSettlement::getActivePaymentNo, result.getPaymentNo()))
+                    .eq(TripOrderSettlement::getSettlementStatus, "PAYMENT_REQUIRED"));
+            if (claimed != 1) {
+                throw new IllegalStateException("主动支付状态登记失败，请重试");
+            }
+            return result;
+        }
+        applyPaymentResult(result);
+        return result;
+    }
+
     private boolean samePayment(PaymentResultNotification notice, PaymentAttemptResult actual) {
         return actual != null
                 && Objects.equals(notice.paymentNo(), actual.getPaymentNo())
@@ -243,7 +342,8 @@ public class TripOrderSettlementService {
     }
 
     private void validatePaymentIdentity(TripOrderSettlement settlement, PaymentAttemptResult result) {
-        if (!Objects.equals(settlement.getPassengerId(), result.getPassengerId())
+        if (result == null
+                || !Objects.equals(settlement.getPassengerId(), result.getPassengerId())
                 || settlement.getPayableAmount() == null || result.getAmount() == null
                 || settlement.getPayableAmount().compareTo(result.getAmount()) != 0) {
             throw new IllegalArgumentException("支付金额或乘客与结算账单不一致");

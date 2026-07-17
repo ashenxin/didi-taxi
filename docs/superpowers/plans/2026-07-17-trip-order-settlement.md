@@ -602,15 +602,15 @@ git commit -m "feat: block booking while prior order is unsettled"
 - Create: `order/src/main/java/com/sx/order/model/dto/ManualPaymentCommand.java`
 - Modify: `order/src/main/java/com/sx/order/service/TripOrderSettlementService.java`
 
-- [ ] **Step 1: 写查询鉴权和响应测试**
+- [x] **Step 1: 写查询鉴权和响应测试**
 
 `GET /app/api/v1/orders/{orderNo}/settlement` 校验订单属于登录乘客。响应字段固定为 `settlementStatus/originalFare/discountAmount/payableAmount/paidAmount/couponName/availableChannels/message`；CALCULATING 与 PAY_CONFIRMING 不返回可支付操作。
 
-- [ ] **Step 2: 写主动支付请求契约测试**
+- [x] **Step 2: 写主动支付请求契约测试**
 
 `POST /app/api/v1/orders/{orderNo}/payments` 请求体只有 channel；passengerId 来自 `X-User-Id`，金额来自结算快照，必须有新的 `Idempotency-Key`。篡改/多余的 amount/passengerId 使用 Jackson fail-on-unknown 或专门契约测试拒绝。
 
-- [ ] **Step 3: 将主动支付决策放在 order-service**
+- [x] **Step 3: 将主动支付决策放在 order-service**
 
 order 校验归属、`PAYMENT_REQUIRED`、金额关系、未 PAID、无 CONFIRMING 尝试后，调用 wallet 创建 MANUAL 尝试。BFF 只透传：
 
@@ -621,11 +621,11 @@ return orderClient.createManualPayment(
 
 同幂等键重复返回原 paymentNo/checkoutUrl；PAID 返回已支付结果而不调用 wallet。
 
-- [ ] **Step 4: 暴露 mock 收银台 URL**
+- [x] **Step 4: 暴露 mock 收银台 URL**
 
 响应 `invokePayload.type=MOCK_CASHIER`，checkoutUrl 指向受 token 保护的 wallet mock 页面或经 BFF 无状态代理的相同页面；不得依赖数据库中“只有一笔未结清”推断 orderNo。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 Run: `mvn -pl order,passenger-api,wallet -am test`
 

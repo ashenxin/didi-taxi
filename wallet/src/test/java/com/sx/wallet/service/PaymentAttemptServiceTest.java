@@ -212,11 +212,35 @@ class PaymentAttemptServiceTest {
         WalletPaymentOrder stored = attempt(1, "PAYING", "ALIPAY")
                 .setTriggerType("MANUAL")
                 .setCheckoutTokenHash("irrelevant")
+                .setNotifyVersion(0)
                 .setCheckoutTokenExpiresAt(java.time.LocalDateTime.now().minusSeconds(1));
         when(paymentMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
 
         assertThatThrownBy(() -> service.resolveMockPayment(stored.getPaymentNo(), "token", "SUCCESS"))
                 .hasMessageContaining("已过期");
+
+        assertThat(stored.getStatus()).isEqualTo("CANCELLED");
+        assertThat(stored.getFailedReason()).isEqualTo("CHECKOUT_TOKEN_EXPIRED");
+        assertThat(stored.getNotifyStatus()).isEqualTo("PENDING");
+        assertThat(stored.getNotifyVersion()).isEqualTo(1);
+        assertThat(stored.getNextNotifyAt()).isNotNull();
+        verify(paymentMapper).update(isNull(), any(Wrapper.class));
+    }
+
+    @Test
+    void paymentQueryExpiresPayingManualAttemptWithoutOpeningOldCashier() {
+        WalletPaymentOrder stored = attempt(1, "PAYING", "ALIPAY")
+                .setTriggerType("MANUAL")
+                .setNotifyVersion(0)
+                .setCheckoutTokenHash("irrelevant")
+                .setCheckoutTokenExpiresAt(java.time.LocalDateTime.now().minusSeconds(1));
+        when(paymentMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
+
+        PaymentResult result = service.getPaymentAttempt(stored.getPaymentNo());
+
+        assertThat(result.getStatus()).isEqualTo("CANCELLED");
+        assertThat(stored.getNotifyStatus()).isEqualTo("PENDING");
+        verify(paymentMapper).update(isNull(), any(Wrapper.class));
     }
 
     @Test

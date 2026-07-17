@@ -14,6 +14,7 @@ import com.sx.order.model.dto.FinalFareResult;
 import com.sx.order.model.dto.PaymentAttemptResult;
 import com.sx.order.model.dto.PaymentAttemptRequest;
 import com.sx.order.model.dto.PaymentResultNotification;
+import com.sx.order.model.dto.ManualPaymentCommand;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -444,6 +445,133 @@ class TripOrderSettlementServiceTest {
         assertThat(order(order.getOrderNo()).getBlocksNewOrder()).isNull();
         verify(calculateClient, times(1)).useCoupon(any());
         verify(calculateClient, never()).releaseCoupon(any());
+    }
+
+    @Test
+    void manualPaymentUsesFrozenAmountAndRegistersActiveAttemptIdempotently() {
+        orderMapper.insert(finishedOrder());
+        TripOrderSettlement bill = calculatingSettlement()
+                .setFinalAmount(new BigDecimal("30.00"))
+                .setPayableAmount(new BigDecimal("25.00"))
+                .setCouponDiscountAmount(new BigDecimal("5.00"))
+                .setSettlementStatus("PAYMENT_REQUIRED");
+        settlementMapper.insert(bill);
+        PaymentAttemptResult paying = payment("PAYING", "PAY-MANUAL-1");
+        paying.setAmount(new BigDecimal("25.00"));
+        paying.setChannel("WECHAT");
+        paying.setCheckoutUrl("/mock-cashier/PAY-MANUAL-1?token=signed");
+        org.mockito.Mockito.doReturn(paying).when(walletClient).createPaymentAttempt(any());
+        when(walletClient.getPaymentAttempt("PAY-MANUAL-1")).thenReturn(paying);
+
+        PaymentAttemptResult first = service.createManualPayment(bill.getOrderNo(), 10001L,
+                "manual-key", new ManualPaymentCommand("wechat"));
+        PaymentAttemptResult replay = service.createManualPayment(bill.getOrderNo(), 10001L,
+                "manual-key", new ManualPaymentCommand("wechat"));
+
+        assertThat(first.getCheckoutUrl()).contains("mock-cashier");
+        assertThat(replay.getPaymentNo()).isEqualTo("PAY-MANUAL-1");
+        assertThat(settlement(bill.getOrderNo()).getActivePaymentNo()).isEqualTo("PAY-MANUAL-1");
+        org.mockito.ArgumentCaptor<PaymentAttemptRequest> captor =
+                org.mockito.ArgumentCaptor.forClass(PaymentAttemptRequest.class);
+        verify(walletClient, times(2)).createPaymentAttempt(captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(request -> {
+            assertThat(request.amount()).isEqualByComparingTo("25.00");
+            assertThat(request.passengerId()).isEqualTo(10001L);
+            assertThat(request.triggerType()).isEqualTo("MANUAL");
+            assertThat(request.channel()).isEqualTo("WECHAT");
+        });
+    }
+
+    @Test
+    void manualPaymentRejectsWrongPassengerAndConfirmingStateBeforeWalletCall() {
+        orderMapper.insert(finishedOrder());
+        TripOrderSettlement bill = calculatingSettlement()
+                .setFinalAmount(new BigDecimal("30.00"))
+                .setPayableAmount(new BigDecimal("30.00"))
+                .setSettlementStatus("PAYMENT_REQUIRED");
+        settlementMapper.insert(bill);
+
+        assertThatThrownBy(() -> service.createManualPayment(bill.getOrderNo(), 99999L,
+                "manual-key", new ManualPaymentCommand("ALIPAY")))
+                .isInstanceOf(SecurityException.class);
+        bill.setSettlementStatus("CALCULATING");
+        settlementMapper.updateById(bill);
+        assertThatThrownBy(() -> service.createManualPayment(bill.getOrderNo(), 10001L,
+                "manual-key-2", new ManualPaymentCommand("ALIPAY")))
+                .hasMessageContaining("不允许主动支付");
+        verify(walletClient, never()).createPaymentAttempt(any());
+    }
+
+    @Test
+    void manualPaymentSameKeyReplaysOriginalAttemptAcrossConfirmingState() {
+        orderMapper.insert(finishedOrder());
+        TripOrderSettlement bill = calculatingSettlement()
+                .setFinalAmount(new BigDecimal("30.00"))
+                .setPayableAmount(new BigDecimal("30.00"))
+                .setSettlementStatus("PAY_CONFIRMING")
+                .setActivePaymentNo("PAY-MANUAL-CONFIRMING");
+        settlementMapper.insert(bill);
+        PaymentAttemptResult confirming = payment("CONFIRMING", "PAY-MANUAL-CONFIRMING");
+        org.mockito.Mockito.doReturn(confirming).when(walletClient).createPaymentAttempt(any());
+        when(walletClient.getPaymentAttempt("PAY-MANUAL-CONFIRMING")).thenReturn(confirming);
+
+        PaymentAttemptResult replay = service.createManualPayment(bill.getOrderNo(), 10001L,
+                "same-manual-key", new ManualPaymentCommand("ALIPAY"));
+
+        assertThat(replay.getPaymentNo()).isEqualTo("PAY-MANUAL-CONFIRMING");
+        assertThat(replay.getStatus()).isEqualTo("CONFIRMING");
+        assertThat(settlement(bill.getOrderNo()).getSettlementStatus()).isEqualTo("PAY_CONFIRMING");
+    }
+
+    @Test
+    void expiredManualAttemptNotificationReturnsOrderToPaymentRequiredAndAllowsNewAttempt() {
+        orderMapper.insert(finishedOrder());
+        TripOrderSettlement bill = calculatingSettlement()
+                .setFinalAmount(new BigDecimal("30.00"))
+                .setPayableAmount(new BigDecimal("30.00"))
+                .setSettlementStatus("PAY_CONFIRMING")
+                .setActivePaymentNo("PAY-EXPIRED");
+        settlementMapper.insert(bill);
+        PaymentAttemptResult expired = payment("CANCELLED", "PAY-EXPIRED");
+        when(walletClient.getPaymentAttempt("PAY-EXPIRED")).thenReturn(expired);
+
+        assertThat(service.handlePaymentResult(notification(expired))).isEqualTo("PAYMENT_REQUIRED");
+        TripOrderSettlement retryable = settlement(bill.getOrderNo());
+        assertThat(retryable.getSettlementStatus()).isEqualTo("PAYMENT_REQUIRED");
+        assertThat(retryable.getActivePaymentNo()).isNull();
+
+        PaymentAttemptResult replacement = payment("PAYING", "PAY-REPLACEMENT");
+        replacement.setChannel("WECHAT");
+        org.mockito.Mockito.doReturn(replacement).when(walletClient).createPaymentAttempt(any());
+
+        PaymentAttemptResult created = service.createManualPayment(bill.getOrderNo(), 10001L,
+                "new-key-after-expiry", new ManualPaymentCommand("WECHAT"));
+
+        assertThat(created.getPaymentNo()).isEqualTo("PAY-REPLACEMENT");
+        assertThat(settlement(bill.getOrderNo()).getActivePaymentNo()).isEqualTo("PAY-REPLACEMENT");
+    }
+
+    @Test
+    void newPaymentRequestReconcilesExpiredActiveAttemptWithoutOpeningOldCashier() {
+        orderMapper.insert(finishedOrder());
+        TripOrderSettlement bill = calculatingSettlement()
+                .setFinalAmount(new BigDecimal("30.00"))
+                .setPayableAmount(new BigDecimal("30.00"))
+                .setSettlementStatus("PAYMENT_REQUIRED")
+                .setActivePaymentNo("PAY-EXPIRED-DIRECT");
+        settlementMapper.insert(bill);
+        PaymentAttemptResult expired = payment("CANCELLED", "PAY-EXPIRED-DIRECT");
+        when(walletClient.getPaymentAttempt("PAY-EXPIRED-DIRECT")).thenReturn(expired);
+        PaymentAttemptResult replacement = payment("PAYING", "PAY-DIRECT-REPLACEMENT");
+        replacement.setChannel("WECHAT");
+        org.mockito.Mockito.doReturn(replacement).when(walletClient).createPaymentAttempt(any());
+
+        PaymentAttemptResult created = service.createManualPayment(bill.getOrderNo(), 10001L,
+                "new-direct-key", new ManualPaymentCommand("WECHAT"));
+
+        assertThat(created.getPaymentNo()).isEqualTo("PAY-DIRECT-REPLACEMENT");
+        assertThat(settlement(bill.getOrderNo()).getActivePaymentNo())
+                .isEqualTo("PAY-DIRECT-REPLACEMENT");
     }
 
     private void runConcurrentSettlement(String orderNo, CouponLockResult result) throws Exception {
