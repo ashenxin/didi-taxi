@@ -186,9 +186,10 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 
 ### 完单结算 MVP
 
-- `docs/superpowers/specs/2026-07-17-trip-order-settlement-design.md`
-- `docs/superpowers/plans/2026-07-17-trip-order-settlement.md`
-- `docs/api/trip-order-settlement-api.md`
-- `docs/testing/trip-order-settlement-mock-runbook.md`
+- `docs/superpowers/specs/2026-07-17-完单结算方案设计.md`
+- `docs/superpowers/plans/2026-07-17-完单结算实施计划.md`
+- `docs/api/完单结算接口说明.md`
+- `docs/testing/完单结算本地模拟联调手册.md`
+- `乘客司机端_完单结算方案讨论.md`（历史讨论与决策追溯）
 
-本期仅提供本地 mock 路线、计价时长和支付宝/微信支付闭环，不接外部地图或真实支付渠道，也不在支付失败后后台自动重扣。司机/车队固定金额与比例分成保留为后续独立专项。
+本期已实现本地 mock 距离、预计时长和实际计费时长的结算闭环，并冻结计价规则；费用减优惠后支付。已提供结算查询和只接受 `channel`（`ALIPAY`/`WECHAT`）的主动支付入口；支付失败不后台定时自动重扣，未结清订单禁止新下单。真实支付宝/微信金融渠道、退款/对账以及司机金额展示、车队/运营公司固定金额或比例分成保留为后续专项。

@@ -24,7 +24,7 @@
 | `admin-api` | 8099 | 后台管理 BFF；登录、菜单、订单管理、运力管理、计价管理、换队审核。 |
 | `passenger-api` | 8100 | 乘客端 BFF；登录、订单、设置/注销、钱包/券包、福利签到与乘客 WebSocket。 |
 | `driver-api` | 8101 | 司机端 BFF；登录注册、上线听单、待接单、接/拒/取消/到达/开始/完成、司机 WebSocket。 |
-| `order` | 8093 | 订单服务；订单主表、状态机、事件流水、超时取消、offer 超时、接单互斥。 |
+| `order` | 8093 | 订单服务；订单主表、状态机、事件流水、超时取消、offer 超时、接单互斥、完单结算编排与结算快照。 |
 | `capacity` | 8090 | 运力/调度服务；司机、公司、车辆、Redis GEO 司机池、迟滞匹配、换队申请。 |
 | `calculate` | 8091 | 计价服务；预估价、计价规则、优惠券模板/用户券/用券流水、福利签到与积分。 |
 | `wallet` | 8095 | 钱包服务；乘客支付宝/微信免密协议、默认免密渠道、钱包支付单、mock 自动扣款。 |
@@ -80,7 +80,8 @@
 - 免密支付协议和支付单在 `wallet` 库：`wallet_auto_pay_agreement`、`wallet_payment_order`。
 - 优惠券在 `calculate` 库：`coupon_template`、`user_coupon`、`coupon_use_record`；钱包页面只是展示用户资产。
 - 订单支付与用券后的金额快照在 `order` 库：`trip_order_settlement`，避免继续膨胀 `trip_order`。
-- 当前钱包已接通支付宝/微信免密协议、用户券列表/领券，以及支付、锁券/核销/释放、结算快照的内部服务能力；**司机完单后自动编排锁券、扣款、核销尚未贯通**。银行卡、借钱、车险只保留前端入口。
+- 完单结算 MVP 已贯通：司机完单后异步编排稳定本地 mock 距离/预计时长/实际时长、冻结计价规则、最优券锁定、mock 免密/主动支付、核销与结算快照。费用先减优惠后支付；合法优惠后的零元单直接结清，非法金额不支付。
+- 已提供 `GET /app/api/v1/orders/{orderNo}/settlement` 和 `POST /app/api/v1/orders/{orderNo}/payments`；主动支付请求体只接受 `channel`（`ALIPAY`/`WECHAT`），支付失败不做后台定时自动重试，未结清订单禁止新下单。真实支付宝/微信金融渠道、退款和对账，以及司机金额展示、车队/运营公司固定金额或比例分成仍未实现。银行卡、借钱、车险只保留前端入口。
 - 车队营销优惠券已拆分正式 PRD/TECH/API/SQL，产品与开发口径以 `二期功能/车队营销优惠券_*.md` 为准；讨论稿仅用于追溯决策来源。已确认 `fare_rule` 不新增字段，优惠券按 `company_id + city_code + product_code` 与计价规则并行匹配。
 - 优惠券影响真实金额，后续真实扣款、结算、退款、对账前必须复核收入分配口径；当前已定的讨论口径是平台服务费按“乘客优惠后实付车费”的 5% 计算。
 
@@ -117,6 +118,8 @@
 | `POST` | `/app/api/v1/orders/create` | 历史兼容或后续两段式/Outbox 演进入口，不作为当前 H5 推荐入口 |
 | `GET` | `/app/api/v1/orders/{orderNo}` | 订单详情 |
 | `POST` | `/app/api/v1/orders/{orderNo}/cancel` | 乘客取消 |
+| `GET` | `/app/api/v1/orders/{orderNo}/settlement` | 查询权威结算状态与账单；未结清时可据此引导处理 |
+| `POST` | `/app/api/v1/orders/{orderNo}/payments` | 主动支付；请求体仅 `channel`，需携带新的 `Idempotency-Key` |
 | `GET` | `/app/api/v1/wallet/summary` | 钱包首页摘要 |
 | `GET` | `/app/api/v1/wallet/auto-pay/agreements` | 查询免密协议列表 |
 | `POST` | `/app/api/v1/wallet/auto-pay/agreements/sign` | 发起支付宝/微信免密签约 |
@@ -219,6 +222,7 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 - 涉及司机池/调度时，记住 Redis 是索引；最终合法性仍回到 order/capacity DB 状态。
 - 涉及钱包、优惠券、结算时，按服务边界落库：支付授权/支付单在 `wallet`，优惠券规则和用券流水在 `calculate`，订单金额快照在 `order`。
 - 涉及金额字段、优惠券、平台服务费、车队/司机收入时，必须先查 PRD/TECH 的金额口径；没有定版口径不要直接上线真实支付/结算。
+- Git 提交信息统一使用中文，必要的代码标识、模块名和通用缩写可保留英文。
 - 文档名大量使用中文，搜索时优先用 `rg`，不要只依赖 IDE 侧边栏。
 
 ## 重要文档索引
@@ -311,6 +315,14 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 - `二期功能/乘客端_福利签到_{PRD,TECH,API,SQL,TEST}.md`
 - `二期功能/司机端_下周开发_TODO.md`
 
+### 完单结算 MVP
+
+- `docs/superpowers/specs/2026-07-17-完单结算方案设计.md`
+- `docs/superpowers/plans/2026-07-17-完单结算实施计划.md`
+- `docs/api/完单结算接口说明.md`
+- `docs/testing/完单结算本地模拟联调手册.md`
+- `乘客司机端_完单结算方案讨论.md`（历史讨论与决策追溯）
+
 ## 当前已知差距摘录
 
 以 `TODO与差距总览.md` 为准，当前需要注意的后续项：
@@ -320,7 +332,7 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 - 接驾 ETA 仍需实时坐标和 matrix 能力补齐；当前阶段暂不继续接入高德地图服务，先保留为后续体验项。
 - 司机心跳续 GEO 与司机级 Presence 防僵尸策略已落地；XXL `capacityDriverPresenceCleanup` 仍需在运行环境配置启用。
 - 司机登出后 `ACCEPTED`（司机已接单）到达前自动释单口径已明确并落地：释放改派回 `CREATED`（待派单/重新派单），不是乘客侧 `CANCELLED`（已取消）终态。
-- 我的钱包已新增 `wallet` 微服务；当前支付渠道为 mock，且司机完单后的结算/锁券/扣款/核销自动编排尚未贯通；接真实支付宝/微信前还需补第三方签约、回调验签、退款和补偿对账。
-- 车队营销优惠券后台、目标表结构、领券、锁券/核销/释放与结算快照已经落地；接真实支付前仍需完成退款、对账、回调幂等与财务评审。
+- 完单结算 MVP 已落地为本地 mock 闭环；支付渠道仍是 mock。接真实支付宝/微信前还需完成第三方签约、回调验签、退款、对账和财务评审；支付失败不由后台定时自动重试。
+- 车队营销优惠券后台、目标表结构、领券、锁券/核销与结算快照已经落地；司机金额展示和车队/运营公司固定金额或比例分成仍需独立设计、实现和财务评审。
 - 福利签到积分已落地；Redis/MySQL 异常补偿任务仍待建设。
 - 当前重点见 `TODO与差距总览.md` §2：司机端近期功能、后台派单诊断聚合、DLQ、写接口幂等扩展与真实支付闭环。
