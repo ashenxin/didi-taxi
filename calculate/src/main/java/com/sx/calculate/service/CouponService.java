@@ -389,6 +389,12 @@ public class CouponService {
         UserCoupon coupon = request.getCouponId() == null
                 ? bestCoupon(request)
                 : userCouponMapper.selectById(request.getCouponId());
+        if (coupon == null && request.getCouponId() == null) {
+            CouponLockResult noCoupon = new CouponLockResult();
+            noCoupon.setDiscountAmount(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
+            noCoupon.setPayableAmount(scale(request.getFinalAmount()));
+            return noCoupon;
+        }
         if (coupon == null || !canUse(coupon, request)) {
             throw new IllegalArgumentException("无可用优惠券");
         }
@@ -416,7 +422,9 @@ public class CouponService {
         result.setCouponType(coupon.getCouponType());
         result.setCouponRuleSnapshot(coupon.getRuleSnapshot());
         result.setDiscountAmount(discountAmount);
-        result.setPayableAmount(scale(request.getFinalAmount().subtract(discountAmount).max(BigDecimal.ZERO)));
+        BigDecimal finalAmount = scale(request.getFinalAmount());
+        validateDiscount(finalAmount, discountAmount);
+        result.setPayableAmount(finalAmount.subtract(discountAmount).setScale(2, RoundingMode.HALF_UP));
         return result;
     }
 
@@ -471,7 +479,8 @@ public class CouponService {
             BigDecimal discountAmount = request.getDiscountAmount() == null
                     ? defaultAmount(coupon.getDiscountAmount())
                     : request.getDiscountAmount();
-            record(coupon, request.getOrderNo(), "RELEASE", LOCKED, targetStatus, discountAmount, "支付失败释放");
+            record(coupon, request.getOrderNo(), "RELEASE", LOCKED, targetStatus, discountAmount,
+                    "结算金额固化失败补偿");
         }
     }
 
@@ -522,6 +531,9 @@ public class CouponService {
         BigDecimal discount;
         if (TYPE_PERCENT_OFF.equals(coupon.getCouponType())) {
             BigDecimal rate = coupon.getDiscountRate() == null ? BigDecimal.ONE : coupon.getDiscountRate();
+            if (rate.compareTo(BigDecimal.ZERO) < 0 || rate.compareTo(BigDecimal.ONE) > 0) {
+                throw new IllegalArgumentException("优惠折扣率必须在0到1之间");
+            }
             discount = amount.multiply(BigDecimal.ONE.subtract(rate));
             if (coupon.getMaxDiscountAmount() != null && coupon.getMaxDiscountAmount().compareTo(BigDecimal.ZERO) > 0) {
                 discount = discount.min(coupon.getMaxDiscountAmount());
@@ -531,7 +543,18 @@ public class CouponService {
         } else {
             discount = defaultAmount(coupon.getDiscountAmount());
         }
-        return scale(discount.max(BigDecimal.ZERO).min(amount));
+        BigDecimal roundedDiscount = scale(discount);
+        validateDiscount(scale(amount), roundedDiscount);
+        return roundedDiscount;
+    }
+
+    private void validateDiscount(BigDecimal finalAmount, BigDecimal discountAmount) {
+        if (discountAmount.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalArgumentException("优惠金额不能为负数");
+        }
+        if (discountAmount.compareTo(finalAmount) > 0) {
+            throw new IllegalArgumentException("优惠金额不能大于最终车费");
+        }
     }
 
     private Comparator<CouponVO> availableComparator() {

@@ -9,6 +9,8 @@ import com.sx.calculate.dao.FareRuleEntityMapper;
 import com.sx.calculate.model.FareRule;
 import com.sx.calculate.model.dto.EstimateFareBody;
 import com.sx.calculate.model.dto.EstimateFareResult;
+import com.sx.calculate.model.dto.FareRuleSnapshot;
+import com.sx.calculate.service.FareCalculator;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,10 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 /**
  * 计费服务：费用预估（按 fare_rule 与里程/时长计算）。
@@ -31,14 +30,15 @@ import java.util.Map;
 @Slf4j
 public class EstimateController {
 
-    private static final String FARE_CALCULATION_VERSION = "fare-v1";
-
     private final FareRuleEntityMapper fareRuleEntityMapper;
     private final ObjectMapper objectMapper;
+    private final FareCalculator fareCalculator;
 
-    public EstimateController(FareRuleEntityMapper fareRuleEntityMapper, ObjectMapper objectMapper) {
+    public EstimateController(FareRuleEntityMapper fareRuleEntityMapper, ObjectMapper objectMapper,
+                              FareCalculator fareCalculator) {
         this.fareRuleEntityMapper = fareRuleEntityMapper;
         this.objectMapper = objectMapper;
+        this.fareCalculator = fareCalculator;
     }
 
     /**
@@ -73,29 +73,21 @@ public class EstimateController {
             return ResultUtil.error(404, "未找到可用计价规则");
         }
 
-        BigDecimal amount = estimateAmount(rule, body.getDistanceMeters(), body.getDurationSeconds());
+        FareRuleSnapshot snapshot = FareRuleSnapshot.from(rule);
+        BigDecimal amount = fareCalculator.calculate(snapshot, body.getDistanceMeters(), body.getDurationSeconds());
         EstimateFareResult resp = new EstimateFareResult();
         resp.setRuleId(rule.getId());
         resp.setEstimatedAmount(amount);
         resp.setDistanceMeters(body.getDistanceMeters());
         resp.setDurationSeconds(body.getDurationSeconds());
-        resp.setFareRuleSnapshot(fareRuleSnapshot(rule));
-        resp.setFareCalculationVersion(FARE_CALCULATION_VERSION);
+        resp.setFareRuleSnapshot(fareRuleSnapshot(snapshot));
+        resp.setFareCalculationVersion(FareCalculator.VERSION);
         log.info("估价：ruleId={} amount={} distanceM={} durationS={}",
                 rule.getId(), amount, body.getDistanceMeters(), body.getDurationSeconds());
         return ResultUtil.success(resp);
     }
 
-    private String fareRuleSnapshot(FareRule rule) {
-        Map<String, Object> snapshot = new LinkedHashMap<>();
-        snapshot.put("ruleId", rule.getId());
-        snapshot.put("baseFare", rule.getBaseFare());
-        snapshot.put("includedDistanceKm", rule.getIncludedDistanceKm());
-        snapshot.put("includedDurationMin", rule.getIncludedDurationMin());
-        snapshot.put("perKmPrice", rule.getPerKmPrice());
-        snapshot.put("perMinutePrice", rule.getPerMinutePrice());
-        snapshot.put("minimumFare", rule.getMinimumFare());
-        snapshot.put("maximumFare", rule.getMaximumFare());
+    private String fareRuleSnapshot(FareRuleSnapshot snapshot) {
         try {
             return objectMapper.writeValueAsString(snapshot);
         } catch (JsonProcessingException e) {
@@ -103,33 +95,4 @@ public class EstimateController {
         }
     }
 
-    private static BigDecimal estimateAmount(FareRule rule, long distanceMeters, long durationSeconds) {
-        BigDecimal distanceKm = BigDecimal.valueOf(distanceMeters)
-                .divide(BigDecimal.valueOf(1000), 3, RoundingMode.HALF_UP);
-        BigDecimal durationMin = BigDecimal.valueOf(durationSeconds)
-                .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
-
-        BigDecimal excessKm = distanceKm.subtract(rule.getIncludedDistanceKm());
-        if (excessKm.compareTo(BigDecimal.ZERO) < 0) {
-            excessKm = BigDecimal.ZERO;
-        }
-
-        BigDecimal includedMin = BigDecimal.valueOf(rule.getIncludedDurationMin() == null ? 0 : rule.getIncludedDurationMin());
-        BigDecimal excessMin = durationMin.subtract(includedMin);
-        if (excessMin.compareTo(BigDecimal.ZERO) < 0) {
-            excessMin = BigDecimal.ZERO;
-        }
-
-        BigDecimal amount = rule.getBaseFare()
-                .add(excessKm.multiply(rule.getPerKmPrice()))
-                .add(excessMin.multiply(rule.getPerMinutePrice()));
-
-        if (rule.getMinimumFare() != null && amount.compareTo(rule.getMinimumFare()) < 0) {
-            amount = rule.getMinimumFare();
-        }
-        if (rule.getMaximumFare() != null && amount.compareTo(rule.getMaximumFare()) > 0) {
-            amount = rule.getMaximumFare();
-        }
-        return amount.setScale(2, RoundingMode.HALF_UP);
-    }
 }

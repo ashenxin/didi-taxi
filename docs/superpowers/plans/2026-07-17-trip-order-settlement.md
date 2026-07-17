@@ -182,7 +182,7 @@ git commit -m "feat: persist frozen settlement inputs on trip orders"
 - Modify: `calculate/src/main/java/com/sx/calculate/service/CouponService.java`
 - Test: `calculate/src/test/java/com/sx/calculate/service/CouponServiceTest.java`
 
-- [ ] **Step 1: 写计价边界参数化测试**
+- [x] **Step 1: 写计价边界参数化测试**
 
 覆盖正常计算、超过两位小数 `HALF_UP`、恰好 `10000.00`、零/负数、`10000.01`、快照字段缺失。异常统一抛出带码 `AMOUNT_OUT_OF_RANGE` 的业务异常。
 
@@ -192,13 +192,13 @@ assertThatThrownBy(() -> validator.validateFinalAmount(new BigDecimal("10000.01"
     .hasMessageContaining("AMOUNT_OUT_OF_RANGE");
 ```
 
-- [ ] **Step 2: 运行并确认测试失败**
+- [x] **Step 2: 运行并确认测试失败**
 
 Run: `mvn -pl calculate -Dtest=FareCalculatorTest,CouponServiceTest test`
 
 Expected: FAIL，纯计价器和严格关系校验尚不存在。
 
-- [ ] **Step 3: 实现纯计价器及内部最终计价接口**
+- [x] **Step 3: 实现纯计价器及内部最终计价接口**
 
 新增 `POST /internal/calculate/final-fare`。请求只接受冻结规则快照、计价版本、冻结距离、冻结 mock 实际时长；不得按 `ruleId` 查询当前规则。
 
@@ -212,7 +212,7 @@ amountValidator.validateFinalAmount(finalAmount);
 
 `EstimateController` 也调用同一 `FareCalculator`，避免两份公式。
 
-- [ ] **Step 4: 移除优惠券静默归零并固定选券顺序**
+- [x] **Step 4: 移除优惠券静默归零并固定选券顺序**
 
 将 `CouponService.lock` 中：
 
@@ -222,7 +222,7 @@ request.getFinalAmount().subtract(discountAmount).max(BigDecimal.ZERO)
 
 替换为先舍入、再校验 `discount <= final`、再直接相减。`bestCoupon` 明确按优惠金额倒序、到期时间升序、用户券 ID 升序；无可用券返回零优惠账单而不是报错（只有指定 couponId 不可用才报错）。更新 `release` 的记录原因为“结算金额固化失败补偿”，支付失败不调用 `release`。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 Run: `mvn -pl calculate test`
 

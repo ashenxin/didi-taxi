@@ -7,6 +7,7 @@ import com.sx.calculate.dao.FareRuleEntityMapper;
 import com.sx.calculate.model.FareRule;
 import com.sx.calculate.model.dto.EstimateFareBody;
 import com.sx.calculate.model.dto.EstimateFareResult;
+import com.sx.calculate.service.FareCalculator;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -25,7 +26,8 @@ class EstimateControllerTest {
     void estimateReturnsCompleteFareRuleSnapshotAndVersion() throws Exception {
         FareRuleEntityMapper mapper = mock(FareRuleEntityMapper.class);
         when(mapper.selectOne(any(Wrapper.class))).thenReturn(rule());
-        EstimateController controller = new EstimateController(mapper, objectMapper);
+        EstimateController controller = new EstimateController(mapper, objectMapper,
+                new FareCalculator(objectMapper, new BigDecimal("10000.00")));
 
         EstimateFareResult result = controller.estimate(request()).getData();
 
