@@ -8,7 +8,7 @@ import java.math.BigDecimal;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class WalletServiceTest {
-    private final WalletService service = new WalletService(null, null, true);
+    private final WalletService service = new WalletService(null, true, null);
 
     @Test
     void rejectsNonPositiveAutoPayAmount() {

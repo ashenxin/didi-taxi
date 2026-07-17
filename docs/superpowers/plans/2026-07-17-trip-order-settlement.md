@@ -395,17 +395,17 @@ git commit -m "feat: finalize fare coupon and zero-payment settlements"
 - Modify: `wallet/src/main/java/com/sx/wallet/controller/WalletController.java`
 - Test: `wallet/src/test/java/com/sx/wallet/service/PaymentAttemptServiceTest.java`
 
-- [ ] **Step 1: 写支付尝试状态和幂等失败测试**
+- [x] **Step 1: 写支付尝试状态和幂等失败测试**
 
 覆盖：AUTO_PAY 使用默认协议渠道；MANUAL 必须显式 ALIPAY/WECHAT 且无需协议；相同幂等键返回原记录；一单 attemptNo 递增；失败后可切换渠道；`PROCESSING/CONFIRMING` 禁止新尝试；已有 SUCCESS 不再调用渠道。
 
-- [ ] **Step 2: 运行并确认旧钱包失败**
+- [x] **Step 2: 运行并确认旧钱包失败**
 
 Run: `mvn -pl wallet -Dtest=PaymentAttemptServiceTest test`
 
 Expected: FAIL，旧 `WalletService.autoPay` 永远直接写 SUCCESS。
 
-- [ ] **Step 3: 修改 schema 与实体**
+- [x] **Step 3: 修改 schema 与实体**
 
 新增：
 
@@ -422,7 +422,7 @@ UNIQUE KEY uk_wallet_channel_request (channel_request_no)
 
 状态统一为 `PAYING`、`CONFIRMING`、`SUCCESS`、`FAILED`、`CANCELLED`、`DUPLICATE_SUCCESS`。使用订单行/数据库唯一约束与重试生成 attemptNo，不能用 `count + 1` 无保护插入。
 
-- [ ] **Step 4: 实现统一支付创建入口**
+- [x] **Step 4: 实现统一支付创建入口**
 
 ```http
 POST /internal/wallet/payment-attempts
@@ -430,7 +430,7 @@ POST /internal/wallet/payment-attempts
 
 请求包含服务间可信字段 `orderNo/passengerId/amount/triggerType/channel/idempotencyKey`。响应包含 `paymentNo/status/channel/amount/checkoutUrl`。AUTO_PAY mock 可由测试配置立即返回 SUCCESS/FAILED/CONFIRMING；MANUAL 创建 PAYING 并返回短期 token 化收银台 URL。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 Run: `mvn -pl wallet test`
 

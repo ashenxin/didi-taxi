@@ -2,13 +2,12 @@ package com.sx.wallet.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.wallet.dao.WalletAutoPayAgreementMapper;
-import com.sx.wallet.dao.WalletPaymentOrderMapper;
 import com.sx.wallet.model.WalletAutoPayAgreement;
-import com.sx.wallet.model.WalletPaymentOrder;
 import com.sx.wallet.model.dto.AutoPayAgreementVO;
 import com.sx.wallet.model.dto.AutoPayRequest;
 import com.sx.wallet.model.dto.AutoPaySignRequest;
 import com.sx.wallet.model.dto.AutoPaySignResult;
+import com.sx.wallet.model.dto.CreatePaymentAttemptRequest;
 import com.sx.wallet.model.dto.PaymentResult;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -24,18 +23,16 @@ public class WalletService {
     private static final String STATUS_SIGNING = "SIGNING";
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_CLOSED = "CLOSED";
-    private static final String PAY_SUCCESS = "SUCCESS";
-
     private final WalletAutoPayAgreementMapper agreementMapper;
-    private final WalletPaymentOrderMapper paymentOrderMapper;
     private final boolean mockEnabled;
+    private final PaymentAttemptService paymentAttemptService;
 
     public WalletService(WalletAutoPayAgreementMapper agreementMapper,
-                         WalletPaymentOrderMapper paymentOrderMapper,
-                         @Value("${wallet.payment.mock-enabled:true}") boolean mockEnabled) {
+                         @Value("${wallet.payment.mock-enabled:true}") boolean mockEnabled,
+                         PaymentAttemptService paymentAttemptService) {
         this.agreementMapper = agreementMapper;
-        this.paymentOrderMapper = paymentOrderMapper;
         this.mockEnabled = mockEnabled;
+        this.paymentAttemptService = paymentAttemptService;
     }
 
     public List<AutoPayAgreementVO> listAgreements(Long passengerId) {
@@ -146,48 +143,17 @@ public class WalletService {
         return toVO(agreement);
     }
 
-    @Transactional
     public PaymentResult autoPay(AutoPayRequest request) {
         if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("支付金额必须大于0");
         }
-        WalletPaymentOrder existing = paymentOrderMapper.selectOne(Wrappers.<WalletPaymentOrder>lambdaQuery()
-                .eq(WalletPaymentOrder::getIdempotencyKey, request.getIdempotencyKey())
-                .last("LIMIT 1"));
-        if (existing != null) {
-            return toPaymentResult(existing);
-        }
-
-        WalletAutoPayAgreement agreement = agreementMapper.selectOne(Wrappers.<WalletAutoPayAgreement>lambdaQuery()
-                .eq(WalletAutoPayAgreement::getPassengerId, request.getPassengerId())
-                .eq(WalletAutoPayAgreement::getAgreementStatus, STATUS_ACTIVE)
-                .eq(WalletAutoPayAgreement::getIsDefault, 1)
-                .eq(WalletAutoPayAgreement::getIsDeleted, 0)
-                .last("LIMIT 1"));
-        if (agreement == null) {
-            throw new IllegalArgumentException("未开通默认免密支付");
-        }
-
-        LocalDateTime now = LocalDateTime.now();
-        WalletPaymentOrder paymentOrder = new WalletPaymentOrder()
-                .setPaymentNo("PAY" + System.currentTimeMillis() + request.getPassengerId())
-                .setOrderNo(request.getOrderNo())
-                .setPassengerId(request.getPassengerId())
-                .setChannel(agreement.getChannel())
-                .setAgreementId(agreement.getId())
-                .setAmount(request.getAmount())
-                .setStatus(PAY_SUCCESS)
-                .setChannelTradeNo("MOCK_TRADE_" + System.currentTimeMillis())
-                .setIdempotencyKey(request.getIdempotencyKey())
-                .setPaidAt(now)
-                .setNotifyPayload("{}")
-                .setCreatedAt(now)
-                .setUpdatedAt(now);
-        paymentOrderMapper.insert(paymentOrder);
-        agreement.setLastUsedAt(now);
-        agreement.setUpdatedAt(now);
-        agreementMapper.updateById(agreement);
-        return toPaymentResult(paymentOrder);
+        CreatePaymentAttemptRequest attempt = new CreatePaymentAttemptRequest();
+        attempt.setOrderNo(request.getOrderNo());
+        attempt.setPassengerId(request.getPassengerId());
+        attempt.setAmount(request.getAmount());
+        attempt.setTriggerType("AUTO_PAY");
+        attempt.setIdempotencyKey(request.getIdempotencyKey());
+        return paymentAttemptService.create(attempt);
     }
 
     private WalletAutoPayAgreement getOwnedAgreement(Long passengerId, Long agreementId) {
@@ -246,14 +212,6 @@ public class WalletService {
         vo.setSignedAt(agreement.getSignedAt());
         vo.setLastUsedAt(agreement.getLastUsedAt());
         return vo;
-    }
-
-    private PaymentResult toPaymentResult(WalletPaymentOrder order) {
-        PaymentResult result = new PaymentResult();
-        result.setPaymentNo(order.getPaymentNo());
-        result.setChannel(order.getChannel());
-        result.setStatus(order.getStatus());
-        return result;
     }
 
     private String channelName(String channel) {

@@ -20,12 +20,18 @@ public class WalletPaymentOrder {
     private String paymentNo;
     private String orderNo;
     private Long passengerId;
+    private String triggerType;
+    private Integer attemptNo;
     private String channel;
     private Long agreementId;
     private BigDecimal amount;
     private String status;
+    private String channelRequestNo;
     private String channelTradeNo;
     private String idempotencyKey;
+    private String checkoutTokenHash;
+    private LocalDateTime checkoutTokenExpiresAt;
+    private LocalDateTime resolvedAt;
     private LocalDateTime paidAt;
     private String failedReason;
     private String notifyPayload;

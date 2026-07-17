@@ -6,7 +6,9 @@ import com.sx.wallet.model.dto.AutoPayAgreementVO;
 import com.sx.wallet.model.dto.AutoPayRequest;
 import com.sx.wallet.model.dto.AutoPaySignRequest;
 import com.sx.wallet.model.dto.AutoPaySignResult;
+import com.sx.wallet.model.dto.CreatePaymentAttemptRequest;
 import com.sx.wallet.model.dto.PaymentResult;
+import com.sx.wallet.service.PaymentAttemptService;
 import com.sx.wallet.service.WalletService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,9 +23,11 @@ import java.util.List;
 @RestController
 public class WalletController {
     private final WalletService walletService;
+    private final PaymentAttemptService paymentAttemptService;
 
-    public WalletController(WalletService walletService) {
+    public WalletController(WalletService walletService, PaymentAttemptService paymentAttemptService) {
         this.walletService = walletService;
+        this.paymentAttemptService = paymentAttemptService;
     }
 
     @GetMapping("/api/v1/wallet/auto-pay/agreements")
@@ -84,6 +88,16 @@ public class WalletController {
     public ResponseVo<PaymentResult> autoPay(@Valid @RequestBody AutoPayRequest request) {
         try {
             return ResultUtil.success(walletService.autoPay(request));
+        } catch (IllegalArgumentException ex) {
+            return ResultUtil.requestError(ex.getMessage());
+        }
+    }
+
+    @PostMapping("/internal/wallet/payment-attempts")
+    public ResponseVo<PaymentResult> createPaymentAttempt(
+            @Valid @RequestBody CreatePaymentAttemptRequest request) {
+        try {
+            return ResultUtil.success(paymentAttemptService.create(request));
         } catch (IllegalArgumentException ex) {
             return ResultUtil.requestError(ex.getMessage());
         }
