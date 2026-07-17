@@ -28,7 +28,7 @@ public class WalletService {
     private final PaymentAttemptService paymentAttemptService;
 
     public WalletService(WalletAutoPayAgreementMapper agreementMapper,
-                         @Value("${wallet.payment.mock-enabled:true}") boolean mockEnabled,
+                         @Value("${wallet.payment.mock.enabled:true}") boolean mockEnabled,
                          PaymentAttemptService paymentAttemptService) {
         this.agreementMapper = agreementMapper;
         this.mockEnabled = mockEnabled;

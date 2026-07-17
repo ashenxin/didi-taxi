@@ -2,6 +2,8 @@ server:
   port: 8095
 
 spring:
+  profiles:
+    default: local
   application:
     name: wallet-service
   datasource:
@@ -22,7 +24,9 @@ mybatis-plus:
 
 wallet:
   payment:
-    mock-enabled: ${WALLET_PAYMENT_MOCK_ENABLED:true}
-    mock-auto-status: ${WALLET_PAYMENT_MOCK_AUTO_STATUS:SUCCESS}
+    mock:
+      enabled: ${WALLET_PAYMENT_MOCK_ENABLED:true}
+      auto-status: ${WALLET_PAYMENT_MOCK_AUTO_STATUS:SUCCESS}
+      allowed-profiles: ${WALLET_PAYMENT_MOCK_ALLOWED_PROFILES:local,dev,test}
     checkout-minutes: ${WALLET_PAYMENT_CHECKOUT_MINUTES:10}
     checkout-token-secret: ${WALLET_PAYMENT_CHECKOUT_TOKEN_SECRET:local-dev-only-change-me}

@@ -1,6 +1,6 @@
 package com.sx.wallet.service;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.sx.wallet.config.MockPaymentProperties;
 import org.springframework.stereotype.Component;
 
 import java.util.Locale;
@@ -8,9 +8,12 @@ import java.util.Locale;
 @Component
 public class MockPaymentChannel implements PaymentChannel {
 
+    private final boolean enabled;
     private final String autoStatus;
 
-    public MockPaymentChannel(@Value("${wallet.payment.mock-auto-status:SUCCESS}") String autoStatus) {
+    public MockPaymentChannel(MockPaymentProperties properties) {
+        this.enabled = properties.isEnabled();
+        String autoStatus = properties.getAutoStatus();
         String normalized = autoStatus == null ? "SUCCESS" : autoStatus.trim().toUpperCase(Locale.ROOT);
         if (!"SUCCESS".equals(normalized) && !"FAILED".equals(normalized)
                 && !"CONFIRMING".equals(normalized)) {
@@ -21,6 +24,9 @@ public class MockPaymentChannel implements PaymentChannel {
 
     @Override
     public ChannelResult initiate(ChannelCommand command) {
+        if (!enabled) {
+            throw new IllegalStateException("mock支付未启用");
+        }
         if ("SUCCESS".equals(autoStatus)) {
             return new ChannelResult("SUCCESS", "MOCK_TRADE_" + command.channelRequestNo(), null);
         }

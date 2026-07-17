@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 
 public class PaymentResult {
     private String paymentNo;
+    private String orderNo;
     private String status;
     private String channel;
     private Integer attemptNo;
@@ -17,6 +18,9 @@ public class PaymentResult {
     public void setPaymentNo(String paymentNo) {
         this.paymentNo = paymentNo;
     }
+
+    public String getOrderNo() { return orderNo; }
+    public void setOrderNo(String orderNo) { this.orderNo = orderNo; }
 
     public String getStatus() {
         return status;

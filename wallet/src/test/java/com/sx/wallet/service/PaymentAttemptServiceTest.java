@@ -1,14 +1,18 @@
 package com.sx.wallet.service;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sx.wallet.dao.WalletAutoPayAgreementMapper;
 import com.sx.wallet.dao.WalletPaymentOrderMapper;
+import com.sx.wallet.config.MockPaymentProperties;
 import com.sx.wallet.model.WalletAutoPayAgreement;
 import com.sx.wallet.model.WalletPaymentOrder;
 import com.sx.wallet.model.dto.CreatePaymentAttemptRequest;
 import com.sx.wallet.model.dto.PaymentResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
@@ -16,6 +20,7 @@ import java.math.BigDecimal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -27,14 +32,21 @@ class PaymentAttemptServiceTest {
     private final WalletAutoPayAgreementMapper agreementMapper = mock(WalletAutoPayAgreementMapper.class);
     private final WalletPaymentOrderMapper paymentMapper = mock(WalletPaymentOrderMapper.class);
     private final PaymentChannel paymentChannel = mock(PaymentChannel.class);
+    private final MockPaymentProperties mockProperties = new MockPaymentProperties();
     private PaymentAttemptService service;
 
     @BeforeEach
     void setUp() {
         reset(agreementMapper, paymentMapper, paymentChannel);
+        mockProperties.setEnabled(true);
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), "wallet-payment-test"),
+                WalletPaymentOrder.class);
         service = new PaymentAttemptService(
-                agreementMapper, paymentMapper, paymentChannel, 10, "unit-test-checkout-secret");
+                agreementMapper, paymentMapper, paymentChannel, mockProperties,
+                10, "unit-test-checkout-secret");
         when(paymentMapper.updateById(any(WalletPaymentOrder.class))).thenReturn(1);
+        when(paymentMapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
         when(paymentChannel.initiate(any())).thenReturn(
                 new PaymentChannel.ChannelResult("SUCCESS", "MOCK-TRADE-1", null));
     }
@@ -163,6 +175,72 @@ class PaymentAttemptServiceTest {
 
         verify(paymentMapper).insert(any(WalletPaymentOrder.class));
         verify(paymentChannel, never()).initiate(any());
+    }
+
+    @Test
+    void mockResolveValidatesTokenAndEnforcesStateTransitions() {
+        when(paymentMapper.selectOne(any(Wrapper.class))).thenReturn(null, null, null, null);
+        PaymentResult created = service.create(request("MANUAL", "ALIPAY", "idem-resolve"));
+        ArgumentCaptor<WalletPaymentOrder> captor = ArgumentCaptor.forClass(WalletPaymentOrder.class);
+        verify(paymentMapper).insert(captor.capture());
+        WalletPaymentOrder stored = captor.getValue();
+        String token = created.getCheckoutUrl().substring(created.getCheckoutUrl().indexOf("token=") + 6);
+
+        reset(paymentMapper);
+        when(paymentMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
+        when(paymentMapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
+        assertThatThrownBy(() -> service.resolveMockPayment(stored.getPaymentNo(), "wrong", "SUCCESS"))
+                .hasMessageContaining("收银台不存在");
+
+        PaymentResult confirming = service.resolveMockPayment(stored.getPaymentNo(), token, "CONFIRMING");
+        assertThat(confirming.getStatus()).isEqualTo("CONFIRMING");
+        PaymentResult confirmingReplay = service.resolveMockPayment(
+                stored.getPaymentNo(), token, "CONFIRMING");
+        assertThat(confirmingReplay.getStatus()).isEqualTo("CONFIRMING");
+        assertThatThrownBy(() -> service.resolveMockPayment(stored.getPaymentNo(), token, "CANCELLED"))
+                .hasMessageContaining("CONFIRMING只能");
+        PaymentResult success = service.resolveMockPayment(stored.getPaymentNo(), token, "SUCCESS");
+        assertThat(success.getStatus()).isEqualTo("SUCCESS");
+        PaymentResult replay = service.resolveMockPayment(stored.getPaymentNo(), token, "SUCCESS");
+        assertThat(replay.getStatus()).isEqualTo("SUCCESS");
+        assertThatThrownBy(() -> service.resolveMockPayment(stored.getPaymentNo(), token, "FAILED"))
+                .hasMessageContaining("终态冲突");
+    }
+
+    @Test
+    void expiredCheckoutTokenIsRejected() {
+        WalletPaymentOrder stored = attempt(1, "PAYING", "ALIPAY")
+                .setTriggerType("MANUAL")
+                .setCheckoutTokenHash("irrelevant")
+                .setCheckoutTokenExpiresAt(java.time.LocalDateTime.now().minusSeconds(1));
+        when(paymentMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
+
+        assertThatThrownBy(() -> service.resolveMockPayment(stored.getPaymentNo(), "token", "SUCCESS"))
+                .hasMessageContaining("已过期");
+    }
+
+    @Test
+    void paymentAttemptQueryDoesNotReissuePlaintextCheckoutToken() {
+        WalletPaymentOrder stored = attempt(1, "PAYING", "ALIPAY")
+                .setTriggerType("MANUAL")
+                .setCheckoutTokenExpiresAt(java.time.LocalDateTime.now().plusMinutes(5))
+                .setCheckoutTokenHash("stored-hash-only");
+        when(paymentMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
+
+        PaymentResult result = service.getPaymentAttempt(stored.getPaymentNo());
+
+        assertThat(result.getCheckoutUrl()).isNull();
+    }
+
+    @Test
+    void disabledMockRejectsManualAttemptBeforePersistence() {
+        mockProperties.setEnabled(false);
+
+        assertThatThrownBy(() -> service.create(request("MANUAL", "ALIPAY", "idem-disabled")))
+                .hasMessageContaining("mock支付未启用");
+
+        verify(paymentMapper, never()).insert(any(WalletPaymentOrder.class));
+        verify(paymentMapper, never()).selectOne(any(Wrapper.class));
     }
 
     private static CreatePaymentAttemptRequest request(String triggerType, String channel, String idempotencyKey) {

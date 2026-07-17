@@ -456,19 +456,19 @@ git commit -m "feat: support auditable multi-attempt mock payments"
 - Create: `wallet/src/test/java/com/sx/wallet/config/MockPaymentStartupValidatorTest.java`
 - Create: `wallet/src/test/java/com/sx/wallet/controller/MockCashierControllerTest.java`
 
-- [ ] **Step 1: 写环境保护失败测试**
+- [x] **Step 1: 写环境保护失败测试**
 
 断言 `prod/staging` 或不在允许列表的 profile 开启 mock 时应用启动校验抛错；`local/dev/test` 可开启。
 
-- [ ] **Step 2: 写收银台行为测试**
+- [x] **Step 2: 写收银台行为测试**
 
 token 错误/过期返回 404 或 410；正确 token 可选择 SUCCESS、FAILED、CANCELLED、CONFIRMING；CONFIRMING 后只能解析 SUCCESS/FAILED；重复相同结果幂等；不同终态冲突返回 409。
 
-- [ ] **Step 3: 实现短期不可猜测 token**
+- [x] **Step 3: 实现短期不可猜测 token**
 
 只把 SHA-256 hash 落库，明文仅在创建响应 URL 返回。收银台 HTML 不接收或展示可编辑金额，页面从支付单只读展示订单号掩码、渠道和金额。
 
-- [ ] **Step 4: 实现原交易查询**
+- [x] **Step 4: 实现原交易查询**
 
 ```http
 GET /internal/wallet/payment-attempts/{paymentNo}
@@ -477,7 +477,7 @@ POST /internal/wallet/payment-attempts/{paymentNo}/mock-resolve
 
 CONFIRMING 查询只读原尝试，不创建第二笔。这里不添加任何扫描 FAILED/CANCELLED 并重新扣款的定时任务。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 Run: `mvn -pl wallet test`
 

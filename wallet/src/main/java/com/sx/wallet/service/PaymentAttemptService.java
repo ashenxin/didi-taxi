@@ -3,6 +3,7 @@ package com.sx.wallet.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.wallet.dao.WalletAutoPayAgreementMapper;
 import com.sx.wallet.dao.WalletPaymentOrderMapper;
+import com.sx.wallet.config.MockPaymentProperties;
 import com.sx.wallet.model.WalletAutoPayAgreement;
 import com.sx.wallet.model.WalletPaymentOrder;
 import com.sx.wallet.model.dto.CreatePaymentAttemptRequest;
@@ -10,6 +11,8 @@ import com.sx.wallet.model.dto.PaymentResult;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -34,18 +37,21 @@ public class PaymentAttemptService {
     private final WalletAutoPayAgreementMapper agreementMapper;
     private final WalletPaymentOrderMapper paymentMapper;
     private final PaymentChannel paymentChannel;
+    private final MockPaymentProperties mockPaymentProperties;
     private final int checkoutMinutes;
     private final byte[] checkoutTokenSecret;
 
     public PaymentAttemptService(WalletAutoPayAgreementMapper agreementMapper,
                                  WalletPaymentOrderMapper paymentMapper,
                                  PaymentChannel paymentChannel,
+                                 MockPaymentProperties mockPaymentProperties,
                                  @Value("${wallet.payment.checkout-minutes:10}") int checkoutMinutes,
                                  @Value("${wallet.payment.checkout-token-secret:local-dev-only-change-me}")
                                  String checkoutTokenSecret) {
         this.agreementMapper = agreementMapper;
         this.paymentMapper = paymentMapper;
         this.paymentChannel = paymentChannel;
+        this.mockPaymentProperties = mockPaymentProperties;
         this.checkoutMinutes = Math.max(1, checkoutMinutes);
         if (checkoutTokenSecret == null || checkoutTokenSecret.length() < 16) {
             throw new IllegalArgumentException("checkout-token-secret长度不能少于16位");
@@ -55,20 +61,23 @@ public class PaymentAttemptService {
 
     public PaymentResult create(CreatePaymentAttemptRequest request) {
         validateRequest(request);
+        String triggerType = normalizeTrigger(request.getTriggerType());
+        if ("MANUAL".equals(triggerType) && !mockPaymentProperties.isEnabled()) {
+            throw new IllegalArgumentException("mock支付未启用，当前没有可用的主动支付渠道");
+        }
         WalletPaymentOrder idempotent = findByIdempotencyKey(request.getIdempotencyKey());
         if (idempotent != null) {
             return idempotentResult(request, idempotent);
         }
         WalletPaymentOrder success = findByOrderAndStatus(request.getOrderNo(), "SUCCESS");
         if (success != null) {
-            return toResult(success);
+            return toResult(success, true);
         }
         WalletPaymentOrder active = findActive(request.getOrderNo());
         if (active != null) {
             throw new IllegalArgumentException("订单支付处理中，请勿重复发起");
         }
 
-        String triggerType = normalizeTrigger(request.getTriggerType());
         WalletAutoPayAgreement agreement = null;
         String channel;
         if ("AUTO_PAY".equals(triggerType)) {
@@ -91,7 +100,7 @@ public class PaymentAttemptService {
                 if ("AUTO_PAY".equals(triggerType)) {
                     executeAutoPay(attempt);
                 }
-                return toResult(attempt);
+                return toResult(attempt, true);
             } catch (DuplicateKeyException ex) {
                 WalletPaymentOrder sameRequest = findByIdempotencyKey(request.getIdempotencyKey());
                 if (sameRequest != null) {
@@ -99,7 +108,7 @@ public class PaymentAttemptService {
                 }
                 WalletPaymentOrder winningSuccess = findByOrderAndStatus(request.getOrderNo(), "SUCCESS");
                 if (winningSuccess != null) {
-                    return toResult(winningSuccess);
+                    return toResult(winningSuccess, true);
                 }
                 if (findActive(request.getOrderNo()) != null) {
                     throw new IllegalArgumentException("订单支付处理中，请勿重复发起");
@@ -110,6 +119,72 @@ public class PaymentAttemptService {
             }
         }
         throw new IllegalStateException("支付尝试创建失败");
+    }
+
+    public PaymentResult getPaymentAttempt(String paymentNo) {
+        WalletPaymentOrder attempt = findByPaymentNo(paymentNo);
+        if (attempt == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "支付尝试不存在");
+        }
+        return toResult(attempt, false);
+    }
+
+    public PaymentResult getMockCashier(String paymentNo, String token) {
+        WalletPaymentOrder attempt = findByPaymentNo(paymentNo);
+        if (attempt == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收银台不存在");
+        }
+        validateCheckoutToken(attempt, token);
+        return toResult(attempt, false);
+    }
+
+    public PaymentResult resolveMockPayment(String paymentNo, String token, String targetStatus) {
+        WalletPaymentOrder attempt = findByPaymentNo(paymentNo);
+        if (attempt == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收银台不存在");
+        }
+        validateCheckoutToken(attempt, token);
+        String target = normalizeResolution(targetStatus);
+        String current = attempt.getStatus();
+        if (target.equals(current)) {
+            return toResult(attempt, false);
+        }
+        if (isTerminal(current)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "支付尝试终态冲突: " + current + " -> " + target);
+        }
+        if ("CONFIRMING".equals(current) && !"SUCCESS".equals(target) && !"FAILED".equals(target)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "CONFIRMING只能解析为SUCCESS或FAILED");
+        }
+        if (!"PAYING".equals(current) && !"CONFIRMING".equals(current)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "支付尝试状态不可解析: " + current);
+        }
+        LocalDateTime now = LocalDateTime.now();
+        var update = Wrappers.<WalletPaymentOrder>lambdaUpdate()
+                .set(WalletPaymentOrder::getStatus, target)
+                .set(WalletPaymentOrder::getResolvedAt, "CONFIRMING".equals(target) ? null : now)
+                .set(WalletPaymentOrder::getUpdatedAt, now)
+                .eq(WalletPaymentOrder::getId, attempt.getId())
+                .eq(WalletPaymentOrder::getStatus, current);
+        if ("SUCCESS".equals(target)) {
+            update.set(WalletPaymentOrder::getPaidAt, now)
+                    .set(WalletPaymentOrder::getChannelTradeNo, "MOCK_CASHIER_" + paymentNo);
+        }
+        if (paymentMapper.update(null, update) != 1) {
+            WalletPaymentOrder latest = findByPaymentNo(paymentNo);
+            if (latest != null && target.equals(latest.getStatus())) {
+                return toResult(latest, false);
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "支付状态并发冲突");
+        }
+        attempt.setStatus(target).setUpdatedAt(now)
+                .setResolvedAt("CONFIRMING".equals(target) ? null : now);
+        if ("SUCCESS".equals(target)) {
+            attempt.setPaidAt(now).setChannelTradeNo("MOCK_CASHIER_" + paymentNo);
+        }
+        return toResult(attempt, false);
     }
 
     private WalletPaymentOrder newAttempt(CreatePaymentAttemptRequest request,
@@ -191,6 +266,14 @@ public class PaymentAttemptService {
                 .eq(WalletPaymentOrder::getIdempotencyKey, idempotencyKey).last("LIMIT 1"));
     }
 
+    private WalletPaymentOrder findByPaymentNo(String paymentNo) {
+        if (paymentNo == null || paymentNo.isBlank()) {
+            return null;
+        }
+        return paymentMapper.selectOne(Wrappers.<WalletPaymentOrder>lambdaQuery()
+                .eq(WalletPaymentOrder::getPaymentNo, paymentNo).last("LIMIT 1"));
+    }
+
     private WalletPaymentOrder findByOrderAndStatus(String orderNo, String status) {
         return paymentMapper.selectOne(Wrappers.<WalletPaymentOrder>lambdaQuery()
                 .eq(WalletPaymentOrder::getOrderNo, orderNo)
@@ -243,6 +326,36 @@ public class PaymentAttemptService {
         return value;
     }
 
+    private String normalizeResolution(String status) {
+        String value = status == null ? "" : status.trim().toUpperCase(Locale.ROOT);
+        if (!"SUCCESS".equals(value) && !"FAILED".equals(value)
+                && !"CANCELLED".equals(value) && !"CONFIRMING".equals(value)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "mock结果仅支持SUCCESS/FAILED/CANCELLED/CONFIRMING");
+        }
+        return value;
+    }
+
+    private boolean isTerminal(String status) {
+        return "SUCCESS".equals(status) || "FAILED".equals(status)
+                || "CANCELLED".equals(status) || "DUPLICATE_SUCCESS".equals(status);
+    }
+
+    private void validateCheckoutToken(WalletPaymentOrder attempt, String token) {
+        if (!"MANUAL".equals(attempt.getTriggerType())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收银台不存在");
+        }
+        if (attempt.getCheckoutTokenExpiresAt() == null
+                || !attempt.getCheckoutTokenExpiresAt().isAfter(LocalDateTime.now())) {
+            throw new ResponseStatusException(HttpStatus.GONE, "收银台token已过期");
+        }
+        if (token == null || attempt.getCheckoutTokenHash() == null
+                || !MessageDigest.isEqual(sha256(token).getBytes(StandardCharsets.UTF_8),
+                attempt.getCheckoutTokenHash().getBytes(StandardCharsets.UTF_8))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "收银台不存在");
+        }
+    }
+
     private PaymentResult idempotentResult(CreatePaymentAttemptRequest request, WalletPaymentOrder existing) {
         String trigger = normalizeTrigger(request.getTriggerType());
         BigDecimal amount = request.getAmount().setScale(2, RoundingMode.HALF_UP);
@@ -256,18 +369,21 @@ public class PaymentAttemptService {
         if (!same) {
             throw new IllegalArgumentException("幂等键冲突：请求参数与原支付尝试不一致");
         }
-        return toResult(existing);
+        return toResult(existing, true);
     }
 
-    private PaymentResult toResult(WalletPaymentOrder attempt) {
+    private PaymentResult toResult(WalletPaymentOrder attempt, boolean includeCheckoutUrl) {
         PaymentResult result = new PaymentResult();
         result.setPaymentNo(attempt.getPaymentNo());
+        result.setOrderNo(attempt.getOrderNo());
         result.setStatus(attempt.getStatus());
         result.setChannel(attempt.getChannel());
         result.setAttemptNo(attempt.getAttemptNo());
         result.setAmount(attempt.getAmount());
-        if ("MANUAL".equals(attempt.getTriggerType()) && "PAYING".equals(attempt.getStatus())
+        if (includeCheckoutUrl && "MANUAL".equals(attempt.getTriggerType())
+                && "PAYING".equals(attempt.getStatus())
                 && attempt.getCheckoutTokenExpiresAt() != null
+                && attempt.getCheckoutTokenHash() != null
                 && attempt.getCheckoutTokenExpiresAt().isAfter(LocalDateTime.now())) {
             String checkoutToken = reconstructCheckoutToken(attempt);
             if (!MessageDigest.isEqual(sha256(checkoutToken).getBytes(StandardCharsets.UTF_8),
