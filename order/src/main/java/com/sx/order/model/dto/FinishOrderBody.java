@@ -6,13 +6,16 @@ public class FinishOrderBody {
 
     private Long driverId;
 
-    /** 实际里程（公里），MVP 可选，供后续结算 */
+    /** @deprecated 仅兼容旧客户端，结算不会读取。 */
+    @Deprecated
     private BigDecimal distanceKm;
 
-    /** 实际时长（分钟），MVP 可选 */
+    /** @deprecated 仅兼容旧客户端，结算不会读取。 */
+    @Deprecated
     private Integer durationMin;
 
-    /** 实付金额；为空时暂用订单 {@code estimated_amount} 作为兜底 */
+    /** @deprecated 仅兼容旧客户端，结算不会读取。 */
+    @Deprecated
     private BigDecimal finalAmount;
 
     public Long getDriverId() {

@@ -290,10 +290,7 @@ public class TripOrderController {
         });
     }
 
-    /**
-     * 完单：{@code STARTED → FINISHED}，写入 {@code final_amount}（未传则回退 {@code estimated_amount}）。
-     * {@code POST /api/v1/orders/{orderNo}/finish}
-     */
+    /** 完单只推进 {@code STARTED → FINISHED} 并可靠登记异步结算任务。 */
     @PostMapping("/{orderNo}/finish")
     public ResponseVo<Void> finish(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,

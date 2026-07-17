@@ -183,10 +183,7 @@ public class DriverBffController {
         return ResultUtil.success();
     }
 
-    /**
-     * 完单：{@code STARTED → FINISHED}；可选上报里程/时长/实付金额（未传实付时由订单服务按预估兜底）。
-     * {@code POST /driver/api/v1/orders/{orderNo}/finish}
-     */
+    /** 完单只表达行程结束；兼容请求中的里程、时长和金额不会用于结算。 */
     @PostMapping("/orders/{orderNo}/finish")
     public ResponseVo<Void> finish(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,

@@ -9,8 +9,14 @@ public class FinishOrderBody {
     @NotNull(message = "driverId不能为空")
     private Long driverId;
 
+    /** @deprecated 兼容旧客户端，服务端忽略。 */
+    @Deprecated
     private BigDecimal distanceKm;
+    /** @deprecated 兼容旧客户端，服务端忽略。 */
+    @Deprecated
     private Integer durationMin;
+    /** @deprecated 兼容旧客户端，服务端忽略。 */
+    @Deprecated
     private BigDecimal finalAmount;
 
     public Long getDriverId() {

@@ -245,17 +245,17 @@ git commit -m "feat: add snapshot-based final fare calculation"
 - Modify: `order/src/main/java/com/sx/order/service/TripOrderWriteService.java`
 - Create: `order/src/test/java/com/sx/order/service/TripOrderFinishSettlementTest.java`
 
-- [ ] **Step 1: 写完单事务失败测试**
+- [x] **Step 1: 写完单事务失败测试**
 
 验证第一次 `STARTED -> FINISHED` 同事务产生一条 `CALCULATING` 结算、一条 `ORDER_FINISHED` 事件和一条 topic=`order.settlement.requested.v1` 的 Outbox；重复/并发完单不重复。传入 `distanceKm=9999`、`durationMin=9999`、`finalAmount=0.01` 时，订单 `final_amount` 仍为空。
 
-- [ ] **Step 2: 运行并确认旧实现失败**
+- [x] **Step 2: 运行并确认旧实现失败**
 
 Run: `mvn -pl order -Dtest=TripOrderFinishSettlementTest test`
 
 Expected: FAIL，旧实现把客户端 `finalAmount` 写入订单且不创建结算任务。
 
-- [ ] **Step 3: 收紧 DTO 与实现事务**
+- [x] **Step 3: 收紧 DTO 与实现事务**
 
 司机 BFF 请求体只保留司机身份兼容字段；最终传给 order 的 driverId 以可信请求头为准。order 完单逻辑：
 
@@ -269,7 +269,7 @@ outboxMapper.insert(settlementRequestedOutbox(orderNo, now));
 
 若旧客户端仍发送金额/距离字段，Jackson 可以兼容接收但服务层不得读取，随后在下一个 API 版本删除字段。
 
-- [ ] **Step 4: 运行测试并提交**
+- [x] **Step 4: 运行测试并提交**
 
 Run: `mvn -pl order,driver-api -am -DskipTests=false test`
 

@@ -6,10 +6,12 @@ import com.sx.order.dao.OrderIdempotentRecordMapper;
 import com.sx.order.dao.OrderOutboxEventMapper;
 import com.sx.order.dao.OrderEventEntityMapper;
 import com.sx.order.dao.TripOrderEntityMapper;
+import com.sx.order.dao.TripOrderSettlementMapper;
 import com.sx.order.model.OrderEvent;
 import com.sx.order.model.OrderIdempotentRecord;
 import com.sx.order.model.OrderOutboxEvent;
 import com.sx.order.model.TripOrder;
+import com.sx.order.model.TripOrderSettlement;
 import com.sx.order.model.dto.AssignOrderBody;
 import com.sx.order.model.dto.CancelOrderBody;
 import com.sx.order.model.dto.CreateOrderBody;
@@ -70,6 +72,7 @@ public class TripOrderWriteService {
     private final OrderEventEntityMapper orderEventEntityMapper;
     private final OrderOutboxEventMapper orderOutboxEventMapper;
     private final OrderIdempotentRecordMapper orderIdempotentRecordMapper;
+    private final TripOrderSettlementMapper tripOrderSettlementMapper;
     private final ObjectMapper objectMapper;
     private final DriverPassengerMatchBlockService matchBlockService;
     private final PassengerOrderChangedNotifier passengerOrderChangedNotifier;
@@ -78,6 +81,7 @@ public class TripOrderWriteService {
                                  OrderEventEntityMapper orderEventEntityMapper,
                                  OrderOutboxEventMapper orderOutboxEventMapper,
                                  OrderIdempotentRecordMapper orderIdempotentRecordMapper,
+                                 TripOrderSettlementMapper tripOrderSettlementMapper,
                                  ObjectMapper objectMapper,
                                  DriverPassengerMatchBlockService matchBlockService,
                                  PassengerOrderChangedNotifier passengerOrderChangedNotifier) {
@@ -85,6 +89,7 @@ public class TripOrderWriteService {
         this.orderEventEntityMapper = orderEventEntityMapper;
         this.orderOutboxEventMapper = orderOutboxEventMapper;
         this.orderIdempotentRecordMapper = orderIdempotentRecordMapper;
+        this.tripOrderSettlementMapper = tripOrderSettlementMapper;
         this.objectMapper = objectMapper;
         this.matchBlockService = matchBlockService;
         this.passengerOrderChangedNotifier = passengerOrderChangedNotifier;
@@ -1220,9 +1225,7 @@ public class TripOrderWriteService {
         log.info("行程已开始 orderNo={} driverId={}", orderNo, driverId);
     }
 
-    /**
-     * 完单：STARTED → FINISHED，写入 {@code final_amount}（未传则暂用 {@code estimated_amount}）。
-     */
+    /** 完单只表达行程结束；最终金额由异步结算使用冻结快照计算。 */
     @Transactional(propagation = Propagation.REQUIRED)
     public void finish(String orderNo, FinishOrderBody body) {
         Long driverId = body.getDriverId();
@@ -1237,16 +1240,10 @@ public class TripOrderWriteService {
             throw new IllegalArgumentException("订单当前状态不允许完单");
         }
 
-        BigDecimal finalAmount = body.getFinalAmount();
-        if (finalAmount == null) {
-            finalAmount = existing.getEstimatedAmount();
-        }
-
         LocalDateTime now = LocalDateTime.now();
         int updated = tripOrderEntityMapper.update(null,
                 com.baomidou.mybatisplus.core.toolkit.Wrappers.<TripOrder>lambdaUpdate()
                         .set(TripOrder::getStatus, STATUS_FINISHED)
-                        .set(TripOrder::getFinalAmount, finalAmount)
                         .set(TripOrder::getFinishedAt, now)
                         .set(TripOrder::getUpdatedAt, now)
                         .eq(TripOrder::getOrderNo, orderNo)
@@ -1254,11 +1251,53 @@ public class TripOrderWriteService {
                         .eq(TripOrder::getStatus, STATUS_STARTED)
                         .eq(TripOrder::getDriverId, driverId));
         if (updated != 1) {
-            throw new IllegalArgumentException("完单失败，请重试");
+            // 已读取并校验为当前司机的 STARTED 订单；CAS 失败表示并发完单已率先推进。
+            log.info("并发完单已由另一请求完成 orderNo={} driverId={}", orderNo, driverId);
+            return;
         }
 
+        TripOrderSettlement settlement = new TripOrderSettlement()
+                .setOrderNo(orderNo)
+                .setPassengerId(existing.getPassengerId())
+                .setEstimatedAmount(existing.getEstimatedAmount())
+                .setCouponDiscountAmount(BigDecimal.ZERO.setScale(2))
+                .setPayableAmount(BigDecimal.ZERO.setScale(2))
+                .setPaymentStatus(0)
+                .setSettlementStatus("CALCULATING")
+                .setManualActionRequired(0)
+                .setVersion(0)
+                .setCreatedAt(now)
+                .setUpdatedAt(now);
+        tripOrderSettlementMapper.insert(settlement);
+
         insertDriverEvent(orderNo, driverId, "ORDER_FINISHED", STATUS_STARTED, STATUS_FINISHED, now);
-        log.info("订单已完单 orderNo={} driverId={} finalAmount={}", orderNo, driverId, finalAmount);
+        insertSettlementRequestedOutbox(orderNo, now);
+        log.info("订单已完单，结算任务已登记 orderNo={} driverId={}", orderNo, driverId);
+    }
+
+    private void insertSettlementRequestedOutbox(String orderNo, LocalDateTime now) {
+        OrderOutboxEvent outbox = new OrderOutboxEvent()
+                .setTopic("order.settlement.requested.v1")
+                .setEventType("ORDER_FINISHED_NEED_SETTLEMENT")
+                .setAggregateId(orderNo)
+                .setPayload("{}")
+                .setStatus("PENDING")
+                .setRetryCount(0)
+                .setNextRetryAt(now)
+                .setCreatedAt(now)
+                .setUpdatedAt(now);
+        orderOutboxEventMapper.insert(outbox);
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("schemaVersion", "1.0");
+            payload.put("eventId", String.valueOf(outbox.getId()));
+            payload.put("orderNo", orderNo);
+            payload.put("occurredAt", now.toString());
+            outbox.setPayload(objectMapper.writeValueAsString(payload));
+            orderOutboxEventMapper.updateById(outbox);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("完单结算事件序列化失败", e);
+        }
     }
 
     private void insertDriverEvent(String orderNo, Long driverId, String eventType,
