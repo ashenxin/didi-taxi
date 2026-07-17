@@ -7,6 +7,8 @@ public class EstimateFareResult {
     private BigDecimal estimatedAmount;
     private Long distanceMeters;
     private Long durationSeconds;
+    private String fareRuleSnapshot;
+    private String fareCalculationVersion;
 
     public Long getRuleId() {
         return ruleId;
@@ -39,5 +41,20 @@ public class EstimateFareResult {
     public void setDurationSeconds(Long durationSeconds) {
         this.durationSeconds = durationSeconds;
     }
-}
 
+    public String getFareRuleSnapshot() {
+        return fareRuleSnapshot;
+    }
+
+    public void setFareRuleSnapshot(String fareRuleSnapshot) {
+        this.fareRuleSnapshot = fareRuleSnapshot;
+    }
+
+    public String getFareCalculationVersion() {
+        return fareCalculationVersion;
+    }
+
+    public void setFareCalculationVersion(String fareCalculationVersion) {
+        this.fareCalculationVersion = fareCalculationVersion;
+    }
+}

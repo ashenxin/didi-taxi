@@ -4,6 +4,7 @@ import com.sx.passengerapi.client.CalculateClient;
 import com.sx.passengerapi.client.CapacityDispatchClient;
 import com.sx.passengerapi.client.MapClient;
 import com.sx.passengerapi.client.OrderClient;
+import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.map.RouteResponse;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderBody;
@@ -14,6 +15,7 @@ import com.sx.passengerapi.ws.PassengerWsNotifyService;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -55,6 +57,20 @@ class PassengerOrderServiceAsyncCreateTest {
         verify(orderClient, never()).openDriverOffer(anyString(), any());
         verify(capacityDispatchClient, never()).addPendingOrderIndex(any());
         verify(wsNotifyService).notifyOrderChanged(10001L, "O-ASYNC-1");
+    }
+
+    @Test
+    void missingCoordinatesAreRejectedWithoutExternalGeocoding() {
+        CreateAndAssignOrderBody body = body();
+        body.getDest().setLat(null);
+        body.getDest().setLng(null);
+
+        assertThatThrownBy(() -> service.createTwoPhase(body, "idem-no-coordinates"))
+                .isInstanceOf(BizErrorException.class)
+                .satisfies(ex -> assertThat(((BizErrorException) ex).getErrorCode()).isEqualTo(400))
+                .hasMessageContaining("经纬度");
+
+        verify(mapClient, never()).drivingRoute(any());
     }
 
     private static CreateAndAssignOrderBody body() {

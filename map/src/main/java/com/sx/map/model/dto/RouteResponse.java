@@ -25,6 +25,9 @@ public class RouteResponse {
      */
     private String provider;
 
+    /** 本地 mock 算法/配置版本，订单创建时必须冻结。 */
+    private String version;
+
     /**
      * 本次地图计算的追踪 ID（用于排障/定位第三方请求）。
      *
@@ -56,6 +59,14 @@ public class RouteResponse {
         this.provider = provider;
     }
 
+    public String getVersion() {
+        return version;
+    }
+
+    public void setVersion(String version) {
+        this.version = version;
+    }
+
     public String getTraceId() {
         return traceId;
     }
@@ -64,4 +75,3 @@ public class RouteResponse {
         this.traceId = traceId;
     }
 }
-

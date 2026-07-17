@@ -8,7 +8,6 @@ import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.model.calculate.EstimateFareBody;
 import com.sx.passengerapi.model.calculate.EstimateFareResult;
 import com.sx.passengerapi.model.capacity.NearestDriverResult;
-import com.sx.passengerapi.model.map.GeocodeDemoResponse;
 import com.sx.passengerapi.model.map.Point;
 import com.sx.passengerapi.model.map.RouteRequest;
 import com.sx.passengerapi.model.map.RouteResponse;
@@ -55,11 +54,6 @@ public class PassengerOrderService {
             "ORDER_OFFER_TIMED_OUT"
     );
 
-    /** cityCode → 高德 geocode 可选 city 参数（中文/全拼/adcode 等，见高德文档） */
-    private static final Map<String, String> CITY_CODE_TO_GEOCODE_CITY = Map.of(
-            "330100", "杭州"
-    );
-
     private final MapClient mapClient;
     private final CalculateClient calculateClient;
     private final OrderClient orderClient;
@@ -79,62 +73,25 @@ public class PassengerOrderService {
         this.passengerWsNotifyService = passengerWsNotifyService;
     }
 
-    /**
-     * 起终点缺经纬度时，调 map 地理编码补全；已带齐 lat/lng 则跳过（兼容地图 SDK 选点）。
-     * 顺序：geocode 起点 → geocode 终点 → 后续 {@link #route} 驾车规划。
-     */
+    /** MVP 不接外部地理编码；起终点坐标必须由客户端选点提供。 */
     public void resolveCoordinatesByGeocodeIfNeeded(CreateAndAssignOrderBody body) {
-        String geocodeCity = CITY_CODE_TO_GEOCODE_CITY.get(body.getCityCode());
-        fillPlaceByGeocodeIfNeeded(body.getOrigin(), geocodeCity, "起点");
-        fillPlaceByGeocodeIfNeeded(body.getDest(), geocodeCity, "终点");
+        requireCoordinates(body.getOrigin(), "起点");
+        requireCoordinates(body.getDest(), "终点");
     }
 
-    private void fillPlaceByGeocodeIfNeeded(com.sx.passengerapi.model.order.Place place, String geocodeCity, String label) {
+    private void requireCoordinates(com.sx.passengerapi.model.order.Place place, String label) {
         if (place == null) {
             throw new BizErrorException(400, label + "不能为空");
         }
-        if (place.getLat() != null && place.getLng() != null) {
-            return;
+        if (place.getLat() == null || place.getLng() == null) {
+            throw new BizErrorException(400, label + "经纬度不能为空，请重新选择地点");
         }
-        String address = geocodeAddressLine(place);
-        if (!StringUtils.hasText(address)) {
-            throw new BizErrorException(400, label + "请提供 address 或 name 以供地理编码，或直接传 lat/lng");
-        }
-        GeocodeDemoResponse geo = geocodeOrThrow(address, geocodeCity, label);
-        place.setLng(geo.getLng());
-        place.setLat(geo.getLat());
-    }
-
-    private static String geocodeAddressLine(com.sx.passengerapi.model.order.Place place) {
-        if (StringUtils.hasText(place.getAddress())) {
-            return place.getAddress().trim();
-        }
-        if (StringUtils.hasText(place.getName())) {
-            return place.getName().trim();
-        }
-        return "";
-    }
-
-    private GeocodeDemoResponse geocodeOrThrow(String address, String city, String label) {
-        var resp = mapClient.geocode(address, StringUtils.hasText(city) ? city : null);
-        if (resp == null) {
-            throw new BizErrorException(502, "地图地理编码响应为空");
-        }
-        if (resp.getCode() == null || resp.getCode() != 200) {
-            throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(),
-                    label + "地理编码失败: " + resp.getMsg());
-        }
-        GeocodeDemoResponse data = resp.getData();
-        if (data == null || data.getLng() == null || data.getLat() == null) {
-            throw new BizErrorException(502, label + "地理编码未返回坐标");
-        }
-        return data;
     }
 
     /**
      * 调用地图服务驾车路径规划（里程/时长）。
      *
-     * 调用：{@code map-service POST /api/v1/map/demo/amap-driving}
+     * 调用：{@code map-service POST /api/v1/map/route}
      */
     public RouteResponse route(CreateAndAssignOrderBody body) {
         RouteRequest req = new RouteRequest();

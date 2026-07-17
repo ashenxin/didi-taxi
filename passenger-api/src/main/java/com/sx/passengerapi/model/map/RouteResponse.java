@@ -4,6 +4,7 @@ public class RouteResponse {
     private Long distanceMeters;
     private Long durationSeconds;
     private String provider;
+    private String version;
     private String traceId;
 
     public Long getDistanceMeters() {
@@ -30,6 +31,14 @@ public class RouteResponse {
         this.provider = provider;
     }
 
+    public String getVersion() {
+        return version;
+    }
+
+    public void setVersion(String version) {
+        this.version = version;
+    }
+
     public String getTraceId() {
         return traceId;
     }
@@ -38,4 +47,3 @@ public class RouteResponse {
         this.traceId = traceId;
     }
 }
-

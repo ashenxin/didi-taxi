@@ -5,12 +5,12 @@ import jakarta.validation.constraints.NotBlank;
 public class Place {
 
     /**
-     * 纬度；可与 {@link #lng} 同时由前端传入（地图选点）。若缺省则由 BFF 调地理编码根据 {@link #address}/{@link #name} 补全。
+     * 纬度；必须与 {@link #lng} 同时由前端选点传入。
      */
     private Double lat;
 
     /**
-     * 经度；缺省时由 BFF 地理编码补全。
+     * 经度；必须与纬度同时传入。
      */
     private Double lng;
 
@@ -18,7 +18,7 @@ public class Place {
     private String name;
 
     /**
-     * 结构化地址或可与 name 一起参与地理编码；优先于 name 作为 geocode 的 address 参数。
+     * 结构化地址，用于订单展示。
      */
     private String address;
 
@@ -54,4 +54,3 @@ public class Place {
         this.address = address;
     }
 }
-

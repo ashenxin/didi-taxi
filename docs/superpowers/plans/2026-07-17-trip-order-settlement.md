@@ -38,7 +38,7 @@
 - Modify: `calculate/src/main/java/com/sx/calculate/controller/EstimateController.java`
 - Test: `calculate/src/test/java/com/sx/calculate/controller/EstimateControllerTest.java`
 
-- [ ] **Step 1: 写稳定路线的失败测试**
+- [x] **Step 1: 写稳定路线的失败测试**
 
 ```java
 @Test
@@ -52,13 +52,13 @@ void sameInputAndVersionProducesSameMetrics() {
 }
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `mvn -pl map -Dtest=MockRouteProviderTest test`
 
 Expected: FAIL，`MockRouteProvider` 或 `version` 尚不存在。
 
-- [ ] **Step 3: 实现确定性提供器并替换固定时间戳 traceId**
+- [x] **Step 3: 实现确定性提供器并替换固定时间戳 traceId**
 
 使用规范化起终点坐标与 `mock-route-v1` 做 SHA-256，映射到配置区间；同一输入不得使用 `Instant.now()` 或随机数。默认距离范围 `3000..30000` 米，时长由距离和确定性速度计算。`RouteController` 注入该提供器，`MapClient.drivingRoute` 改调 `/api/v1/map/route`。
 
@@ -72,15 +72,15 @@ public RouteResponse route(RouteRequest request) {
 }
 ```
 
-- [ ] **Step 4: 写估价结果必须返回完整规则快照的失败测试**
+- [x] **Step 4: 写估价结果必须返回完整规则快照的失败测试**
 
 断言响应同时包含 `ruleId`、`fareRuleSnapshot`、`fareCalculationVersion="fare-v1"`，快照含起步价、包含里程/时长、公里/分钟单价、最低价和封顶价。
 
-- [ ] **Step 5: 提取并序列化规则快照**
+- [x] **Step 5: 提取并序列化规则快照**
 
 在 `EstimateController` 使用 `ObjectMapper` 生成稳定 JSON；禁止只返回 `ruleId`。将三个新字段同步到乘客 BFF DTO。
 
-- [ ] **Step 6: 运行聚焦测试并提交**
+- [x] **Step 6: 运行聚焦测试并提交**
 
 Run: `mvn -pl map,calculate -am -Dtest=MockRouteProviderTest,EstimateControllerTest test`
 

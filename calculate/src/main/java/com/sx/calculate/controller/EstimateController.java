@@ -1,6 +1,8 @@
 package com.sx.calculate.controller;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.calculate.common.util.ResultUtil;
 import com.sx.calculate.common.vo.ResponseVo;
 import com.sx.calculate.dao.FareRuleEntityMapper;
@@ -17,6 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * 计费服务：费用预估（按 fare_rule 与里程/时长计算）。
@@ -27,10 +31,14 @@ import java.time.LocalDateTime;
 @Slf4j
 public class EstimateController {
 
-    private final FareRuleEntityMapper fareRuleEntityMapper;
+    private static final String FARE_CALCULATION_VERSION = "fare-v1";
 
-    public EstimateController(FareRuleEntityMapper fareRuleEntityMapper) {
+    private final FareRuleEntityMapper fareRuleEntityMapper;
+    private final ObjectMapper objectMapper;
+
+    public EstimateController(FareRuleEntityMapper fareRuleEntityMapper, ObjectMapper objectMapper) {
         this.fareRuleEntityMapper = fareRuleEntityMapper;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -71,9 +79,28 @@ public class EstimateController {
         resp.setEstimatedAmount(amount);
         resp.setDistanceMeters(body.getDistanceMeters());
         resp.setDurationSeconds(body.getDurationSeconds());
+        resp.setFareRuleSnapshot(fareRuleSnapshot(rule));
+        resp.setFareCalculationVersion(FARE_CALCULATION_VERSION);
         log.info("估价：ruleId={} amount={} distanceM={} durationS={}",
                 rule.getId(), amount, body.getDistanceMeters(), body.getDurationSeconds());
         return ResultUtil.success(resp);
+    }
+
+    private String fareRuleSnapshot(FareRule rule) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("ruleId", rule.getId());
+        snapshot.put("baseFare", rule.getBaseFare());
+        snapshot.put("includedDistanceKm", rule.getIncludedDistanceKm());
+        snapshot.put("includedDurationMin", rule.getIncludedDurationMin());
+        snapshot.put("perKmPrice", rule.getPerKmPrice());
+        snapshot.put("perMinutePrice", rule.getPerMinutePrice());
+        snapshot.put("minimumFare", rule.getMinimumFare());
+        snapshot.put("maximumFare", rule.getMaximumFare());
+        try {
+            return objectMapper.writeValueAsString(snapshot);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("计价规则快照序列化失败", e);
+        }
     }
 
     private static BigDecimal estimateAmount(FareRule rule, long distanceMeters, long durationSeconds) {
@@ -106,4 +133,3 @@ public class EstimateController {
         return amount.setScale(2, RoundingMode.HALF_UP);
     }
 }
-
