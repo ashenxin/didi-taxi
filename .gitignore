@@ -13,3 +13,6 @@ target/
 *.log
 logs/
 .DS_Store
+
+# Local isolated feature worktrees
+.worktrees/
