@@ -36,6 +36,8 @@ public class UserCoupon {
     private String productCode;
     private String status;
     private String lockedOrderNo;
+    private BigDecimal lockedFinalAmount;
+    private BigDecimal lockedDiscountAmount;
     private LocalDateTime receivedAt;
     private LocalDateTime validStartAt;
     private LocalDateTime validEndAt;

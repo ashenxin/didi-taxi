@@ -9,6 +9,9 @@ public class ResponseVo<T> implements Serializable {
     private String msg;
     private T data;
 
+    public ResponseVo() {
+    }
+
     public ResponseVo(Integer code, String msg, T data) {
         this.code = code;
         this.msg = msg;

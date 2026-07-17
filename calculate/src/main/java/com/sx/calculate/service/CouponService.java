@@ -19,6 +19,7 @@ import com.sx.calculate.model.dto.CouponUseRequest;
 import com.sx.calculate.model.dto.CouponVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -380,6 +381,10 @@ public class CouponService {
 
     @Transactional
     public CouponLockResult lock(CouponLockRequest request) {
+        UserCoupon existing = findCouponOwnedByOrder(request.getPassengerId(), request.getOrderNo());
+        if (existing != null) {
+            return toLockResult(existing, request.getFinalAmount());
+        }
         if (Boolean.TRUE.equals(request.getManualNoCoupon())) {
             CouponLockResult noCoupon = new CouponLockResult();
             noCoupon.setDiscountAmount(BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
@@ -399,18 +404,60 @@ public class CouponService {
             throw new IllegalArgumentException("无可用优惠券");
         }
         BigDecimal discountAmount = calculateDiscount(coupon, request.getFinalAmount());
-        int updated = userCouponMapper.update(null, Wrappers.<UserCoupon>lambdaUpdate()
-                .eq(UserCoupon::getId, coupon.getId())
-                .eq(UserCoupon::getPassengerId, request.getPassengerId())
-                .eq(UserCoupon::getStatus, UNUSED)
-                .set(UserCoupon::getStatus, LOCKED)
-                .set(UserCoupon::getLockedOrderNo, request.getOrderNo())
-                .set(UserCoupon::getUpdatedAt, LocalDateTime.now()));
+        BigDecimal lockedFinalAmount = scale(request.getFinalAmount());
+        validateDiscount(lockedFinalAmount, discountAmount);
+        int updated;
+        try {
+            updated = userCouponMapper.update(null, Wrappers.<UserCoupon>lambdaUpdate()
+                    .eq(UserCoupon::getId, coupon.getId())
+                    .eq(UserCoupon::getPassengerId, request.getPassengerId())
+                    .eq(UserCoupon::getStatus, UNUSED)
+                    .set(UserCoupon::getStatus, LOCKED)
+                    .set(UserCoupon::getLockedOrderNo, request.getOrderNo())
+                    .set(UserCoupon::getLockedFinalAmount, lockedFinalAmount)
+                    .set(UserCoupon::getLockedDiscountAmount, discountAmount)
+                    .set(UserCoupon::getUpdatedAt, LocalDateTime.now()));
+        } catch (DuplicateKeyException ex) {
+            UserCoupon concurrentlyLocked = findCouponOwnedByOrder(request.getPassengerId(), request.getOrderNo());
+            if (concurrentlyLocked != null) {
+                return toLockResult(concurrentlyLocked, request.getFinalAmount());
+            }
+            throw ex;
+        }
         if (updated != 1) {
+            UserCoupon concurrentlyLocked = findCouponOwnedByOrder(request.getPassengerId(), request.getOrderNo());
+            if (concurrentlyLocked != null) {
+                return toLockResult(concurrentlyLocked, request.getFinalAmount());
+            }
             throw new IllegalArgumentException("优惠券已被使用或锁定");
         }
         record(coupon, request.getOrderNo(), "LOCK", UNUSED, LOCKED, discountAmount, "订单结算锁定");
+        coupon.setStatus(LOCKED)
+                .setLockedOrderNo(request.getOrderNo())
+                .setLockedFinalAmount(lockedFinalAmount)
+                .setLockedDiscountAmount(discountAmount);
+        return toLockResult(coupon, request.getFinalAmount());
+    }
 
+    private UserCoupon findCouponOwnedByOrder(Long passengerId, String orderNo) {
+        return userCouponMapper.selectOne(Wrappers.<UserCoupon>lambdaQuery()
+                .eq(UserCoupon::getPassengerId, passengerId)
+                .eq(UserCoupon::getLockedOrderNo, orderNo)
+                .in(UserCoupon::getStatus, LOCKED, USED)
+                .last("LIMIT 1"));
+    }
+
+    private CouponLockResult toLockResult(UserCoupon coupon, BigDecimal requestedFinalAmount) {
+        if (coupon.getLockedFinalAmount() == null || coupon.getLockedDiscountAmount() == null) {
+            throw new IllegalArgumentException("锁券金额快照缺失，请人工处理");
+        }
+        BigDecimal finalAmount = scale(coupon.getLockedFinalAmount());
+        BigDecimal requested = scale(requestedFinalAmount);
+        if (requested.compareTo(finalAmount) != 0) {
+            throw new IllegalArgumentException("锁券金额与原请求不一致");
+        }
+        BigDecimal discountAmount = scale(coupon.getLockedDiscountAmount());
+        validateDiscount(finalAmount, discountAmount);
         CouponLockResult result = new CouponLockResult();
         result.setCouponId(coupon.getId());
         result.setTemplateId(coupon.getTemplateId());
@@ -422,8 +469,6 @@ public class CouponService {
         result.setCouponType(coupon.getCouponType());
         result.setCouponRuleSnapshot(coupon.getRuleSnapshot());
         result.setDiscountAmount(discountAmount);
-        BigDecimal finalAmount = scale(request.getFinalAmount());
-        validateDiscount(finalAmount, discountAmount);
         result.setPayableAmount(finalAmount.subtract(discountAmount).setScale(2, RoundingMode.HALF_UP));
         return result;
     }
@@ -435,7 +480,10 @@ public class CouponService {
             throw new IllegalArgumentException("优惠券不存在");
         }
         if (USED.equals(coupon.getStatus())) {
-            return;
+            if (Objects.equals(coupon.getLockedOrderNo(), request.getOrderNo())) {
+                return;
+            }
+            throw new IllegalArgumentException("优惠券已被其他订单使用");
         }
         int updated = userCouponMapper.update(null, Wrappers.<UserCoupon>lambdaUpdate()
                 .eq(UserCoupon::getId, request.getCouponId())
@@ -474,6 +522,8 @@ public class CouponService {
                 .eq(UserCoupon::getLockedOrderNo, request.getOrderNo())
                 .set(UserCoupon::getStatus, targetStatus)
                 .set(UserCoupon::getLockedOrderNo, null)
+                .set(UserCoupon::getLockedFinalAmount, null)
+                .set(UserCoupon::getLockedDiscountAmount, null)
                 .set(UserCoupon::getUpdatedAt, LocalDateTime.now()));
         if (updated == 1) {
             BigDecimal discountAmount = request.getDiscountAmount() == null

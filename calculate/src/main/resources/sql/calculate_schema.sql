@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS `user_coupon` (
     `product_code` VARCHAR(32) NOT NULL COMMENT '适用产品线快照',
     `status` VARCHAR(32) NOT NULL DEFAULT 'UNUSED' COMMENT 'UNUSED/LOCKED/USED/EXPIRED/INVALID',
     `locked_order_no` VARCHAR(64) NULL COMMENT '锁定订单号',
+    `locked_final_amount` DECIMAL(10,2) NULL COMMENT '锁券时最终车费快照',
+    `locked_discount_amount` DECIMAL(10,2) NULL COMMENT '锁券时实际优惠金额快照',
     `received_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '领取时间',
     `valid_start_at` DATETIME NOT NULL COMMENT '有效开始时间',
     `valid_end_at` DATETIME NOT NULL COMMENT '有效结束时间',
@@ -124,7 +126,7 @@ CREATE TABLE IF NOT EXISTS `user_coupon` (
     UNIQUE KEY `uk_user_coupon_template_passenger` (`template_id`, `passenger_id`),
     UNIQUE KEY `uk_user_coupon_template_identity` (`template_id`, `claim_identity_type`, `claim_identity_hash`),
     KEY `idx_user_coupon_passenger_status` (`passenger_id`, `status`, `valid_end_at`),
-    KEY `idx_user_coupon_order` (`locked_order_no`),
+    UNIQUE KEY `uk_user_coupon_locked_order` (`locked_order_no`),
     KEY `idx_user_coupon_scope` (`passenger_id`, `company_id`, `city_code`, `product_code`, `status`),
     KEY `idx_user_coupon_template` (`template_id`),
     KEY `idx_user_coupon_claim_identity` (`template_id`, `claim_identity_type`, `claim_identity_hash`)

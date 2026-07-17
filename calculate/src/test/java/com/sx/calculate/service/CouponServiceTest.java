@@ -23,6 +23,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
@@ -94,6 +95,8 @@ class CouponServiceTest {
         UserCoupon coupon = coupon(5L, "AMOUNT_OFF", "5.00", LocalDateTime.now().plusDays(2));
         coupon.setStatus("LOCKED");
         coupon.setLockedOrderNo("T202607170001");
+        coupon.setLockedFinalAmount(new BigDecimal("30.00"));
+        coupon.setLockedDiscountAmount(new BigDecimal("5.00"));
         when(userCouponMapper.selectById(5L)).thenReturn(coupon);
         when(userCouponMapper.update(any(), any(Wrapper.class))).thenReturn(1);
         when(recordMapper.insert(any(CouponUseRecord.class))).thenReturn(1);
@@ -108,6 +111,69 @@ class CouponServiceTest {
         ArgumentCaptor<CouponUseRecord> captor = ArgumentCaptor.forClass(CouponUseRecord.class);
         verify(recordMapper).insert(captor.capture());
         assertThat(captor.getValue().getReason()).isEqualTo("结算金额固化失败补偿");
+    }
+
+    @Test
+    void replayReturnsCouponAlreadyLockedBySameOrderWithoutSelectingAnother() {
+        UserCoupon coupon = coupon(6L, "AMOUNT_OFF", "5.00", LocalDateTime.now().plusDays(2));
+        coupon.setStatus("LOCKED");
+        coupon.setLockedOrderNo("T202607170001");
+        coupon.setLockedFinalAmount(new BigDecimal("30.00"));
+        coupon.setLockedDiscountAmount(new BigDecimal("5.00"));
+        when(userCouponMapper.selectOne(any(Wrapper.class))).thenReturn(coupon);
+
+        CouponLockResult result = service.lock(request(null, "30.00"));
+
+        assertThat(result.getCouponId()).isEqualTo(6L);
+        assertThat(result.getDiscountAmount()).isEqualByComparingTo("5.00");
+        assertThat(result.getPayableAmount()).isEqualByComparingTo("25.00");
+        verify(userCouponMapper, never()).update(any(), any(Wrapper.class));
+    }
+
+    @Test
+    void replayAfterZeroBillCouponWasUsedReturnsOriginalCoupon() {
+        UserCoupon coupon = coupon(7L, "AMOUNT_OFF", "30.00", LocalDateTime.now().plusDays(2));
+        coupon.setStatus("USED");
+        coupon.setLockedOrderNo("T202607170001");
+        coupon.setLockedFinalAmount(new BigDecimal("30.00"));
+        coupon.setLockedDiscountAmount(new BigDecimal("30.00"));
+        when(userCouponMapper.selectOne(any(Wrapper.class))).thenReturn(coupon);
+
+        CouponLockResult result = service.lock(request(null, "30.00"));
+
+        assertThat(result.getCouponId()).isEqualTo(7L);
+        assertThat(result.getDiscountAmount()).isEqualByComparingTo("30.00");
+        assertThat(result.getPayableAmount()).isZero();
+        verify(userCouponMapper, never()).update(any(), any(Wrapper.class));
+    }
+
+    @Test
+    void replayRejectsChangedFinalAmountInsteadOfRecalculatingLockedCoupon() {
+        UserCoupon coupon = coupon(8L, "PERCENT_OFF", "0.00", LocalDateTime.now().plusDays(2));
+        coupon.setDiscountRate(new BigDecimal("0.8000"));
+        coupon.setStatus("LOCKED");
+        coupon.setLockedOrderNo("T202607170001");
+        coupon.setLockedFinalAmount(new BigDecimal("30.00"));
+        coupon.setLockedDiscountAmount(new BigDecimal("6.00"));
+        when(userCouponMapper.selectOne(any(Wrapper.class))).thenReturn(coupon);
+
+        assertThatThrownBy(() -> service.lock(request(null, "31.00")))
+                .hasMessageContaining("锁券金额与原请求不一致");
+    }
+
+    @Test
+    void usedCouponIsIdempotentOnlyForItsOriginalOrder() {
+        UserCoupon coupon = coupon(9L, "AMOUNT_OFF", "5.00", LocalDateTime.now().plusDays(2));
+        coupon.setStatus("USED");
+        coupon.setLockedOrderNo("ANOTHER-ORDER");
+        when(userCouponMapper.selectById(9L)).thenReturn(coupon);
+        CouponUseRequest request = new CouponUseRequest();
+        request.setCouponId(9L);
+        request.setPassengerId(10001L);
+        request.setOrderNo("T202607170001");
+
+        assertThatThrownBy(() -> service.use(request))
+                .hasMessageContaining("其他订单");
     }
 
     private static CouponLockRequest request(Long couponId, String finalAmount) {

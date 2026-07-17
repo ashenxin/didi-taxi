@@ -356,19 +356,19 @@ git commit -m "feat: add idempotent settlement orchestration skeleton"
 - Create: `order/src/main/java/com/sx/order/model/dto/CouponUseRequest.java`
 - Modify: `order/src/test/java/com/sx/order/service/TripOrderSettlementServiceTest.java`
 
-- [ ] **Step 1: 增加编排失败测试矩阵**
+- [x] **Step 1: 增加编排失败测试矩阵**
 
 覆盖最终金额空/零/负/`10000.01`、优惠负数/大于车费、合法 `10000.00`、舍入后零元。断言异常时：`CALCULATING + AMOUNT_OUT_OF_RANGE + manualActionRequired=true`，无支付尝试；锁券后才发现异常则调用一次 release。
 
-- [ ] **Step 2: 增加零元与锁券幂等测试**
+- [x] **Step 2: 增加零元与锁券幂等测试**
 
 零元订单调用一次 `useCoupon`、不调用 wallet、进入 `PAID`、清空 `blocks_new_order`。重复消息不重复核券。
 
-- [ ] **Step 3: 实现金额固化事务**
+- [x] **Step 3: 实现金额固化事务**
 
 将 `finalAmount`、优惠快照、`payableAmount`、5% 平台服务费和 `carrierIncomeAmount` 同时写入 settlement；`TripOrder.finalAmount` 仅由服务端最终计价结果写入。所有关系通过一个 validator 校验，结算 controller 不再自行计算或 `max` 修正。
 
-- [ ] **Step 4: 运行测试并提交**
+- [x] **Step 4: 运行测试并提交**
 
 Run: `mvn -pl order,calculate -am test`
 

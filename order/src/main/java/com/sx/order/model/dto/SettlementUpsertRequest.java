@@ -15,6 +15,7 @@ public class SettlementUpsertRequest {
     @NotNull
     private Long passengerId;
     private BigDecimal estimatedAmount;
+    @NotNull
     private BigDecimal finalAmount;
     private Long couponId;
     private Long couponTemplateId;
@@ -24,11 +25,16 @@ public class SettlementUpsertRequest {
     private String couponTeamIdSnapshot;
     private String couponTeamNameSnapshot;
     private String couponType;
+    @NotNull
     private BigDecimal couponDiscountAmount;
     private String couponRuleSnapshot;
+    @NotNull
     private BigDecimal payableAmount;
+    @NotNull
     private BigDecimal platformServiceFeeRate;
+    @NotNull
     private BigDecimal platformServiceFeeAmount;
+    @NotNull
     private BigDecimal carrierIncomeAmount;
     private String settlementSnapshot;
     private String settlementStatus;
