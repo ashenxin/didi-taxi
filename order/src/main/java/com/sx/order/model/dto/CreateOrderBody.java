@@ -40,6 +40,21 @@ public class CreateOrderBody {
     /** 计价规则快照（JSON，可空） */
     private String fareRuleSnapshot;
 
+    @NotNull(message = "plannedDistanceMeters不能为空")
+    private Long plannedDistanceMeters;
+
+    @NotNull(message = "plannedDurationSeconds不能为空")
+    private Long plannedDurationSeconds;
+
+    @NotBlank(message = "distanceSource不能为空")
+    private String distanceSource;
+
+    @NotBlank(message = "fareCalculationVersion不能为空")
+    private String fareCalculationVersion;
+
+    @NotBlank(message = "routeMockVersion不能为空")
+    private String routeMockVersion;
+
     public Long getPassengerId() {
         return passengerId;
     }
@@ -111,5 +126,44 @@ public class CreateOrderBody {
     public void setFareRuleSnapshot(String fareRuleSnapshot) {
         this.fareRuleSnapshot = fareRuleSnapshot;
     }
-}
 
+    public Long getPlannedDistanceMeters() {
+        return plannedDistanceMeters;
+    }
+
+    public void setPlannedDistanceMeters(Long plannedDistanceMeters) {
+        this.plannedDistanceMeters = plannedDistanceMeters;
+    }
+
+    public Long getPlannedDurationSeconds() {
+        return plannedDurationSeconds;
+    }
+
+    public void setPlannedDurationSeconds(Long plannedDurationSeconds) {
+        this.plannedDurationSeconds = plannedDurationSeconds;
+    }
+
+    public String getDistanceSource() {
+        return distanceSource;
+    }
+
+    public void setDistanceSource(String distanceSource) {
+        this.distanceSource = distanceSource;
+    }
+
+    public String getFareCalculationVersion() {
+        return fareCalculationVersion;
+    }
+
+    public void setFareCalculationVersion(String fareCalculationVersion) {
+        this.fareCalculationVersion = fareCalculationVersion;
+    }
+
+    public String getRouteMockVersion() {
+        return routeMockVersion;
+    }
+
+    public void setRouteMockVersion(String routeMockVersion) {
+        this.routeMockVersion = routeMockVersion;
+    }
+}

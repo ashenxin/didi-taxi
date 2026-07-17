@@ -107,7 +107,7 @@ git commit -m "feat: freeze deterministic mock route and fare snapshot"
 - Modify: `order/src/main/java/com/sx/order/service/TripOrderWriteService.java`
 - Test: `order/src/test/java/com/sx/order/service/TripOrderCreateIdempotencyTest.java`
 
-- [ ] **Step 1: 扩充订单创建测试**
+- [x] **Step 1: 扩充订单创建测试**
 
 测试下单会持久化：
 
@@ -123,13 +123,13 @@ blocks_new_order = 1
 
 同时把这些字段纳入 `requestHash`，相同幂等键但快照不同必须冲突。
 
-- [ ] **Step 2: 运行并确认字段缺失导致失败**
+- [x] **Step 2: 运行并确认字段缺失导致失败**
 
 Run: `mvn -pl order -Dtest=TripOrderCreateIdempotencyTest test`
 
 Expected: FAIL，实体或 H2 schema 不包含新列。
 
-- [ ] **Step 3: 修改 MySQL/H2 schema 和实体**
+- [x] **Step 3: 修改 MySQL/H2 schema 和实体**
 
 `trip_order` 新增：
 
@@ -150,13 +150,13 @@ UNIQUE KEY uk_trip_order_passenger_block (passenger_id, blocks_new_order)
 
 `trip_order_settlement` 新增 `failure_code`、`failure_summary`、`manual_action_required`、`version`，状态默认 `CALCULATING`；保留 `payment_no` 只指向最终成功支付尝试。
 
-- [ ] **Step 4: 从 BFF 透传真实快照**
+- [x] **Step 4: 从 BFF 透传真实快照**
 
 `PassengerOrderService.createOrder` 不再 `setFareRuleSnapshot(null)`，而是透传路线指标、来源/版本和估价规则快照/版本。缺失这些值时下单直接返回业务错误，不创建不可结算订单。
 
 MVP 下单必须由客户端提供起终点经纬度；将 `resolveCoordinatesByGeocodeIfNeeded` 改为只校验坐标完整性，并从实际下单链路移除 `MapClient.geocode` 调用，避免缺坐标时偷偷访问高德。增加测试断言缺坐标返回 400，且 map mock route 是唯一的距离/时长来源。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 Run: `mvn -pl order,passenger-api -am -DskipTests=false test`
 

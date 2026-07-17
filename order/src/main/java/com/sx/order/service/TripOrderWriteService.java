@@ -168,6 +168,12 @@ public class TripOrderWriteService {
                 .setEstimatedAmount(body.getEstimatedAmount())
                 .setFareRuleId(body.getFareRuleId())
                 .setFareRuleSnapshot(body.getFareRuleSnapshot())
+                .setPlannedDistanceMeters(body.getPlannedDistanceMeters())
+                .setPlannedDurationSeconds(body.getPlannedDurationSeconds())
+                .setDistanceSource(body.getDistanceSource())
+                .setFareCalculationVersion(body.getFareCalculationVersion())
+                .setRouteMockVersion(body.getRouteMockVersion())
+                .setBlocksNewOrder(1)
                 .setOfferRound(0)
                 .setCreatedAt(now)
                 .setUpdatedAt(now)
@@ -260,6 +266,11 @@ public class TripOrderWriteService {
             root.put("estimatedAmount", decimalText(body.getEstimatedAmount()));
             root.put("fareRuleId", body.getFareRuleId());
             root.put("fareRuleSnapshot", body.getFareRuleSnapshot());
+            root.put("plannedDistanceMeters", body.getPlannedDistanceMeters());
+            root.put("plannedDurationSeconds", body.getPlannedDurationSeconds());
+            root.put("distanceSource", trimToNull(body.getDistanceSource()));
+            root.put("fareCalculationVersion", trimToNull(body.getFareCalculationVersion()));
+            root.put("routeMockVersion", trimToNull(body.getRouteMockVersion()));
             String json = objectMapper.writeValueAsString(root);
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] bytes = md.digest(json.getBytes(StandardCharsets.UTF_8));

@@ -41,6 +41,10 @@ public class TripOrderSettlement {
     private BigDecimal paidAmount;
     private LocalDateTime paidAt;
     private String settlementStatus;
+    private String failureCode;
+    private String failureSummary;
+    private Integer manualActionRequired;
+    private Integer version;
     private LocalDateTime settledAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

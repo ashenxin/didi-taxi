@@ -7,6 +7,7 @@ import com.sx.order.dao.OrderIdempotentRecordMapper;
 import com.sx.order.dao.OrderOutboxEventMapper;
 import com.sx.order.dao.TripOrderEntityMapper;
 import com.sx.order.model.OrderIdempotentRecord;
+import com.sx.order.model.TripOrder;
 import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.Place;
 import org.junit.jupiter.api.BeforeEach;
@@ -60,6 +61,15 @@ class TripOrderCreateIdempotencyTest {
         assertThat(record.getStatus()).isEqualTo("SUCCESS");
         assertThat(record.getOrderNo()).isEqualTo(first);
         assertThat(record.getResponseSnapshot()).contains(first);
+        TripOrder order = tripOrderMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getOrderNo, first));
+        assertThat(order.getPlannedDistanceMeters()).isEqualTo(12_340L);
+        assertThat(order.getPlannedDurationSeconds()).isEqualTo(1_560L);
+        assertThat(order.getDistanceSource()).isEqualTo("LOCAL_MOCK_ROUTE");
+        assertThat(order.getRouteMockVersion()).isEqualTo("mock-route-v1");
+        assertThat(order.getFareCalculationVersion()).isEqualTo("fare-v1");
+        assertThat(order.getFareRuleSnapshot()).contains("baseFare");
+        assertThat(order.getBlocksNewOrder()).isEqualTo(1);
     }
 
     @Test
@@ -68,6 +78,20 @@ class TripOrderCreateIdempotencyTest {
         service.create(body(90002L, "ECONOMY"), key);
 
         assertThatThrownBy(() -> service.create(body(90002L, "PREMIUM"), key))
+                .isInstanceOf(OrderConflictException.class)
+                .hasMessageContaining("不能用于不同下单内容");
+    }
+
+    @Test
+    void frozenPricingInputsParticipateInIdempotencyHash() {
+        String key = "idem-pricing-snapshot";
+        CreateOrderBody first = body(90005L, "ECONOMY");
+        CreateOrderBody changed = body(90005L, "ECONOMY");
+        changed.setPlannedDistanceMeters(12_341L);
+
+        service.create(first, key);
+
+        assertThatThrownBy(() -> service.create(changed, key))
                 .isInstanceOf(OrderConflictException.class)
                 .hasMessageContaining("不能用于不同下单内容");
     }
@@ -123,6 +147,12 @@ class TripOrderCreateIdempotencyTest {
         body.setDest(place("龙翔桥", "30.2592000", "120.1640000"));
         body.setEstimatedAmount(new BigDecimal("35.00"));
         body.setFareRuleId(1L);
+        body.setFareRuleSnapshot("{\"baseFare\":12.00}");
+        body.setFareCalculationVersion("fare-v1");
+        body.setPlannedDistanceMeters(12_340L);
+        body.setPlannedDurationSeconds(1_560L);
+        body.setDistanceSource("LOCAL_MOCK_ROUTE");
+        body.setRouteMockVersion("mock-route-v1");
         return body;
     }
 

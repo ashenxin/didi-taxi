@@ -73,6 +73,20 @@ public class TripOrder {
     /** 计价规则快照（MySQL JSON，实体用字符串读写，便于对账） */
     private String fareRuleSnapshot;
 
+    /** 下单时冻结的本地 mock 规划距离（米）。 */
+    private Long plannedDistanceMeters;
+    /** 下单时冻结的本地 mock 预计时长（秒）。 */
+    private Long plannedDurationSeconds;
+    private String distanceSource;
+    private String fareCalculationVersion;
+    private String routeMockVersion;
+    /** 完单结算首次执行时生成，之后不可覆盖。 */
+    private Long mockActualDurationSeconds;
+    private String durationSource;
+    private String tripMetricsVersion;
+    /** 1 表示当前订单阻止乘客创建下一单；解除后写 NULL。 */
+    private Integer blocksNewOrder;
+
     /** 取消方：如 1 表示乘客取消（与订单服务内 {@code CANCEL_BY_PASSENGER} 常量一致） */
     private Integer cancelBy;
     /** 取消原因说明 */

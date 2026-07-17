@@ -34,6 +34,15 @@ CREATE TABLE IF NOT EXISTS `trip_order` (
 
     `fare_rule_id` BIGINT NULL COMMENT '命中的计价规则ID（calculate.fare_rule.id）',
     `fare_rule_snapshot` JSON NULL COMMENT '计价关键快照（可选，防止规则变更影响历史解释）',
+    `planned_distance_meters` BIGINT NULL COMMENT '下单冻结的本地mock规划距离（米）',
+    `planned_duration_seconds` BIGINT NULL COMMENT '下单冻结的本地mock预计时长（秒）',
+    `distance_source` VARCHAR(32) NULL COMMENT '距离来源，本期LOCAL_MOCK_ROUTE',
+    `fare_calculation_version` VARCHAR(32) NULL COMMENT '计价算法版本',
+    `route_mock_version` VARCHAR(32) NULL COMMENT '本地mock路线版本',
+    `mock_actual_duration_seconds` BIGINT NULL COMMENT '结算首次生成并冻结的mock实际计费时长',
+    `duration_source` VARCHAR(32) NULL COMMENT '时长来源，本期LOCAL_MOCK_TRIP',
+    `trip_metrics_version` VARCHAR(32) NULL COMMENT 'mock实际指标生成版本',
+    `blocks_new_order` TINYINT NULL COMMENT '1阻止乘客创建下一单，解除后为NULL',
 
     `cancel_by` INT NULL COMMENT '取消方：1乘客 2司机 3系统',
     `cancel_reason` VARCHAR(255) NULL COMMENT '取消原因',
@@ -54,6 +63,7 @@ CREATE TABLE IF NOT EXISTS `trip_order` (
 
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_trip_order_order_no` (`order_no`),
+    UNIQUE KEY `uk_trip_order_passenger_block` (`passenger_id`, `blocks_new_order`),
 
     KEY `idx_trip_order_passenger` (`passenger_id`),
     KEY `idx_trip_order_driver` (`driver_id`),
@@ -160,7 +170,11 @@ CREATE TABLE IF NOT EXISTS `trip_order_settlement` (
     `payment_status` INT NOT NULL DEFAULT 0 COMMENT '支付状态：0待支付 1支付中 2成功 3失败',
     `paid_amount` DECIMAL(10,2) NULL COMMENT '已支付金额',
     `paid_at` DATETIME NULL COMMENT '支付完成时间',
-    `settlement_status` VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/PAID/CLOSED',
+    `settlement_status` VARCHAR(32) NOT NULL DEFAULT 'CALCULATING' COMMENT 'CALCULATING/PAY_CONFIRMING/PAYMENT_REQUIRED/PAID',
+    `failure_code` VARCHAR(64) NULL COMMENT '结算失败码',
+    `failure_summary` VARCHAR(2000) NULL COMMENT '结算失败摘要',
+    `manual_action_required` TINYINT NOT NULL DEFAULT 0 COMMENT '是否需要运营人工处理',
+    `version` INT NOT NULL DEFAULT 0 COMMENT 'CAS版本号',
     `settled_at` DATETIME NULL COMMENT '结算完成时间',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',

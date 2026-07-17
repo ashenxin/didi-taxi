@@ -150,7 +150,9 @@ public class PassengerOrderService {
      * 当前实现会把 estimate 的 {@code estimatedAmount/ruleId} 透传给 order-service，
      * 便于订单侧留痕与后续对账。
      */
-    public CreateOrderResult createOrder(CreateAndAssignOrderBody body, EstimateFareResult estimate, String idempotencyKey) {
+    public CreateOrderResult createOrder(CreateAndAssignOrderBody body, RouteResponse route,
+                                         EstimateFareResult estimate, String idempotencyKey) {
+        requireFrozenPricingInputs(route, estimate);
         CreateOrderBody req = new CreateOrderBody();
         req.setPassengerId(body.getPassengerId());
         req.setProvinceCode(body.getProvinceCode());
@@ -160,7 +162,12 @@ public class PassengerOrderService {
         req.setDest(toOrderPlace(body.getDest()));
         req.setEstimatedAmount(estimate == null ? null : estimate.getEstimatedAmount());
         req.setFareRuleId(estimate == null ? null : estimate.getRuleId());
-        req.setFareRuleSnapshot(null);
+        req.setFareRuleSnapshot(estimate.getFareRuleSnapshot());
+        req.setFareCalculationVersion(estimate.getFareCalculationVersion());
+        req.setPlannedDistanceMeters(route.getDistanceMeters());
+        req.setPlannedDurationSeconds(route.getDurationSeconds());
+        req.setDistanceSource(route.getProvider());
+        req.setRouteMockVersion(route.getVersion());
 
         var resp = orderClient.create(idempotencyKey, req);
         if (resp == null) {
@@ -174,6 +181,18 @@ public class PassengerOrderService {
             throw new BizErrorException(code, msg);
         }
         return resp.getData();
+    }
+
+    private static void requireFrozenPricingInputs(RouteResponse route, EstimateFareResult estimate) {
+        if (route == null || route.getDistanceMeters() == null || route.getDurationSeconds() == null
+                || !"LOCAL_MOCK_ROUTE".equals(route.getProvider()) || !StringUtils.hasText(route.getVersion())) {
+            throw new BizErrorException(502, "本地mock路线快照不完整，暂时无法下单");
+        }
+        if (estimate == null || estimate.getRuleId() == null || estimate.getEstimatedAmount() == null
+                || !StringUtils.hasText(estimate.getFareRuleSnapshot())
+                || !StringUtils.hasText(estimate.getFareCalculationVersion())) {
+            throw new BizErrorException(502, "计价规则快照不完整，暂时无法下单");
+        }
     }
 
     /**
@@ -254,7 +273,7 @@ public class PassengerOrderService {
         NearestDriverResult nearest = searchNearestDriver(body);
         Long companyId = nearest == null ? null : nearest.getCompanyId();
         EstimateFareResult estimate = estimate(body, route, companyId);
-        CreateOrderResult created = createOrder(body, estimate, idempotencyKey);
+        CreateOrderResult created = createOrder(body, route, estimate, idempotencyKey);
         String orderNo = created == null ? null : created.getOrderNo();
         if (orderNo == null || orderNo.isBlank()) {
             throw new BizErrorException(502, "订单创建失败：orderNo为空");
