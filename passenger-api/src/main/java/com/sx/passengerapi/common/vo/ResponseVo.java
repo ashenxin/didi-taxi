@@ -11,6 +11,7 @@ import java.io.Serializable;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ResponseVo<T> implements Serializable {
     private Integer code;
+    private String error;
     private String msg;
     private T data;
 
@@ -45,6 +46,14 @@ public class ResponseVo<T> implements Serializable {
         this.code = code;
     }
 
+    public String getError() {
+        return error;
+    }
+
+    public void setError(String error) {
+        this.error = error;
+    }
+
     public String getMsg() {
         return msg;
     }
@@ -61,4 +70,3 @@ public class ResponseVo<T> implements Serializable {
         this.data = data;
     }
 }
-

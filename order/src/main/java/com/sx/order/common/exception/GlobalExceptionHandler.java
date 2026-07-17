@@ -58,6 +58,13 @@ public class GlobalExceptionHandler {
         return ResultUtil.error(ExceptionCode.CONFLICT.getValue(), e.getMessage());
     }
 
+    @ExceptionHandler(UnsettledOrderException.class)
+    public ResponseVo<?> unsettledOrderExceptionHandler(UnsettledOrderException e) {
+        log.warn("未结清订单阻止下单：{}", e.getMessage());
+        return ResultUtil.error(ExceptionCode.CONFLICT.getValue(), "UNSETTLED_ORDER",
+                e.getMessage(), e.getResult());
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseVo<?> illegalArgumentExceptionHandler(IllegalArgumentException e) {
         log.warn("非法参数：{}", e.getMessage());

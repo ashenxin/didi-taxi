@@ -12,6 +12,10 @@ public class ResultUtil {
         return new ResponseVo<>(errorCode, msg, null);
     }
 
+    public static <T> ResponseVo<T> error(Integer errorCode, String error, String msg, T data) {
+        return new ResponseVo<>(errorCode, error, msg, data);
+    }
+
     public static <T> ResponseVo<T> requestError(String msg) {
         return error(ExceptionCode.BAD_REQUEST.getValue(), msg);
     }

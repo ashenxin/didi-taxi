@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 class PassengerOrderServiceAsyncCreateTest {
@@ -43,6 +44,7 @@ class PassengerOrderServiceAsyncCreateTest {
 
     @Test
     void createAndAssignOnlyCreatesOrderAndLeavesDispatchToAsyncOutbox() {
+        when(orderClient.blockingOrder(10001L, "idem-async-1")).thenReturn(ResponseVo.success(null));
         RouteResponse route = new RouteResponse();
         route.setDistanceMeters(12_000L);
         route.setDurationSeconds(1_500L);
@@ -88,6 +90,7 @@ class PassengerOrderServiceAsyncCreateTest {
 
     @Test
     void missingCoordinatesAreRejectedWithoutExternalGeocoding() {
+        when(orderClient.blockingOrder(10001L, "idem-no-coordinates")).thenReturn(ResponseVo.success(null));
         CreateAndAssignOrderBody body = body();
         body.getDest().setLat(null);
         body.getDest().setLng(null);
@@ -98,6 +101,40 @@ class PassengerOrderServiceAsyncCreateTest {
                 .hasMessageContaining("经纬度");
 
         verify(mapClient, never()).drivingRoute(any());
+    }
+
+    @Test
+    void lostSuccessResponseCanRetryWithSameKeyAndRecoverOriginalOrder() {
+        String key = "lost-response-key";
+        when(orderClient.blockingOrder(10001L, key)).thenReturn(ResponseVo.success(null));
+        RouteResponse route = new RouteResponse();
+        route.setDistanceMeters(12_000L);
+        route.setDurationSeconds(1_500L);
+        route.setProvider("LOCAL_MOCK_ROUTE");
+        route.setVersion("mock-route-v1");
+        when(mapClient.drivingRoute(any())).thenReturn(ResponseVo.success(route));
+        NearestDriverResult nearest = new NearestDriverResult();
+        nearest.setCompanyId(9L);
+        when(capacityDispatchClient.nearestDriver(anyString(), anyString(), anyDouble(), anyDouble(), anyLong()))
+                .thenReturn(ResponseVo.success(nearest));
+        EstimateFareResult estimate = new EstimateFareResult();
+        estimate.setRuleId(7L);
+        estimate.setEstimatedAmount(new BigDecimal("35.00"));
+        estimate.setFareRuleSnapshot("{\"baseFare\":12.00}");
+        estimate.setFareCalculationVersion("fare-v1");
+        when(calculateClient.estimate(any())).thenReturn(ResponseVo.success(estimate));
+        CreateOrderResult created = new CreateOrderResult();
+        created.setOrderNo("O-ORIGINAL");
+        when(orderClient.create(anyString(), any())).thenReturn(ResponseVo.success(created));
+
+        var first = service.createTwoPhase(body(), key);
+        var replay = service.createTwoPhase(body(), key);
+
+        assertThat(first.getOrderNo()).isEqualTo("O-ORIGINAL");
+        assertThat(replay.getOrderNo()).isEqualTo("O-ORIGINAL");
+        verify(orderClient, times(2)).blockingOrder(10001L, key);
+        verify(orderClient, times(2)).create(org.mockito.ArgumentMatchers.eq(key),
+                org.mockito.ArgumentMatchers.any());
     }
 
     private static CreateAndAssignOrderBody body() {

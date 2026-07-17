@@ -10,6 +10,7 @@ import com.sx.passengerapi.model.ordercore.OrderEventRow;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
 import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
+import com.sx.passengerapi.model.ordercore.BlockingOrderResult;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -53,4 +54,9 @@ public interface OrderClient {
 
     @GetMapping("/api/v1/orders/internal/settlements/unsettled-exists")
     ResponseVo<UnsettledOrderCheckResult> unsettledExists(@RequestParam("passengerId") Long passengerId);
+
+    @GetMapping("/api/v1/orders/internal/settlements/blocking-order")
+    ResponseVo<BlockingOrderResult> blockingOrder(
+            @RequestParam("passengerId") Long passengerId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey);
 }

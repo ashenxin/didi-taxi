@@ -33,6 +33,7 @@ import com.sx.passengerapi.model.ordercore.OrderEventRow;
 import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.capacity.PendingOrderIndexBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
+import com.sx.passengerapi.model.ordercore.BlockingOrderResult;
 import com.sx.passengerapi.ws.PassengerWsNotifyService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -268,6 +269,7 @@ public class PassengerOrderService {
      * 不做同步指派与打开确认窗口。
      */
     public CreateOrderResultV1 createTwoPhase(CreateAndAssignOrderBody body, String idempotencyKey) {
+        precheckBlockingOrder(body.getPassengerId(), idempotencyKey);
         resolveCoordinatesByGeocodeIfNeeded(body);
         RouteResponse route = route(body);
         NearestDriverResult nearest = searchNearestDriver(body);
@@ -291,6 +293,32 @@ public class PassengerOrderService {
             passengerWsNotifyService.notifyOrderChanged(pid, orderNo);
         }
         return out;
+    }
+
+    private void precheckBlockingOrder(Long passengerId, String idempotencyKey) {
+        if (passengerId == null) {
+            throw new BizErrorException(400, "passengerId不能为空");
+        }
+        final com.sx.passengerapi.common.vo.ResponseVo<BlockingOrderResult> response;
+        try {
+            response = orderClient.blockingOrder(passengerId, idempotencyKey);
+        } catch (RuntimeException ex) {
+            log.warn("下单前查询未结清订单失败 passengerId={}", passengerId, ex);
+            throw new BizErrorException(502, "暂时无法确认上一笔订单状态，请稍后重试");
+        }
+        if (response == null || response.getCode() == null || response.getCode() != 200) {
+            throw new BizErrorException(502, "暂时无法确认上一笔订单状态，请稍后重试");
+        }
+        BlockingOrderResult blocking = response.getData();
+        if (blocking == null) {
+            return;
+        }
+        String message = switch (blocking.getAction() == null ? "WAIT" : blocking.getAction()) {
+            case "GO_TO_PAYMENT" -> "您有一笔待支付订单，请结清后再叫车";
+            case "CONTACT_OPERATIONS" -> "上一笔订单结算异常，请联系运营处理";
+            default -> "您有一笔订单正在处理，请稍后再叫车";
+        };
+        throw new BizErrorException(409, message);
     }
 
     /**

@@ -7,13 +7,16 @@ import com.sx.order.dao.TripOrderSettlementMapper;
 import com.sx.order.model.TripOrderSettlement;
 import com.sx.order.model.dto.SettlementUpsertRequest;
 import com.sx.order.model.dto.UnsettledOrderCheckResult;
+import com.sx.order.model.dto.BlockingOrderResult;
 import com.sx.order.service.SettlementAmountValidator;
+import com.sx.order.service.TripOrderWriteService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -25,11 +28,14 @@ import java.time.LocalDateTime;
 public class TripOrderSettlementController {
     private final TripOrderSettlementMapper settlementMapper;
     private final SettlementAmountValidator amountValidator;
+    private final TripOrderWriteService orderWriteService;
 
     public TripOrderSettlementController(TripOrderSettlementMapper settlementMapper,
-                                         SettlementAmountValidator amountValidator) {
+                                         SettlementAmountValidator amountValidator,
+                                         TripOrderWriteService orderWriteService) {
         this.settlementMapper = settlementMapper;
         this.amountValidator = amountValidator;
+        this.orderWriteService = orderWriteService;
     }
 
     @PostMapping
@@ -97,14 +103,16 @@ public class TripOrderSettlementController {
         if (passengerId == null || passengerId <= 0) {
             return ResultUtil.error(400, "passengerId不能为空");
         }
-        Long count = settlementMapper.selectCount(Wrappers.<TripOrderSettlement>lambdaQuery()
-                .eq(TripOrderSettlement::getPassengerId, passengerId)
-                .apply("((COALESCE(payable_amount, 0) > 0 " +
-                        "AND (payment_status <> 2 OR paid_amount IS NULL OR paid_amount < payable_amount OR settlement_status <> 'PAID')) " +
-                        "OR (COALESCE(payable_amount, 0) = 0 AND settlement_status NOT IN ('PAID', 'CLOSED')))")
-                .last("LIMIT 1"));
+        Long count = settlementMapper.countPassengerUnsettledOrders(passengerId);
         long n = count == null ? 0L : count;
         return ResultUtil.success(new UnsettledOrderCheckResult(n > 0, n));
+    }
+
+    @GetMapping("/blocking-order")
+    public ResponseVo<BlockingOrderResult> blockingOrder(
+            @RequestParam("passengerId") Long passengerId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        return ResultUtil.success(orderWriteService.findBlockingOrder(passengerId, idempotencyKey));
     }
 
     private TripOrderSettlement getByOrderNo(String orderNo) {

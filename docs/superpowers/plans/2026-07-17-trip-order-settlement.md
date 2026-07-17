@@ -549,15 +549,15 @@ git commit -m "feat: finalize settlements from mock payment results"
 - Modify: `passenger-api/src/main/java/com/sx/passengerapi/service/PassengerOrderService.java`
 - Create: `passenger-api/src/test/java/com/sx/passengerapi/service/PassengerOrderUnsettledGateTest.java`
 
-- [ ] **Step 1: 写拦截状态矩阵测试**
+- [x] **Step 1: 写拦截状态矩阵测试**
 
 进行中、FINISHED+CALCULATING、PAY_CONFIRMING、PAYMENT_REQUIRED、FINISHED 无结算记录全部返回 409；PAID 与 CANCELLED 可下单。文案/action 根据状态分别为等待、联系运营、去支付。
 
-- [ ] **Step 2: 写并发创建测试**
+- [x] **Step 2: 写并发创建测试**
 
 两个不同 `Idempotency-Key` 并发创建，只允许一个插入 `blocks_new_order=1`；失败请求返回 `UNSETTLED_ORDER`，不能泄漏数据库唯一键异常。
 
-- [ ] **Step 3: 实现事务内权威检查**
+- [x] **Step 3: 实现事务内权威检查**
 
 预查询用于返回已有阻塞订单详情，唯一索引作为并发最终防线。捕获 `DuplicateKeyException` 后重新查询阻塞订单并抛结构化异常：
 
@@ -569,11 +569,11 @@ git commit -m "feat: finalize settlements from mock payment results"
 
 所有取消成功路径必须在同一事务把该订单的 `blocks_new_order` 从 `1` 置为 `NULL`；FINISHED 保持 `1` 直到结算 PAID。增加回归测试覆盖乘客取消、司机取消、派单超时系统取消。
 
-- [ ] **Step 4: BFF 增加友好预检查但保留 order 权威响应**
+- [x] **Step 4: BFF 增加友好预检查但保留 order 权威响应**
 
 BFF 下单前可以调用查询减少无效路线/估价请求；内部检查异常时失败关闭。即使预检查通过，仍必须原样映射 order 的 409。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 Run: `mvn -pl order,passenger-api -am test`
 

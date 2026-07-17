@@ -1,6 +1,7 @@
 package com.sx.order.service;
 
 import com.sx.order.common.exception.OrderConflictException;
+import com.sx.order.common.exception.UnsettledOrderException;
 import com.sx.order.common.util.OrderNoUtil;
 import com.sx.order.dao.OrderIdempotentRecordMapper;
 import com.sx.order.dao.OrderOutboxEventMapper;
@@ -19,6 +20,7 @@ import com.sx.order.model.dto.FinishOrderBody;
 import com.sx.order.model.dto.OpenDriverOfferBody;
 import com.sx.order.model.dto.AssignedAwaitingRescheduleDto;
 import com.sx.order.model.dto.PendingDispatchOrderDto;
+import com.sx.order.model.dto.BlockingOrderResult;
 import com.sx.order.notify.PassengerOrderChangedNotifier;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Propagation;
@@ -151,8 +153,7 @@ public class TripOrderWriteService {
     }
 
     private String createInternal(CreateOrderBody body) {
-        //查看是否有进行中的订单
-        assertNoActiveOrderForPassenger(body.getPassengerId());
+        assertNoUnsettledOrderForPassenger(body.getPassengerId());
 
         LocalDateTime now = LocalDateTime.now();
         String orderNo = OrderNoUtil.nextOrderNo();
@@ -184,7 +185,15 @@ public class TripOrderWriteService {
                 .setUpdatedAt(now)
                 .setIsDeleted(0);
 
-        tripOrderEntityMapper.insert(order);
+        try {
+            tripOrderEntityMapper.insert(order);
+        } catch (DuplicateKeyException ex) {
+            BlockingOrderResult blocking = findBlockingOrder(body.getPassengerId());
+            if (blocking != null) {
+                throw unsettled(blocking);
+            }
+            throw ex;
+        }
 
         OrderEvent event = new OrderEvent()
                 .setOrderId(order.getId())
@@ -343,17 +352,90 @@ public class TripOrderWriteService {
     /**
      * 进行中：除 {@link #STATUS_FINISHED}、{@link #STATUS_CANCELLED} 外均视为进行中（含 CREATED、派单、行程中等）。
      */
-    private void assertNoActiveOrderForPassenger(Long passengerId) {
+    private void assertNoUnsettledOrderForPassenger(Long passengerId) {
         if (passengerId == null) {
             throw new IllegalArgumentException("passengerId不能为空");
         }
-        Long cnt = tripOrderEntityMapper.selectCount(Wrappers.<TripOrder>lambdaQuery()
+        BlockingOrderResult blocking = findBlockingOrder(passengerId);
+        if (blocking != null) {
+            throw unsettled(blocking);
+        }
+    }
+
+    /** 返回唯一的权威阻塞订单；PAID/CANCELLED 的陈旧标记会被就地清除。 */
+    public BlockingOrderResult findBlockingOrder(Long passengerId) {
+        return findBlockingOrder(passengerId, null);
+    }
+
+    public BlockingOrderResult findBlockingOrder(Long passengerId, String idempotencyKey) {
+        if (passengerId == null) {
+            throw new IllegalArgumentException("passengerId不能为空");
+        }
+        TripOrder order = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
                 .eq(TripOrder::getPassengerId, passengerId)
                 .eq(TripOrder::getIsDeleted, 0)
-                .notIn(TripOrder::getStatus, STATUS_FINISHED, STATUS_CANCELLED));
-        if (cnt != null && cnt > 0) {
-            throw new OrderConflictException("您已有进行中的订单，请先完成或取消后再下单");
+                .eq(TripOrder::getBlocksNewOrder, 1)
+                .last("LIMIT 1 FOR UPDATE"));
+        if (order == null) {
+            return null;
         }
+        if (isSuccessfulReplayOfBlockingOrder(passengerId, idempotencyKey, order.getOrderNo())) {
+            return null;
+        }
+        if (Objects.equals(order.getStatus(), STATUS_CANCELLED)) {
+            clearBlockingFlag(order);
+            return null;
+        }
+        if (!Objects.equals(order.getStatus(), STATUS_FINISHED)) {
+            return new BlockingOrderResult(order.getOrderNo(), "IN_PROGRESS", "WAIT");
+        }
+        TripOrderSettlement settlement = tripOrderSettlementMapper.selectOne(
+                Wrappers.<TripOrderSettlement>lambdaQuery()
+                        .eq(TripOrderSettlement::getOrderNo, order.getOrderNo())
+                        .last("LIMIT 1"));
+        if (settlement == null) {
+            return new BlockingOrderResult(order.getOrderNo(), "MISSING", "CONTACT_OPERATIONS");
+        }
+        String status = settlement.getSettlementStatus();
+        if ("PAID".equals(status)) {
+            clearBlockingFlag(order);
+            return null;
+        }
+        if (Integer.valueOf(1).equals(settlement.getManualActionRequired())) {
+            return new BlockingOrderResult(order.getOrderNo(), status, "CONTACT_OPERATIONS");
+        }
+        String action = "PAYMENT_REQUIRED".equals(status) ? "GO_TO_PAYMENT" : "WAIT";
+        return new BlockingOrderResult(order.getOrderNo(), status, action);
+    }
+
+    private boolean isSuccessfulReplayOfBlockingOrder(Long passengerId, String idempotencyKey,
+                                                       String blockingOrderNo) {
+        if (!StringUtils.hasText(idempotencyKey)) {
+            return false;
+        }
+        OrderIdempotentRecord record = selectIdempotentRecord(idempotencyKey.trim());
+        return record != null
+                && IDEMPOTENT_ACTION_CREATE_ORDER.equals(record.getActionType())
+                && IDEMPOTENT_STATUS_SUCCESS.equals(record.getStatus())
+                && Objects.equals(passengerId, record.getPassengerId())
+                && Objects.equals(blockingOrderNo, record.getOrderNo());
+    }
+
+    private void clearBlockingFlag(TripOrder order) {
+        tripOrderEntityMapper.update(null, Wrappers.<TripOrder>lambdaUpdate()
+                .set(TripOrder::getBlocksNewOrder, null)
+                .set(TripOrder::getUpdatedAt, LocalDateTime.now())
+                .eq(TripOrder::getId, order.getId())
+                .eq(TripOrder::getBlocksNewOrder, 1));
+    }
+
+    private UnsettledOrderException unsettled(BlockingOrderResult result) {
+        String message = switch (result.action()) {
+            case "GO_TO_PAYMENT" -> "您有一笔待支付订单，请结清后再叫车";
+            case "CONTACT_OPERATIONS" -> "上一笔订单结算异常，请联系运营处理";
+            default -> "您有一笔订单正在处理，请稍后再叫车";
+        };
+        return new UnsettledOrderException(message, result);
     }
 
     /**
@@ -539,6 +621,7 @@ public class TripOrderWriteService {
                         .set(TripOrder::getCancelBy, CANCEL_BY_PASSENGER)
                         .set(TripOrder::getCancelReason, body.getCancelReason())
                         .set(TripOrder::getCancelledAt, now)
+                        .set(TripOrder::getBlocksNewOrder, null)
                         .set(TripOrder::getUpdatedAt, now)
                         .eq(TripOrder::getOrderNo, orderNo)
                         .eq(TripOrder::getIsDeleted, 0)
@@ -611,6 +694,7 @@ public class TripOrderWriteService {
                         .set(TripOrder::getCancelBy, CANCEL_BY_SYSTEM)
                         .set(TripOrder::getCancelReason, CANCEL_REASON_DISPATCH_TIMEOUT)
                         .set(TripOrder::getCancelledAt, now)
+                        .set(TripOrder::getBlocksNewOrder, null)
                         .set(TripOrder::getUpdatedAt, now)
                         .eq(TripOrder::getOrderNo, orderNo)
                         .eq(TripOrder::getIsDeleted, 0)
@@ -1124,6 +1208,7 @@ public class TripOrderWriteService {
                         .set(TripOrder::getCancelBy, CANCEL_BY_SYSTEM)
                         .set(TripOrder::getCancelReason, reason)
                         .set(TripOrder::getCancelledAt, now)
+                        .set(TripOrder::getBlocksNewOrder, null)
                         .set(TripOrder::getUpdatedAt, now)
                         .set(TripOrder::getOfferExpiresAt, null)
                         .eq(TripOrder::getOrderNo, orderNo)

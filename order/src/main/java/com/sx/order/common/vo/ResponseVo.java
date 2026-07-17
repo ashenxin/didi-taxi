@@ -6,6 +6,7 @@ import java.io.Serializable;
 
 public class ResponseVo<T> implements Serializable {
     private Integer code;
+    private String error;
     private String msg;
     private T data;
 
@@ -13,7 +14,12 @@ public class ResponseVo<T> implements Serializable {
     }
 
     public ResponseVo(Integer code, String msg, T data) {
+        this(code, null, msg, data);
+    }
+
+    public ResponseVo(Integer code, String error, String msg, T data) {
         this.code = code;
+        this.error = error;
         this.msg = msg;
         this.data = data;
     }
@@ -28,6 +34,14 @@ public class ResponseVo<T> implements Serializable {
 
     public void setCode(Integer code) {
         this.code = code;
+    }
+
+    public String getError() {
+        return error;
+    }
+
+    public void setError(String error) {
+        this.error = error;
     }
 
     public String getMsg() {

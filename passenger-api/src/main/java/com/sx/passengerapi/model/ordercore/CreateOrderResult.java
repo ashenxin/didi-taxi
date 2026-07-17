@@ -1,5 +1,8 @@
 package com.sx.passengerapi.model.ordercore;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class CreateOrderResult {
     private String orderNo;
 
@@ -11,4 +14,3 @@ public class CreateOrderResult {
         this.orderNo = orderNo;
     }
 }
-
