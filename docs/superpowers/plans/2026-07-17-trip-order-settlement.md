@@ -685,7 +685,7 @@ git commit -m "feat: surface settlement progress in passenger orders"
 - Test: `order/src/test/java/com/sx/order/integration/TripSettlementFlowIntegrationTest.java`
 - Test: `passenger-api/src/test/java/com/sx/passengerapi/integration/PassengerSettlementContractTest.java`
 
-- [ ] **Step 1: 写端到端服务级集成测试**
+- [x] **Step 1: 写端到端服务级集成测试**
 
 至少覆盖：
 
@@ -700,15 +700,15 @@ git commit -m "feat: surface settlement progress in passenger orders"
 9. 金额异常不创建支付尝试。
 10. 零元订单不调用钱包。
 
-- [ ] **Step 2: 编写 API 和本地联调手册**
+- [x] **Step 2: 编写 API 和本地联调手册**
 
 API 文档给出请求/响应、状态表、409 错误、Idempotency-Key 规则。runbook 给出 local profile 启动顺序、mock 配置、curl 闭环、如何选择收银台结果、如何查看 settlement/payment attempt；明确禁止在非允许环境开启 mock。
 
-- [ ] **Step 3: 更新设计状态但不混入分成实现**
+- [x] **Step 3: 更新设计状态但不混入分成实现**
 
 将设计文档状态改为“实施中”或全部完成后“已实现”，链接本计划和 API 文档。保留第 18 节分成专项，不创建固定金额/比例分成代码或表。
 
-- [ ] **Step 4: 执行完整验证**
+- [x] **Step 4: 执行完整验证**
 
 Run: `mvn test`
 
@@ -722,7 +722,7 @@ Run: `git status --short`
 
 Expected: 只包含本功能预期文件；`乘客司机端_完单结算方案讨论.md` 仍保持用户自己的未跟踪状态且不在 staged changes。
 
-- [ ] **Step 5: 提交文档和集成测试**
+- [x] **Step 5: 提交文档和集成测试**
 
 ```bash
 git add README.md docs order/src/test passenger-api/src/test

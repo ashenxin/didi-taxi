@@ -2,7 +2,9 @@
 
 > 日期：2026-07-17
 >
-> 状态：已完成产品讨论，待实施计划
+> 状态：已实现（MVP 本地 mock 闭环）
+>
+> 实施计划：[2026-07-17-trip-order-settlement.md](../plans/2026-07-17-trip-order-settlement.md)；接口文档：[trip-order-settlement-api.md](../../api/trip-order-settlement-api.md)
 >
 > 适用范围：乘客端、司机端、`order-service`、`calculate-service`、`wallet-service`、`map-service`、`passenger-api`、`driver-api`
 

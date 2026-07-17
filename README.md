@@ -183,3 +183,12 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 - `二期功能/车队营销优惠券_API.md`
 - `二期功能/车队营销优惠券_SQL.md`
 - `二期功能/车队营销优惠券规则_讨论稿.md`
+
+### 完单结算 MVP
+
+- `docs/superpowers/specs/2026-07-17-trip-order-settlement-design.md`
+- `docs/superpowers/plans/2026-07-17-trip-order-settlement.md`
+- `docs/api/trip-order-settlement-api.md`
+- `docs/testing/trip-order-settlement-mock-runbook.md`
+
+本期仅提供本地 mock 路线、计价时长和支付宝/微信支付闭环，不接外部地图或真实支付渠道，也不在支付失败后后台自动重扣。司机/车队固定金额与比例分成保留为后续独立专项。

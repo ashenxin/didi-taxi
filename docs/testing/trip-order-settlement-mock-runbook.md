@@ -1,0 +1,36 @@
+# 完单结算本地 mock 联调手册
+
+## 边界
+
+路线距离、预计时长和实际计费时长全部来自稳定本地 mock；不调用外部地图 API。支付宝/微信仅为逻辑渠道，收银台也为本地 mock。`wallet.mock-payment.enabled` 只允许在 `local/dev/test` 开启，禁止在其他环境绕过启动校验。
+
+## 启动顺序
+
+先准备项目既有 MySQL、Redis、Kafka、Nacos 和 XXL-Job，再依次启动 `map`、`calculate`、`capacity`、`wallet`、`order`、`passenger-api`。使用 local profile，并确认 order 的结算恢复任务和 wallet 的结果通知任务已注册。以下示例直连 passenger-api 的 `8100`；若经 gateway 联调，还需启动 `gateway` 并改用 `18080`。
+
+## 闭环
+
+1. 用乘客接口下单，必须提交起终点经纬度；记录 `orderNo`。
+2. 按既有司机状态机接单、到达、开始、完单。完单后订单立即为 `FINISHED`，结算为 `CALCULATING`。
+3. 查询：
+
+```bash
+curl -H 'X-User-Id: 10001' \
+  http://127.0.0.1:8100/app/api/v1/orders/ORDER_NO/settlement
+```
+
+4. 若为 `PAYMENT_REQUIRED`，创建主动支付：
+
+```bash
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'X-User-Id: 10001' \
+  -H 'Idempotency-Key: manual-ORDER_NO-1' \
+  -d '{"channel":"WECHAT"}' \
+  http://127.0.0.1:8100/app/api/v1/orders/ORDER_NO/payments
+```
+
+5. 打开返回的 mock `checkoutUrl`，选择成功、失败、取消或待确认。待确认只允许继续确认原支付；失败/取消后可换渠道并使用新 key。
+6. 重新 GET settlement，并检查 `trip_order_settlement` 的最终账单和 `wallet_payment_order` 的每次尝试。优惠券在支付失败时仍保持锁定；不存在后台自动重扣。
+
+异常金额、token 过期、重复成功、通知失败均应保留审计记录。状态长时间不收敛时联系运营，不得直接手工伪造 `PAID`。
