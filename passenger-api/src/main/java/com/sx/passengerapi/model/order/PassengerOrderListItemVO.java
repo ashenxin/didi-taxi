@@ -20,6 +20,7 @@ public class PassengerOrderListItemVO {
     private String cancelReason;
     private Boolean reDispatching;
     private List<PassengerOrderActionVO> actions;
+    private PassengerSettlementSummaryVO settlement;
 
     public String getOrderNo() {
         return orderNo;
@@ -116,4 +117,7 @@ public class PassengerOrderListItemVO {
     public void setActions(List<PassengerOrderActionVO> actions) {
         this.actions = actions;
     }
+
+    public PassengerSettlementSummaryVO getSettlement() { return settlement; }
+    public void setSettlement(PassengerSettlementSummaryVO settlement) { this.settlement = settlement; }
 }

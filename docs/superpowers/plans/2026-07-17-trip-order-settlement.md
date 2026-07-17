@@ -649,19 +649,19 @@ git commit -m "feat: expose settlement query and manual payment APIs"
 - Modify: `order/src/main/java/com/sx/order/service/TripOrderSettlementService.java`
 - Test: `order/src/test/java/com/sx/order/service/SettlementNotificationTest.java`
 
-- [ ] **Step 1: 写三段式展示测试**
+- [x] **Step 1: 写三段式展示测试**
 
 FINISHED 首页/详情行程状态始终显示“行程已结束”；订单列表额外显示 `CALCULATING/PAY_CONFIRMING/PAYMENT_REQUIRED/PAID` 摘要。仅 PAYMENT_REQUIRED 出现支付动作，PAID 展示账单查看动作。
 
-- [ ] **Step 2: 写通用通知测试**
+- [x] **Step 2: 写通用通知测试**
 
 结算进入 CALCULATING、PAYMENT_REQUIRED、PAID 时写/发送通用 `ORDER_CHANGED`；消息不携带权威金额，客户端收到后重新 GET settlement。
 
-- [ ] **Step 3: 实现批量摘要聚合**
+- [x] **Step 3: 实现批量摘要聚合**
 
 order-service 提供按当前分页 orderNo 批量查询结算摘要的内部接口，避免 BFF 对订单列表逐单 N+1 查询。缺失 settlement 的 FINISHED 订单摘要按 CALCULATING/需运营处理展示。
 
-- [ ] **Step 4: 运行测试并提交**
+- [x] **Step 4: 运行测试并提交**
 
 Run: `mvn -pl order,passenger-api -am test`
 

@@ -174,6 +174,10 @@ class TripOrderSettlementServiceTest {
         assertThat(settlement.getPaidAmount()).isZero();
         assertThat(order(order.getOrderNo()).getFinalAmount()).isEqualByComparingTo("30.01");
         assertThat(order(order.getOrderNo()).getBlocksNewOrder()).isNull();
+        OrderOutboxEvent changed = outboxMapper.selectOne(Wrappers.<OrderOutboxEvent>lambdaQuery()
+                .eq(OrderOutboxEvent::getTopic, "order.changed.v1"));
+        assertThat(changed.getPayload()).contains("\"eventType\":\"ORDER_CHANGED\"")
+                .doesNotContain("amount");
         verify(calculateClient, times(1)).useCoupon(any());
     }
 
@@ -225,6 +229,10 @@ class TripOrderSettlementServiceTest {
         service.process(order.getOrderNo());
 
         assertThat(settlement(order.getOrderNo()).getSettlementStatus()).isEqualTo("PAYMENT_REQUIRED");
+        OrderOutboxEvent changed = outboxMapper.selectOne(Wrappers.<OrderOutboxEvent>lambdaQuery()
+                .eq(OrderOutboxEvent::getTopic, "order.changed.v1"));
+        assertThat(changed.getPayload()).contains("\"eventType\":\"ORDER_CHANGED\"")
+                .doesNotContain("amount");
         verify(calculateClient, never()).releaseCoupon(any());
         verify(calculateClient, never()).useCoupon(any());
     }

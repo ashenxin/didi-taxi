@@ -14,6 +14,7 @@ import com.sx.passengerapi.model.ordercore.BlockingOrderResult;
 import com.sx.passengerapi.model.settlement.ManualPaymentCommand;
 import com.sx.passengerapi.model.settlement.OrderSettlementRow;
 import com.sx.passengerapi.model.settlement.PaymentAttemptRow;
+import com.sx.passengerapi.model.ordercore.SettlementSummaryRow;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -74,4 +75,7 @@ public interface OrderClient {
             @RequestParam("passengerId") Long passengerId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody ManualPaymentCommand command);
+
+    @PostMapping("/api/v1/orders/internal/settlements/batch-query")
+    ResponseVo<List<SettlementSummaryRow>> settlementSummaries(@RequestBody List<String> orderNos);
 }

@@ -79,7 +79,12 @@ class TripOrderFinishSettlementTest {
                 .eq(OrderOutboxEvent::getTopic, "order.settlement.requested.v1"));
         assertThat(outbox.getEventType()).isEqualTo("ORDER_FINISHED_NEED_SETTLEMENT");
         assertThat(outbox.getAggregateId()).isEqualTo("T202607170001");
-        assertThat(outboxMapper.selectCount(null)).isEqualTo(1);
+        OrderOutboxEvent changed = outboxMapper.selectOne(Wrappers.<OrderOutboxEvent>lambdaQuery()
+                .eq(OrderOutboxEvent::getTopic, "order.changed.v1"));
+        assertThat(changed.getEventType()).isEqualTo("ORDER_CHANGED");
+        assertThat(changed.getPayload()).contains("\"eventType\":\"ORDER_CHANGED\"")
+                .doesNotContain("amount");
+        assertThat(outboxMapper.selectCount(null)).isEqualTo(2);
     }
 
     @Test

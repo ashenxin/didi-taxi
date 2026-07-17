@@ -10,6 +10,7 @@ import com.sx.passengerapi.model.order.PassengerOrderListType;
 import com.sx.passengerapi.model.order.PassengerOrderPageVO;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
+import com.sx.passengerapi.model.ordercore.SettlementSummaryRow;
 import com.sx.passengerapi.ws.PassengerWsNotifyService;
 import org.junit.jupiter.api.Test;
 
@@ -21,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.anyList;
 
 class PassengerOrderServiceMyOrdersTest {
 
@@ -95,6 +98,30 @@ class PassengerOrderServiceMyOrdersTest {
         assertThat(page.getTotal()).isEqualTo(1);
         assertThat(page.getList()).extracting("orderNo").containsExactly("O-2");
         assertThat(page.getList().get(0).getStatus()).isEqualTo(OrderStatus.CANCELLED);
+    }
+
+    @Test
+    void finishedOrdersKeepTripFinishedAndUseOneBatchSettlementSummaryQuery() {
+        when(orderClient.pageOrders(eq(10001L), eq(1), eq(100))).thenReturn(ResponseVo.success(pageData(
+                2, row("O-PAY", 5, "2026-06-30T10:00:00"),
+                row("O-PAID", 5, "2026-06-30T09:00:00"))));
+        when(orderClient.settlementSummaries(anyList())).thenReturn(ResponseVo.success(List.of(
+                new SettlementSummaryRow("O-PAY", "PAYMENT_REQUIRED", new BigDecimal("30.00"),
+                        new BigDecimal("25.00"), null),
+                new SettlementSummaryRow("O-PAID", "PAID", new BigDecimal("30.00"),
+                        new BigDecimal("25.00"), new BigDecimal("25.00")))));
+
+        PassengerOrderPageVO page = service.listMyOrders(10001L, PassengerOrderListType.ALL, 1, 10);
+
+        assertThat(page.getList()).extracting("status")
+                .containsExactly(OrderStatus.FINISHED, OrderStatus.FINISHED);
+        assertThat(page.getList()).extracting(item -> item.getSettlement().getSettlementStatus())
+                .containsExactly("PAYMENT_REQUIRED", "PAID");
+        assertThat(page.getList().get(0).getSettlement().getActions()).extracting("code")
+                .containsExactly("PAY_NOW");
+        assertThat(page.getList().get(1).getSettlement().getActions()).extracting("code")
+                .containsExactly("VIEW_BILL");
+        verify(orderClient).settlementSummaries(List.of("O-PAY", "O-PAID"));
     }
 
     private static OrderPageData pageData(int total, TripOrderRow... rows) {

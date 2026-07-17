@@ -28,6 +28,7 @@ public class PassengerOrderDetailVO {
     private Integer cancelBy;
     /** 取消原因（系统取消待派单超时时为固定文案） */
     private String cancelReason;
+    private PassengerSettlementSummaryVO settlement;
 
     public String getOrderNo() {
         return orderNo;
@@ -140,4 +141,7 @@ public class PassengerOrderDetailVO {
     public void setCancelReason(String cancelReason) {
         this.cancelReason = cancelReason;
     }
+
+    public PassengerSettlementSummaryVO getSettlement() { return settlement; }
+    public void setSettlement(PassengerSettlementSummaryVO settlement) { this.settlement = settlement; }
 }

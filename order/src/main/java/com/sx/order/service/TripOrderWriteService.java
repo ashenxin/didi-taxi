@@ -1357,7 +1357,31 @@ public class TripOrderWriteService {
 
         insertDriverEvent(orderNo, driverId, "ORDER_FINISHED", STATUS_STARTED, STATUS_FINISHED, now);
         insertSettlementRequestedOutbox(orderNo, now);
+        insertOrderChangedOutbox(orderNo, existing.getPassengerId(), now);
         log.info("订单已完单，结算任务已登记 orderNo={} driverId={}", orderNo, driverId);
+    }
+
+    private void insertOrderChangedOutbox(String orderNo, Long passengerId, LocalDateTime now) {
+        OrderOutboxEvent outbox = new OrderOutboxEvent()
+                .setTopic("order.changed.v1").setEventType("ORDER_CHANGED")
+                .setAggregateId(orderNo).setPayload("{}").setStatus("PENDING")
+                .setRetryCount(0).setNextRetryAt(now).setCreatedAt(now).setUpdatedAt(now);
+        orderOutboxEventMapper.insert(outbox);
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("schemaVersion", "1.0");
+            payload.put("eventId", String.valueOf(outbox.getId()));
+            payload.put("eventType", "ORDER_CHANGED");
+            payload.put("orderNo", orderNo);
+            payload.put("passengerId", passengerId);
+            payload.put("occurredAt", now.toString());
+            outbox.setPayload(objectMapper.writeValueAsString(payload));
+            if (orderOutboxEventMapper.updateById(outbox) != 1) {
+                throw new IllegalStateException("订单变化事件payload回写失败");
+            }
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("订单变化事件序列化失败", ex);
+        }
     }
 
     private void insertSettlementRequestedOutbox(String orderNo, LocalDateTime now) {

@@ -24,6 +24,7 @@ import com.sx.passengerapi.model.order.PassengerOrderListType;
 import com.sx.passengerapi.model.order.PassengerOrderPageVO;
 import com.sx.passengerapi.model.auth.PassengerLogoutResult;
 import com.sx.passengerapi.model.order.PassengerOrderTimestamps;
+import com.sx.passengerapi.model.order.PassengerSettlementSummaryVO;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
 import com.sx.passengerapi.model.ordercore.AssignOrderBody;
 import com.sx.passengerapi.model.ordercore.CancelOrderBody;
@@ -34,6 +35,7 @@ import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.capacity.PendingOrderIndexBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import com.sx.passengerapi.model.ordercore.BlockingOrderResult;
+import com.sx.passengerapi.model.ordercore.SettlementSummaryRow;
 import com.sx.passengerapi.ws.PassengerWsNotifyService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -44,7 +46,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -344,6 +349,9 @@ public class PassengerOrderService {
         }
         PassengerOrderDetailVO vo = toDetailVO(row);
         vo.setReDispatching(isRedispatching(orderNo, row.getStatus()));
+        if (Objects.equals(row.getStatus(), 5)) {
+            vo.setSettlement(toSettlementSummary(loadSettlementSummaries(List.of(orderNo)).get(orderNo), true));
+        }
         return vo;
     }
 
@@ -369,9 +377,13 @@ public class PassengerOrderService {
 
         int from = Math.max(0, (current - 1) * size);
         int to = Math.min(filteredRows.size(), from + size);
-        List<PassengerOrderListItemVO> list = from >= filteredRows.size()
-                ? List.of()
-                : filteredRows.subList(from, to).stream().map(this::toListItemVO).toList();
+        List<TripOrderRow> pageRows = from >= filteredRows.size()
+                ? List.of() : filteredRows.subList(from, to);
+        Map<String, SettlementSummaryRow> summaries = loadSettlementSummaries(pageRows.stream()
+                .filter(row -> Objects.equals(row.getStatus(), 5))
+                .map(TripOrderRow::getOrderNo).toList());
+        List<PassengerOrderListItemVO> list = pageRows.stream()
+                .map(row -> toListItemVO(row, summaries.get(row.getOrderNo()))).toList();
 
         PassengerOrderPageVO out = new PassengerOrderPageVO();
         out.setList(list);
@@ -500,7 +512,7 @@ public class PassengerOrderService {
         return rows;
     }
 
-    private PassengerOrderListItemVO toListItemVO(TripOrderRow row) {
+    private PassengerOrderListItemVO toListItemVO(TripOrderRow row, SettlementSummaryRow summary) {
         PassengerOrderListItemVO vo = new PassengerOrderListItemVO();
         vo.setOrderNo(row.getOrderNo());
         vo.setOriginAddress(row.getOriginAddress());
@@ -528,7 +540,61 @@ public class PassengerOrderService {
         vo.setCancelReason(row.getCancelReason());
         vo.setReDispatching(isRedispatching(row.getOrderNo(), row.getStatus()));
         vo.setActions(defaultActions());
+        if (Objects.equals(row.getStatus(), 5)) {
+            vo.setSettlement(toSettlementSummary(summary, true));
+        }
         return vo;
+    }
+
+    private Map<String, SettlementSummaryRow> loadSettlementSummaries(List<String> orderNos) {
+        if (orderNos.isEmpty()) return Map.of();
+        try {
+            var response = orderClient.settlementSummaries(orderNos);
+            if (response == null || response.getCode() == null || response.getCode() != 200
+                    || response.getData() == null) return Map.of();
+            return response.getData().stream().collect(Collectors.toMap(
+                    SettlementSummaryRow::orderNo, Function.identity(), (left, right) -> left));
+        } catch (Exception ex) {
+            log.warn("批量查询结算摘要失败 orderNos={} err={}", orderNos, ex.toString());
+            return Map.of();
+        }
+    }
+
+    private static PassengerSettlementSummaryVO toSettlementSummary(SettlementSummaryRow row,
+                                                                      boolean finishedOrder) {
+        if (!finishedOrder) return null;
+        PassengerSettlementSummaryVO vo = new PassengerSettlementSummaryVO();
+        String status = row == null || row.settlementStatus() == null
+                ? "CALCULATING" : row.settlementStatus();
+        vo.setSettlementStatus(status);
+        switch (status) {
+            case "PAYMENT_REQUIRED" -> {
+                vo.setMessage("待支付");
+                vo.setActions(List.of(action("PAY_NOW", "去支付")));
+            }
+            case "PAID", "CLOSED" -> {
+                vo.setMessage("已支付");
+                vo.setActions(List.of(action("VIEW_BILL", "查看账单")));
+            }
+            case "PAY_CONFIRMING" -> {
+                vo.setMessage("支付确认中，请稍后刷新");
+                vo.setActions(List.of());
+            }
+            default -> {
+                vo.setMessage(row == null ? "正在结算，如长时间未完成请联系运营" : "正在结算");
+                vo.setActions(List.of());
+            }
+        }
+        return vo;
+    }
+
+    private static PassengerOrderActionVO action(String code, String label) {
+        PassengerOrderActionVO action = new PassengerOrderActionVO();
+        action.setCode(code);
+        action.setLabel(label);
+        action.setDisabled(Boolean.FALSE);
+        action.setImplemented(Boolean.TRUE);
+        return action;
     }
 
     private static List<PassengerOrderActionVO> defaultActions() {

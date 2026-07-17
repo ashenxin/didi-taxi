@@ -10,6 +10,7 @@ import com.sx.order.model.dto.UnsettledOrderCheckResult;
 import com.sx.order.model.dto.BlockingOrderResult;
 import com.sx.order.model.dto.ManualPaymentCommand;
 import com.sx.order.model.dto.PaymentAttemptResult;
+import com.sx.order.model.dto.SettlementSummaryResult;
 import com.sx.order.service.SettlementAmountValidator;
 import com.sx.order.service.TripOrderWriteService;
 import com.sx.order.service.TripOrderSettlementService;
@@ -25,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/orders/internal/settlements")
@@ -136,6 +138,11 @@ public class TripOrderSettlementController {
             @RequestBody ManualPaymentCommand command) {
         return ResultUtil.success(settlementService.createManualPayment(
                 orderNo, passengerId, idempotencyKey, command));
+    }
+
+    @PostMapping("/batch-query")
+    public ResponseVo<List<SettlementSummaryResult>> batchQuery(@RequestBody List<String> orderNos) {
+        return ResultUtil.success(settlementService.getSettlementSummaries(orderNos));
     }
 
     private TripOrderSettlement getByOrderNo(String orderNo) {

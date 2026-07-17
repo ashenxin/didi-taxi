@@ -20,6 +20,7 @@ import com.sx.order.model.dto.PaymentAttemptRequest;
 import com.sx.order.model.dto.PaymentAttemptResult;
 import com.sx.order.model.dto.PaymentResultNotification;
 import com.sx.order.model.dto.ManualPaymentCommand;
+import com.sx.order.model.dto.SettlementSummaryResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +31,7 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.List;
 import java.util.Objects;
 
 @Service
@@ -223,6 +225,17 @@ public class TripOrderSettlementService {
         return settlement;
     }
 
+    public List<SettlementSummaryResult> getSettlementSummaries(List<String> orderNos) {
+        if (orderNos == null || orderNos.isEmpty()) {
+            return List.of();
+        }
+        return settlementMapper.selectList(Wrappers.<TripOrderSettlement>lambdaQuery()
+                        .in(TripOrderSettlement::getOrderNo, orderNos)).stream()
+                .map(row -> new SettlementSummaryResult(row.getOrderNo(), row.getSettlementStatus(),
+                        row.getFinalAmount(), row.getPayableAmount(), row.getPaidAmount()))
+                .toList();
+    }
+
     @Transactional
     public PaymentAttemptResult createManualPayment(String orderNo, Long passengerId,
                                                     String idempotencyKey,
@@ -395,6 +408,9 @@ public class TripOrderSettlementService {
                 return "STALE_PAYMENT_RESULT";
             }
             return latest == null ? "SETTLEMENT_NOT_FOUND" : latest.getSettlementStatus();
+        }
+        if (!"PAYMENT_REQUIRED".equals(settlement.getSettlementStatus())) {
+            insertOrderChangedOutbox(settlement, LocalDateTime.now());
         }
         return "PAYMENT_REQUIRED";
     }
@@ -594,6 +610,7 @@ public class TripOrderSettlementService {
         if (unblocked != 1) {
             throw new IllegalStateException("零元订单解除下单阻塞失败，结算事务已回滚 orderNo=" + order.getOrderNo());
         }
+        insertOrderChangedOutbox(settlement, now);
     }
 
     private boolean releaseCouponCompensation(TripOrder order, CouponLockResult coupon) {
