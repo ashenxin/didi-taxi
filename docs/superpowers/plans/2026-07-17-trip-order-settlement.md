@@ -299,17 +299,17 @@ git commit -m "feat: enqueue settlement atomically when trip finishes"
 - Modify: `order/src/main/resources/application.yml`
 - Modify: `order/pom.xml`
 
-- [ ] **Step 1: 写 mock 指标冻结和消息重放测试**
+- [x] **Step 1: 写 mock 指标冻结和消息重放测试**
 
 断言相同订单首次生成 `mockActualDurationSeconds` 后，配置变化、重复消息和 `startedAt/finishedAt` 变化都读取原值；缺少规划距离、规则快照或版本时保持 `CALCULATING`，写失败码并且不调用 calculate/wallet。
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `mvn -pl order -Dtest=TripOrderSettlementServiceTest test`
 
 Expected: FAIL，编排服务与提供器尚不存在。
 
-- [ ] **Step 3: 实现稳定的实际时长提供器**
+- [x] **Step 3: 实现稳定的实际时长提供器**
 
 默认配置令实际时长等于规划时长；测试配置允许基于订单号的确定性偏移。首次生成使用 CAS：
 
@@ -321,15 +321,15 @@ WHERE order_no=? AND mock_actual_duration_seconds IS NULL
 
 更新失败后重新读取，绝不再次覆盖。
 
-- [ ] **Step 4: 实现监听器与阶段化幂等入口**
+- [x] **Step 4: 实现监听器与阶段化幂等入口**
 
 `@KafkaListener(topics="order.settlement.requested.v1", groupId="order-settlement-v1")` 只解析 `orderNo` 并调用 `settlementService.process(orderNo)`。业务阶段按已落库快照判断：已有金额不重复计价/锁券，已有支付尝试不重复发起，`PAID` 直接返回。
 
 内部客户端使用 Spring `RestClient`，只接受 `ResponseVo.code == 200`；连接/读取超时配置化。不要让 controller 直接操作 mapper，旧 upsert/payment 接口改为调用 service 或移除无调用入口。
 
-- [ ] **Step 5: 配置 Kafka 测试隔离并提交**
+- [x] **Step 5: 配置 Kafka 测试隔离并提交**
 
-测试 profile 禁止实际 listener 自动启动；单元测试直接调用 listener/service。增加 `SettlementRecoveryJob` 只扫描长期 `CALCULATING` 和 `PAY_CONFIRMING`：前者重新推进未完成业务阶段，后者只向 wallet 查询当前 `paymentNo` 的原交易并消费结果，绝不创建新支付尝试；测试断言 `PAYMENT_REQUIRED/FAILED/CANCELLED` 不在扫描范围。
+测试 profile 禁止实际 listener 自动启动；单元测试直接调用 listener/service。增加 `SettlementRecoveryJob`：本任务先扫描长期 `CALCULATING` 并重新推进未完成阶段；Task 9 在支付结果模型接通后扩展为扫描 `PAY_CONFIRMING`、只向 wallet 查询当前 `paymentNo` 的原交易并消费结果，绝不创建新支付尝试。测试断言 `PAYMENT_REQUIRED/FAILED/CANCELLED` 不在自动重扣范围。
 
 Run: `mvn -pl order test`
 

@@ -13,6 +13,10 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
 
+order:
+  settlement:
+    listener-enabled: false
+
 # 单测不启动 xxl 执行器
 xxl:
   job:
