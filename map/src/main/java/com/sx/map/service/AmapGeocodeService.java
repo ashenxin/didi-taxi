@@ -153,7 +153,8 @@ public class AmapGeocodeService {
         try {
             return objectMapper.readTree(raw);
         } catch (Exception e) {
-            log.error("高德接口 JSON 解析失败 uri={}", uri, e);
+            // URI query 中包含高德 key 和查询参数，日志只记录固定接口路径。
+            log.error("高德接口 JSON 解析失败 path={}", uri.getPath(), e);
             throw new AmapApiException("解析高德响应失败: " + e.getMessage());
         }
     }

@@ -231,19 +231,19 @@ flowchart TD
   F --> G[可参与匹配]
 ```
 
-### 8.3 乘客 createAndAssign
+### 8.3 乘客一步下单与异步派单
 
 ```mermaid
 flowchart TD
-  P1[立即下单] --> P2[DB 创建 CREATED]
-  P2 --> P3[起点查司机池 距离过滤 3km 内]
+  P1[立即下单] --> P2[DB 创建 CREATED 并写 Outbox]
+  P2 --> P3[Kafka 触发 capacity 查司机池 距离过滤 3km 内]
   P3 --> P4{有可用司机}
-  P4 -->|否| P5[返回 CREATED 待派单]
+  P4 -->|否| P5[订单保持 CREATED 待迟滞匹配]
   P4 -->|是| P6[DB assign 与 openOffer]
   P6 --> P7{指派成功}
   P7 -->|否| P8[换候选或失败]
-  P7 -->|是| P9[订单池 SADD]
-  P9 --> P10[返回完整信息]
+  P7 -->|是| P9[订单池 SADD 并通知端侧刷新]
+  P9 --> P10[HTTP 详情读取最新状态]
   P8 --> P5
 ```
 

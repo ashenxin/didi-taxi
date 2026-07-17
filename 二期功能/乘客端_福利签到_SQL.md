@@ -2,7 +2,7 @@
 
 > 记录日期：2026-07-14
 > 范围：每月 28 天签到、积分账户、积分流水、注销清零。
-> 状态：草案已同步至 `calculate/src/main/resources/sql/calculate_schema.sql`，后续 API/TECH 评审后可继续微调。
+> 状态：已同步至 `calculate/src/main/resources/sql/calculate_schema.sql` 与测试 schema；当前实现以代码和正式 API/TECH 文档为准。
 
 ---
 
@@ -258,21 +258,21 @@ ALTER TABLE `benefit_points_account`
 
 ---
 
-## 7. 后续落库 TODO
+## 7. 落库状态与后续 TODO
 
-1. API/TECH 评审确认字段后，把 DDL 合并到：
+1. DDL 已合并到：
 
 ```text
 calculate/src/main/resources/sql/calculate_schema.sql
 ```
 
-2. 测试库 H2/MySQL 兼容时，同步更新：
+2. 测试 schema 已同步：
 
 ```text
 calculate/src/test/resources/schema-test.sql
 ```
 
-3. 若已有生产库，另出增量迁移 SQL：
+3. 仍待补：已有生产库的独立增量迁移 SQL：
 
 ```text
 CREATE TABLE benefit_sign_record ...

@@ -317,9 +317,9 @@ public class AdminOrderService {
     /**
      * 订单状态码转中文展示文案。
      */
-    private String statusText(Integer status) {
+    static String statusText(Integer status) {
         if (status == null) {
-            return "未知";
+            return "-";
         }
         return switch (status) {
             case 0 -> "已创建";
@@ -329,6 +329,7 @@ public class AdminOrderService {
             case 4 -> "行程中";
             case 5 -> "已完成";
             case 6 -> "已取消";
+            case 7 -> "待司机确认";
             default -> "未知";
         };
     }
@@ -336,21 +337,27 @@ public class AdminOrderService {
     /**
      * 事件类型码/枚举名转中文展示文案（兼容数字/字符串）。
      */
-    private String eventTypeText(String eventType) {
+    static String eventTypeText(String eventType) {
         if (eventType == null) {
             return "未知事件";
         }
         String normalized = eventType.trim().toUpperCase();
         return switch (normalized) {
-            case "0", "CREATE" -> "创建订单";
-            case "1", "ASSIGN" -> "派单";
-            case "2", "ACCEPT" -> "司机接单";
-            case "3", "ARRIVE" -> "司机到达";
-            case "4", "START" -> "开始行程";
-            case "5", "FINISH", "COMPLETE" -> "结束行程";
-            case "6", "CANCEL" -> "取消订单";
+            case "0", "CREATE", "ORDER_CREATED" -> "创建订单";
+            case "ORDER_CREATED_NEED_DISPATCH" -> "等待派单";
+            case "1", "ASSIGN", "ORDER_ASSIGNED" -> "派单";
+            case "ORDER_REASSIGNED" -> "重新派单";
+            case "ORDER_OFFER_OPENED" -> "等待司机确认";
+            case "ORDER_OFFER_TIMED_OUT" -> "司机确认超时";
+            case "2", "ACCEPT", "ORDER_ACCEPTED" -> "司机接单";
+            case "ORDER_DRIVER_REJECTED" -> "司机拒单";
+            case "ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE" -> "司机到达前取消";
+            case "3", "ARRIVE", "ORDER_DRIVER_ARRIVED" -> "司机到达";
+            case "4", "START", "ORDER_TRIP_STARTED" -> "开始行程";
+            case "5", "FINISH", "COMPLETE", "ORDER_FINISHED" -> "结束行程";
+            case "6", "CANCEL", "ORDER_CANCELLED" -> "取消订单";
             case "7", "PAY", "PAY_SUCCESS" -> "支付成功";
-            default -> "其他事件";
+            default -> eventType.trim();
         };
     }
 

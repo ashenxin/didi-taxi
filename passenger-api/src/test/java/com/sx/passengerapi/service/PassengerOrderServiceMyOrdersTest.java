@@ -30,7 +30,7 @@ class PassengerOrderServiceMyOrdersTest {
     private final CapacityDispatchClient capacityDispatchClient = mock(CapacityDispatchClient.class);
     private final PassengerWsNotifyService wsNotifyService = mock(PassengerWsNotifyService.class);
     private final PassengerOrderService service = new PassengerOrderService(
-            mapClient, calculateClient, orderClient, capacityDispatchClient, 30, wsNotifyService);
+            mapClient, calculateClient, orderClient, capacityDispatchClient, wsNotifyService);
 
     @Test
     void listMyOrdersReturnsAllRowsInDescendingOrderAndAddsButtonPlaceholders() {

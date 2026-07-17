@@ -9,3 +9,7 @@ management:
     export:
       zipkin:
         enabled: false
+
+admin:
+  jwt:
+    secret: ${JWT_SECRET_ADMIN:dev-didi-admin-jwt-secret-change-me-32b!!}

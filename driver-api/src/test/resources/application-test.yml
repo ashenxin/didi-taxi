@@ -4,3 +4,7 @@ spring:
     exclude:
       - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
       - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+
+app:
+  jwt:
+    secret: test-didi-driver-jwt-secret-at-least-32-bytes!!

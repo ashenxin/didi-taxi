@@ -7,7 +7,7 @@
 
 ## 1. 架构边界
 
-- **Gateway**：统一入口（端口 8080），转发 `/app/**` 至 BFF；校验 Bearer JWT（签名/exp，启用时校验 aud）。
+- **Gateway**：统一入口（本地默认端口 18080），转发 `/app/**` 至 BFF；校验 Bearer JWT（签名/exp，启用时校验 aud）。
 - **BFF**：`passenger-api`，对外暴露 `/app/api/v1/**`；负责签发 JWT（建议）。
 - **Core**：`passenger` 服务，访问 `passenger` 数据库；建议承载验密、OTP 校验与频控等核心逻辑，BFF 只做编排与签 token。
 
@@ -119,4 +119,3 @@
 - Refresh Token：短 access + 长 refresh，支持轮换与退出
 - 更强风控：设备指纹、IP 限制、黑名单、图形/滑块验证码
 - OAuth2：新增绑定表、回调与账号合并策略；OAuth 成功后仍签发自建 JWT
-

@@ -159,6 +159,13 @@
   - `customer.is_deleted` 仍为 0
   - token 不失效
 
+### T-SET-11A 有未结清订单或锁定券时禁止注销
+
+- **前置**：账号没有进行中订单，但存在未结清 `trip_order_settlement`，或存在 `LOCKED` 优惠券。
+- **预期**
+  - 返回 409，账号不注销，token 保持有效。
+  - order/calculate 任一检查接口不可用时返回 502，采用失败关闭，不得跳过检查。
+
 ### T-SET-12 无进行中订单时注销成功
 
 - **接口**：`POST /app/api/v1/settings/account-cancel/confirm`
@@ -166,6 +173,7 @@
 - **前置**
   - 账号 A 没有进行中订单
   - 账号 A 只有 `FINISHED / CANCELLED` 订单或无订单
+  - 不存在未结清订单结算或 `LOCKED` 优惠券
 - **预期**
   - 返回 200
   - `cancelled=true`
@@ -173,6 +181,8 @@
   - `customer.is_deleted=1`
   - 原 token 再请求受保护接口返回 401
   - 后台/数据库仍可看到旧订单关联旧 `customer.id`
+  - 旧账号 `UNUSED` 优惠券置为 `INVALID`
+  - 福利积分余额清零并保留流水
 
 ### T-SET-13 注销验证码错误
 
@@ -276,4 +286,3 @@
 - `mvn -pl passenger test`
 - `mvn -pl passenger-api test`
 - `npm run build`（目录：`didi-taxi-front/didi-passenger-h5`）
-

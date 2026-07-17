@@ -8,15 +8,13 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * 为防止跨端 token 复用，按路径前缀使用不同的签名密钥：
  * {@code /admin/**}、{@code /app/**}、{@code /driver/**} 分别对应三套 secret。
  *
- * 兼容：保留 {@link #secret} 作为兜底（用于未知路径或历史配置），建议逐步迁移到分端 secret。
+ * 兼容字段 {@link #secret} 只用于识别旧配置；严格环境会拒绝单一密钥并要求三端独立 secret。
  */
 @ConfigurationProperties(prefix = "gateway.jwt")
 public class GatewayJwtProperties {
 
     /**
-     * 兼容字段（不推荐）：单一 secret。
-     *
-     * 建议使用 {@link #secretAdmin}/{@link #secretApp}/{@link #secretDriver}。
+     * 兼容字段（禁止用于严格环境）：单一 secret。
      */
     private String secret = "";
 

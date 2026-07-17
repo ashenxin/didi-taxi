@@ -22,17 +22,33 @@
 
 常用启动命令：
 
+本地联调统一显式激活 `local` profile；不要依赖应用默认 profile。`dev` 仅用于需要开发级调试配置时手动替换。
+
 ```bash
-mvn -pl gateway spring-boot:run
-mvn -pl passenger-api spring-boot:run
-mvn -pl driver-api spring-boot:run
-mvn -pl admin-api spring-boot:run
-mvn -pl order spring-boot:run
-mvn -pl capacity spring-boot:run
-mvn -pl calculate spring-boot:run
-mvn -pl wallet spring-boot:run
-mvn -pl xxl-job-admin spring-boot:run
+mvn -pl gateway spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl passenger-api spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl driver-api spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl admin-api spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl passenger spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl order spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl capacity spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl calculate spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl map spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl xxl-job-admin spring-boot:run -Dspring-boot.run.profiles=local
 ```
+
+默认/生产启动采用失败关闭策略：除 `local/dev/test` 外，gateway、admin-api、passenger-api、driver-api 均拒绝开发 JWT 密钥或不足 32 字节的密钥；gateway 还要求鉴权和 audience 校验开启、三端密钥互不相同。生产至少需要：
+
+```text
+GATEWAY_JWT_REQUIRE_AUTH=true
+JWT_SECRET_ADMIN=<独立随机值，至少 32 字节>
+JWT_SECRET_APP=<独立随机值，至少 32 字节>
+JWT_SECRET_DRIVER=<独立随机值，至少 32 字节>
+COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET=<独立随机值，至少 32 字节>
+```
+
+不再支持以单一 `JWT_SECRET` 代替三套端侧密钥。手机号领取身份摘要使用 `HMAC-SHA256`；开发值仅放在各模块 `application-local/dev.yml`。
 
 常用测试命令：
 
@@ -78,7 +94,7 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 
 - `AGENTS.md`
 - `TODO与差距总览.md`
-- `功能测试清单.md`
+- 各功能回归以同名 `*_TEST.md` 为准。
 
 ### 乘客/司机闭环
 
@@ -93,6 +109,7 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 
 - `订单与派单_两段式Outbox与Kafka_技术方案.md`
 - `订单与派单_订单服务幂等与并发方案说明.md`
+- `订单与派单_TEST.md`
 - `司机端_上线听单与接单设计.md`
 
 ### 登录、网关、WebSocket
@@ -100,11 +117,14 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 - `乘客端_登录_PRD.md`
 - `乘客端_登录_TECH.md`
 - `乘客端_登录_API.md`
+- `乘客端_登录_TEST.md`
 - `司机端_登录注册_PRD.md`
 - `司机端_登录注册_TECH.md`
 - `司机端_登录注册_API.md`
+- `司机端_登录注册_TEST.md`
 - `网关服务_设计.md`
 - `网关服务_技术.md`
+- `网关服务_TEST.md`
 - `司机端_WebSocket与实时协议入门.md`
 - `乘客端与司机端_WebSocket_对比.md`
 
@@ -112,15 +132,23 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 
 - `后台管理系统_权限清单与鉴权设计.md`
 - `后台管理系统_权限与接口文档.md`
+- `后台管理系统_权限_TEST.md`
 - `后台管理系统_订单管理_PRD.md`
 - `后台管理系统_订单管理_TECH.md`
 - `后台管理系统_订单管理_API.md`
+- `后台管理系统_订单管理_TEST.md`
 - `后台管理系统_运力配置_PRD.md`
 - `后台管理系统_运力配置_TECH.md`
 - `后台管理系统_运力配置_API.md`
+- `后台管理系统_运力配置_TEST.md`
 - `后台管理系统_计价管理_PRD.md`
 - `后台管理系统_计价管理_TECH.md`
 - `后台管理系统_计价管理_API.md`
+- `后台管理系统_计价管理_TEST.md`
+
+### 地图
+
+- `地图服务_TEST.md`
 
 ### 二期功能
 
@@ -137,9 +165,19 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 - `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TECH.md`
 - `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_API.md`
 - `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TEST.md`
+- `二期功能/乘客端_券包与登录领券_PRD.md`
+- `二期功能/乘客端_券包与登录领券_TECH.md`
+- `二期功能/乘客端_券包与登录领券_API.md`
+- `二期功能/乘客端_券包与登录领券_TEST.md`
+- `二期功能/乘客端_福利签到_PRD.md`
+- `二期功能/乘客端_福利签到_TECH.md`
+- `二期功能/乘客端_福利签到_API.md`
+- `二期功能/乘客端_福利签到_SQL.md`
+- `二期功能/乘客端_福利签到_TEST.md`
 - `二期功能/司机_换队功能_PRD.md`
 - `二期功能/司机_换队功能_TECH.md`
 - `二期功能/司机_换队功能_API.md`
+- `二期功能/司机端_下周开发_TODO.md`
 - `二期功能/车队营销优惠券_PRD.md`
 - `二期功能/车队营销优惠券_TECH.md`
 - `二期功能/车队营销优惠券_API.md`

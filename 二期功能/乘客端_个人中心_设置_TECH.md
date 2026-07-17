@@ -222,12 +222,13 @@
 2. 校验 `confirm=true`。
 3. 查询当前账号，确认未注销。
 4. 校验注销验证码。
-5. 调用 `order-service` 查询当前乘客全部订单或非终态订单。
-6. 若存在进行中订单，返回 409。
-7. 在事务内更新当前 `customer.id` 这一行 `is_deleted=1`。
-8. 删除或消费验证码 key。
-9. `passenger-api` 递增 token version。
-10. 返回 `requireLogin=true`。
+5. 调用 `order-service` 查询当前乘客全部订单；存在非终态订单则返回 409。
+6. 调用 order 结算检查接口；存在未结清结算则返回 409。
+7. 调用 calculate 锁券检查接口；存在 `LOCKED` 优惠券则返回 409。任一检查服务不可用时失败关闭并返回 502。
+8. 在事务内更新当前 `customer.id` 这一行 `is_deleted=1`。
+9. 删除或消费验证码 key，`passenger-api` 递增 token version。
+10. 注销成功后尽力作废旧账号 `UNUSED` 优惠券并清零福利积分；失败记录错误日志，不回滚已经完成的账号注销。
+11. 返回 `requireLogin=true`。
 
 ---
 
@@ -246,7 +247,7 @@
 - `5 FINISHED`
 - `6 CANCELLED`
 
-注销前禁止存在所有非终态订单。
+注销前禁止存在所有非终态订单，并额外禁止未结清结算和锁定优惠券。
 
 终态：
 
@@ -274,6 +275,8 @@
 后续可优化为 order-service 提供轻量接口：
 
 - `GET /api/v1/orders/active-count?passengerId=`
+
+当前已经通过 order 内部 `unsettled-exists` 检查结算风险，并通过 calculate `locked-exists` 检查锁券风险；这些检查采用失败关闭，避免依赖故障时误注销。
 
 ---
 
@@ -358,4 +361,3 @@
 
 - 本文档为待开发技术设计。
 - 具体类名、方法名可在开发时按仓库现有命名风格落地。
-

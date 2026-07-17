@@ -1,0 +1,5 @@
+gateway:
+  jwt:
+    secret-admin: ${JWT_SECRET_ADMIN:dev-didi-admin-jwt-secret-change-me-32b!!}
+    secret-app: ${JWT_SECRET_APP:dev-didi-app-jwt-secret-change-me-32b!!}
+    secret-driver: ${JWT_SECRET_DRIVER:dev-didi-driver-jwt-secret-change-me-32b!!}

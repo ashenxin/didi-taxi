@@ -227,7 +227,7 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 
 | 键 | 默认 | 说明 |
 |----|------|------|
-| `capacity.dispatch.driver-offer-seconds` | **30** | 打开「待司机确认」窗口时长（秒）；与 `passenger-api` `app.order.driver-offer-seconds`、`order` `OpenDriverOfferBody` 默认对齐 |
+| `capacity.dispatch.driver-offer-seconds` | **30** | 异步派单主链路打开「待司机确认」窗口的单一配置源；通过 order `OpenDriverOfferBody` 传入 |
 | `order.dispatch.offer-timeout-scan-interval-ms` | **5000** | `PENDING_DRIVER_CONFIRM` 过期释放指派、退回 `CREATED` 并重新派单的扫描间隔 |
 | `capacity.dispatch.offer-reschedule.scan-interval-ms` | **5000** | 历史 `ASSIGNED` 待改派兜底推进 |
 | `capacity.dispatch.late-match-scan-interval-ms` | **15000** | `CREATED` 迟滞匹配兜底扫描 |
@@ -284,4 +284,5 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 - **幂等与并发**：`订单与派单_订单服务幂等与并发方案说明.md`
 - **Redis/听单/迟滞匹配**：`乘客司机端_Redis与听单下线策略.md`
 - **Outbox/Kafka（二期方案）**：`订单与派单_两段式Outbox与Kafka_技术方案.md`
-- **回归测试细节**：`功能测试清单.md`
+- **端到端回归**：`第一期MVP_乘客派单司机闭环_TEST.md`
+- **服务级派单、Outbox/Kafka 与并发回归**：`订单与派单_TEST.md`

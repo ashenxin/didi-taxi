@@ -5,7 +5,7 @@ This module vendors XXL-JOB Admin 3.1.0 into the didi-taxi Maven reactor so the 
 ## Run
 
 ```bash
-mvn -pl xxl-job-admin spring-boot:run
+mvn -pl xxl-job-admin spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
 Default URL:

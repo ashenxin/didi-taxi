@@ -47,8 +47,8 @@ passenger:
         min-interval-seconds: ${APP_SMS_MIN_INTERVAL_SECONDS:2}
         daily-limit-per-phone: ${APP_SMS_DAILY_LIMIT_PER_PHONE:100}
         daily-login-fail-limit-per-phone: ${APP_LOGIN_FAIL_DAILY_LIMIT_PER_PHONE:100}
-        # 生产设为 false 并接入短信网关；true 时仅在日志打印验证码
-        mock-send-enabled: ${APP_SMS_MOCK_ENABLED:true}
+        # 安全默认关闭；仅 local/dev profile 显式开启 mock 并返回验证码。
+        mock-send-enabled: ${APP_SMS_MOCK_ENABLED:false}
 
 mybatis-plus:
   configuration:
@@ -75,6 +75,7 @@ passenger:
         min-interval-seconds: 2
         daily-limit-per-phone: 100
         daily-login-fail-limit-per-phone: 100
+        mock-send-enabled: true
 
 ---
 spring:
@@ -93,3 +94,4 @@ passenger:
         min-interval-seconds: 2
         daily-limit-per-phone: 100
         daily-login-fail-limit-per-phone: 100
+        mock-send-enabled: true

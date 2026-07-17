@@ -62,6 +62,8 @@
 
 ### 2.3 派单诊断聚合（近期增强）
 
+> **规划接口，当前未实现。** `AdminOrderController` 目前只提供列表和详情；前端不得将本节路径作为可用接口。
+
 - **Method**：GET
 - **Path**：`/admin/api/v1/orders/{orderNo}/dispatch-diagnostics`
 
@@ -94,6 +96,8 @@
 - `FAILED` outbox 可显示“重试”操作。
 
 ### 2.4 Outbox 手动重试（近期增强）
+
+> **规划接口，当前未实现。** 当前只有 order-service 内部诊断/重试能力，admin-api 尚未提供对外聚合入口。
 
 - **Method**：POST
 - **Path**：`/admin/api/v1/orders/outbox/{id}/retry`

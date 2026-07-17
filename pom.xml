@@ -36,6 +36,8 @@
         <java.version>21</java.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
+        <!-- spring-boot:run 是本地开发入口；生产 jar 仍须显式指定 profile 和安全密钥。 -->
+        <spring-boot.run.profiles>local</spring-boot.run.profiles>
         <spring-cloud.version>2023.0.5</spring-cloud.version>
         <!-- 与 xxl-job-admin 需保持大版本协议兼容；子模块统一引用 -->
         <xxl-job.version>3.1.0</xxl-job.version>

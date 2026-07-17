@@ -3,7 +3,7 @@
 本文档用于前后端联调与自测，定义司机端登录/注册相关对外接口契约（`driver-api` 对外）。  
 产品口径与技术实现分别见《司机端_登录注册_PRD.md》《司机端_登录注册_TECH.md》。
 
-- 统一网关入口：`gateway` `http://127.0.0.1:8080`
+- 统一网关入口：`gateway` `http://127.0.0.1:18080`
 - BFF 服务：`driver-api`（路由前缀 `/driver/**`）
 - 统一响应：`{ code, msg, data }`
 
@@ -199,7 +199,7 @@
 - **GET** `/driver/api/v1/orders/assigned?driverId=80001`
 
 ```bash
-curl "http://127.0.0.1:8080/driver/api/v1/orders/assigned?driverId=80001" \
+curl "http://127.0.0.1:18080/driver/api/v1/orders/assigned?driverId=80001" \
   -H "Authorization: Bearer <jwt>"
 ```
 

@@ -30,14 +30,12 @@ import com.sx.passengerapi.model.ordercore.AssignOrderBody;
 import com.sx.passengerapi.model.ordercore.CancelOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderResult;
-import com.sx.passengerapi.model.ordercore.OpenDriverOfferBody;
 import com.sx.passengerapi.model.ordercore.OrderEventRow;
 import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.capacity.PendingOrderIndexBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import com.sx.passengerapi.ws.PassengerWsNotifyService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -67,20 +65,17 @@ public class PassengerOrderService {
     private final OrderClient orderClient;
     private final CapacityDispatchClient capacityDispatchClient;
 
-    private final int driverOfferSeconds;
     private final PassengerWsNotifyService passengerWsNotifyService;
 
     public PassengerOrderService(MapClient mapClient,
                                  CalculateClient calculateClient,
                                  OrderClient orderClient,
                                  CapacityDispatchClient capacityDispatchClient,
-                                 @Value("${app.order.driver-offer-seconds:30}") int driverOfferSeconds,
                                  PassengerWsNotifyService passengerWsNotifyService) {
         this.mapClient = mapClient;
         this.calculateClient = calculateClient;
         this.orderClient = orderClient;
         this.capacityDispatchClient = capacityDispatchClient;
-        this.driverOfferSeconds = driverOfferSeconds;
         this.passengerWsNotifyService = passengerWsNotifyService;
     }
 
@@ -272,22 +267,6 @@ public class PassengerOrderService {
             int code = resp.getCode() == null ? 502 : resp.getCode();
             String msg = (resp.getMsg() != null && !resp.getMsg().isBlank()) ? resp.getMsg() : "订单指派失败";
             throw new BizErrorException(code, msg);
-        }
-    }
-
-    /**
-     * 打开司机确认窗口（ASSIGNED → PENDING_DRIVER_CONFIRM）。
-     */
-    public void openDriverOffer(String orderNo) {
-        OpenDriverOfferBody body = new OpenDriverOfferBody();
-        body.setOfferSeconds(driverOfferSeconds);
-        var resp = orderClient.openDriverOffer(orderNo, body);
-        if (resp == null) {
-            throw new BizErrorException(502, "订单服务响应为空");
-        }
-        if (resp.getCode() == null || resp.getCode() != 200) {
-            throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(),
-                    "打开待司机确认失败: " + resp.getMsg());
         }
     }
 

@@ -5,6 +5,7 @@ import com.sx.passengerapi.client.OrderClient;
 import com.sx.passengerapi.client.WalletClient;
 import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
+import com.sx.passengerapi.config.CouponClaimIdentityProperties;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import com.sx.passengerapi.model.wallet.AutoPayAgreementVO;
 import com.sx.passengerapi.model.wallet.AutoPaySignRequest;
@@ -15,13 +16,13 @@ import com.sx.passengerapi.model.wallet.CouponClaimResult;
 import com.sx.passengerapi.model.wallet.CouponTemplateVO;
 import com.sx.passengerapi.model.wallet.CouponVO;
 import com.sx.passengerapi.model.wallet.WalletSummaryVO;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.security.GeneralSecurityException;
 import java.util.Collections;
 import java.util.List;
 
@@ -32,14 +33,16 @@ public class PassengerWalletService {
     private final WalletClient walletClient;
     private final CalculateClient calculateClient;
     private final OrderClient orderClient;
+    private final CouponClaimIdentityProperties claimIdentityProperties;
 
-    @Value("${coupon.claim-identity.phone-hash-secret:dev-coupon-claim-secret-change-me}")
-    private String phoneHashSecret;
-
-    public PassengerWalletService(WalletClient walletClient, CalculateClient calculateClient, OrderClient orderClient) {
+    public PassengerWalletService(WalletClient walletClient,
+                                  CalculateClient calculateClient,
+                                  OrderClient orderClient,
+                                  CouponClaimIdentityProperties claimIdentityProperties) {
         this.walletClient = walletClient;
         this.calculateClient = calculateClient;
         this.orderClient = orderClient;
+        this.claimIdentityProperties = claimIdentityProperties;
     }
 
     public WalletSummaryVO summary(long passengerId) {
@@ -120,17 +123,26 @@ public class PassengerWalletService {
             throw new BizErrorException(401, "登录信息已失效，请重新登录");
         }
         String normalizedPhone = phone.trim();
+        String secret = claimIdentityProperties.getPhoneHashSecret();
+        if (secret == null || secret.isBlank()) {
+            throw new BizErrorException(500, "优惠券领取身份密钥未配置");
+        }
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] bytes = digest.digest((phoneHashSecret + ":" + normalizedPhone).getBytes(StandardCharsets.UTF_8));
-            StringBuilder out = new StringBuilder(bytes.length * 2);
-            for (byte item : bytes) {
-                out.append(String.format("%02x", item));
-            }
-            return out.toString();
-        } catch (NoSuchAlgorithmException ex) {
+            return hmacSha256Hex(secret, normalizedPhone);
+        } catch (GeneralSecurityException ex) {
             throw new BizErrorException(500, "优惠券领取身份计算失败");
         }
+    }
+
+    static String hmacSha256Hex(String secret, String value) throws GeneralSecurityException {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        byte[] bytes = mac.doFinal(value.getBytes(StandardCharsets.UTF_8));
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte item : bytes) {
+            out.append(String.format("%02x", item));
+        }
+        return out.toString();
     }
 
     private <T> T unwrap(ResponseVo<T> response, String fallbackMessage) {

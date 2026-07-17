@@ -1,0 +1,7 @@
+app:
+  jwt:
+    secret: ${JWT_SECRET_APP:dev-didi-app-jwt-secret-change-me-32b!!}
+
+coupon:
+  claim-identity:
+    phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET:dev-coupon-claim-secret-change-me}

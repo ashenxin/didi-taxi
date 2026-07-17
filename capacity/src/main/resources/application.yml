@@ -66,18 +66,14 @@ capacity:
       batch-limit: 50
       # 同一司机连续 offer 轮次上限（未满则再开窗口，否则 GEO 改派）
       same-driver-max-offer-rounds: 2
-    # 自测：指定司机上线时强制写入 GEO 的坐标（与 passenger-demo 东站起点一致，避免本机定位超 3km / 非最近邻）；生产请删除或置空
-    geo-pin:
-      900006:
-        lat: 30.2525
-        lng: 120.2156
   app:
     driver-auth:
       code-ttl-seconds: ${DRIVER_SMS_CODE_TTL_SECONDS:300}
       min-interval-seconds: ${DRIVER_SMS_MIN_INTERVAL_SECONDS:2}
       daily-sms-limit-per-phone: ${DRIVER_SMS_DAILY_LIMIT_PER_PHONE:100}
       daily-login-fail-limit-per-phone: ${DRIVER_LOGIN_FAIL_DAILY_LIMIT_PER_PHONE:100}
-      mock-send-enabled: ${DRIVER_SMS_MOCK_ENABLED:true}
+      # 安全默认关闭；仅 local/dev profile 显式开启 mock 并返回验证码。
+      mock-send-enabled: ${DRIVER_SMS_MOCK_ENABLED:false}
 
 # XXL-JOB 执行器：需独立部署 xxl-job-admin，版本需与根 pom 中 xxl.job.version 对齐
 xxl:
@@ -88,7 +84,7 @@ xxl:
       addresses: http://127.0.0.1:8081/xxl-job-admin
     executor:
       appname: capacity-executor
-      address: ${XXL_JOB_EXECUTOR_ADDRESS:http://127.0.0.1:9999}
+      address: ${XXL_JOB_CAPACITY_EXECUTOR_ADDRESS:http://127.0.0.1:9999}
       port: 9999
       log-path: ./logs/xxl-job
       log-retention-days: 7
@@ -110,6 +106,7 @@ capacity:
       min-interval-seconds: 2
       daily-sms-limit-per-phone: 100
       daily-login-fail-limit-per-phone: 100
+      mock-send-enabled: true
 
 ---
 # 非生产：与 dev 相同（IDE 常用 --spring.profiles.active=local）
@@ -123,8 +120,15 @@ logging:
     com.sx.capacity.dao: DEBUG
 
 capacity:
+  dispatch:
+    # 本地自测司机固定坐标；仅 local profile 生效，避免默认配置污染真实定位。
+    geo-pin:
+      900006:
+        lat: 30.2525
+        lng: 120.2156
   app:
     driver-auth:
       min-interval-seconds: 2
       daily-sms-limit-per-phone: 100
       daily-login-fail-limit-per-phone: 100
+      mock-send-enabled: true

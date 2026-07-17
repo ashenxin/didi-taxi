@@ -97,7 +97,7 @@ Controller 不接受前端自传 passengerId，也不信任前端传手机号。
 
 ```text
 claimIdentityType = PHONE
-claimIdentityHash = SHA-256(phoneHashSecret + ":" + normalizedPhone)
+claimIdentityHash = HMAC-SHA256(phoneHashSecret, normalizedPhone)
 ```
 
 然后调用 calculate：
@@ -181,7 +181,7 @@ reason = ACCOUNT_CANCEL
 ```yaml
 coupon:
   claim-identity:
-    phone-hash-secret: ${COUPON_CLAIM_PHONE_HASH_SECRET}
+    phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET}
 ```
 
 对应配置键：
@@ -190,7 +190,7 @@ coupon:
 coupon.claim-identity.phone-hash-secret
 ```
 
-禁止生产长期使用代码默认值：
+开发值只存在于 `application-local/dev.yml`。除 `local/dev/test` 外，配置为空、少于 32 字节或仍使用以下开发值时，`passenger-api` 会拒绝启动：
 
 ```text
 dev-coupon-claim-secret-change-me
@@ -218,7 +218,7 @@ dev-coupon-claim-secret-change-me
 ```sql
 ALTER TABLE `user_coupon`
     ADD COLUMN `claim_identity_type` VARCHAR(32) NULL COMMENT '领取身份类型：PHONE / CUSTOMER' AFTER `passenger_id`,
-    ADD COLUMN `claim_identity_hash` VARCHAR(128) NULL COMMENT '领取身份哈希，如手机号SHA-256' AFTER `claim_identity_type`,
+    ADD COLUMN `claim_identity_hash` VARCHAR(128) NULL COMMENT '领取身份哈希，如手机号HMAC-SHA256' AFTER `claim_identity_type`,
     ADD COLUMN `invalid_reason` VARCHAR(64) NULL COMMENT '失效原因：ACCOUNT_CANCEL / TEMPLATE_OFFLINE / RISK_CONTROL' AFTER `used_at`,
     ADD COLUMN `invalid_at` DATETIME NULL COMMENT '失效时间' AFTER `invalid_reason`,
     ADD KEY `idx_user_coupon_claim_identity` (`template_id`, `claim_identity_type`, `claim_identity_hash`);

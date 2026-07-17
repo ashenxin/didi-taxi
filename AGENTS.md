@@ -22,11 +22,11 @@
 |---|---:|---|
 | `gateway` | 18080 | Spring Cloud Gateway；路由 `/admin/**`、`/app/**`、`/driver/**`；JWT、CORS、WS 握手白名单。 |
 | `admin-api` | 8099 | 后台管理 BFF；登录、菜单、订单管理、运力管理、计价管理、换队审核。 |
-| `passenger-api` | 8100 | 乘客端 BFF；登录、下单、详情、取消、退出登录、乘客 WebSocket 小票与通知。 |
+| `passenger-api` | 8100 | 乘客端 BFF；登录、订单、设置/注销、钱包/券包、福利签到与乘客 WebSocket。 |
 | `driver-api` | 8101 | 司机端 BFF；登录注册、上线听单、待接单、接/拒/取消/到达/开始/完成、司机 WebSocket。 |
 | `order` | 8093 | 订单服务；订单主表、状态机、事件流水、超时取消、offer 超时、接单互斥。 |
 | `capacity` | 8090 | 运力/调度服务；司机、公司、车辆、Redis GEO 司机池、迟滞匹配、换队申请。 |
-| `calculate` | 8091 | 计价服务；预估价、计价规则 CRUD、优惠券模板/用户券/用券流水。 |
+| `calculate` | 8091 | 计价服务；预估价、计价规则、优惠券模板/用户券/用券流水、福利签到与积分。 |
 | `wallet` | 8095 | 钱包服务；乘客支付宝/微信免密协议、默认免密渠道、钱包支付单、mock 自动扣款。 |
 | `map` | 8094 | 地图服务；路线、地理编码/逆地理编码等高德相关能力。 |
 | `passenger` | 8092 | 乘客核心服务；乘客账号、后台 `sys_*` 权限相关内部能力。 |
@@ -72,6 +72,7 @@
 - 网关验签后删除客户端伪造的 `X-User-Id`，再注入可信 `X-User-Id`。
 - BFF 中的业务接口读取 `X-User-Id` 作为当前用户；直连 BFF 联调时需手动补头或关闭/绕过相关检查。
 - 本地临时无 token 联调可设置 `GATEWAY_JWT_REQUIRE_AUTH=false`，生产必须为 `true`。
+- 只有 `local/dev/test` profile 允许开发 JWT 密钥；其它 profile（含未指定 profile）启动时会校验网关鉴权、audience、三端独立密钥及优惠券手机号 HMAC 密钥，不安全配置会直接拒绝启动。生产不得使用兼容变量 `JWT_SECRET`。
 
 ### 钱包、优惠券与结算
 
@@ -79,7 +80,7 @@
 - 免密支付协议和支付单在 `wallet` 库：`wallet_auto_pay_agreement`、`wallet_payment_order`。
 - 优惠券在 `calculate` 库：`coupon_template`、`user_coupon`、`coupon_use_record`；钱包页面只是展示用户资产。
 - 订单支付与用券后的金额快照在 `order` 库：`trip_order_settlement`，避免继续膨胀 `trip_order`。
-- 当前一期钱包实现是支付宝/微信免密 + 用户券列表 + 完单结算基础链路；银行卡、借钱、车险只保留前端入口。
+- 当前钱包已接通支付宝/微信免密协议、用户券列表/领券，以及支付、锁券/核销/释放、结算快照的内部服务能力；**司机完单后自动编排锁券、扣款、核销尚未贯通**。银行卡、借钱、车险只保留前端入口。
 - 车队营销优惠券已拆分正式 PRD/TECH/API/SQL，产品与开发口径以 `二期功能/车队营销优惠券_*.md` 为准；讨论稿仅用于追溯决策来源。已确认 `fare_rule` 不新增字段，优惠券按 `company_id + city_code + product_code` 与计价规则并行匹配。
 - 优惠券影响真实金额，后续真实扣款、结算、退款、对账前必须复核收入分配口径；当前已定的讨论口径是平台服务费按“乘客优惠后实付车费”的 5% 计算。
 
@@ -172,10 +173,12 @@
 mvn test
 mvn -pl passenger-api test
 mvn -pl order test
-mvn -pl gateway spring-boot:run
-mvn -pl passenger-api spring-boot:run
-mvn -pl wallet spring-boot:run
+mvn -pl gateway spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl passenger-api spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 ```
+
+本地启动统一使用 `local`（或明确使用 `dev`）profile；乘客和司机短信 mock 在默认 profile 中关闭，仅在 `local/dev` 中开启。
 
 ### 本地依赖
 
@@ -224,7 +227,7 @@ mvn -pl wallet spring-boot:run
 
 - `README.md`
 - `TODO与差距总览.md`
-- `功能测试清单.md`
+- 各专项 `*_TEST.md`。
 
 ### 乘客/司机闭环
 
@@ -239,6 +242,7 @@ mvn -pl wallet spring-boot:run
 
 - `订单与派单_订单服务幂等与并发方案说明.md`
 - `订单与派单_两段式Outbox与Kafka_技术方案.md`
+- `订单与派单_TEST.md`
 - `司机端_上线听单与接单设计.md`
 
 ### 登录与 WebSocket
@@ -246,9 +250,11 @@ mvn -pl wallet spring-boot:run
 - `乘客端_登录_PRD.md`
 - `乘客端_登录_TECH.md`
 - `乘客端_登录_API.md`
+- `乘客端_登录_TEST.md`
 - `司机端_登录注册_PRD.md`
 - `司机端_登录注册_TECH.md`
 - `司机端_登录注册_API.md`
+- `司机端_登录注册_TEST.md`
 - `司机端_WebSocket与实时协议入门.md`
 - `乘客端与司机端_WebSocket_对比.md`
 
@@ -256,20 +262,25 @@ mvn -pl wallet spring-boot:run
 
 - `网关服务_设计.md`
 - `网关服务_技术.md`
+- `网关服务_TEST.md`
 
 ### 后台管理
 
 - `后台管理系统_权限清单与鉴权设计.md`
 - `后台管理系统_权限与接口文档.md`
+- `后台管理系统_权限_TEST.md`
 - `后台管理系统_订单管理_PRD.md`
 - `后台管理系统_订单管理_TECH.md`
 - `后台管理系统_订单管理_API.md`
+- `后台管理系统_订单管理_TEST.md`
 - `后台管理系统_运力配置_PRD.md`
 - `后台管理系统_运力配置_TECH.md`
 - `后台管理系统_运力配置_API.md`
+- `后台管理系统_运力配置_TEST.md`
 - `后台管理系统_计价管理_PRD.md`
 - `后台管理系统_计价管理_TECH.md`
 - `后台管理系统_计价管理_API.md`
+- `后台管理系统_计价管理_TEST.md`
 
 ### 司机换队
 
@@ -296,16 +307,20 @@ mvn -pl wallet spring-boot:run
 - `二期功能/车队营销优惠券_API.md`
 - `二期功能/车队营销优惠券_SQL.md`
 - `二期功能/车队营销优惠券规则_讨论稿.md`
+- `二期功能/乘客端_券包与登录领券_{PRD,TECH,API,TEST}.md`
+- `二期功能/乘客端_福利签到_{PRD,TECH,API,SQL,TEST}.md`
+- `二期功能/司机端_下周开发_TODO.md`
 
 ## 当前已知差距摘录
 
-以 `TODO与差距总览.md` 为准，常见需要注意的后续项：
+以 `TODO与差距总览.md` 为准，当前需要注意的后续项：
 
 - 乘客/司机 WS 单实例主路径已收口；Redis Pub/Sub / Sticky 跨实例广播本阶段不开发。
 - 两段式异步指派、Outbox、Kafka 与下单 `Idempotency-Key` 主路径已落地；后续重点转为后台/运维排障入口、DLQ、指标告警与写接口幂等扩展。
 - 接驾 ETA 仍需实时坐标和 matrix 能力补齐；当前阶段暂不继续接入高德地图服务，先保留为后续体验项。
 - 司机心跳续 GEO 与司机级 Presence 防僵尸策略已落地；XXL `capacityDriverPresenceCleanup` 仍需在运行环境配置启用。
 - 司机登出后 `ACCEPTED`（司机已接单）到达前自动释单口径已明确并落地：释放改派回 `CREATED`（待派单/重新派单），不是乘客侧 `CANCELLED`（已取消）终态。
-- 我的钱包已新增 `wallet` 微服务；当前支付渠道为 mock 免密扣款，接真实支付宝/微信前仍需补第三方签约/扣款/回调验签和补偿对账。
-- 优惠券功能与计价规则存在金额耦合；车队营销优惠券正式 PRD/TECH/API/SQL 已拆分，开发后台营销能力前需要先完成评审。
-- 近期候选开发点以 `TODO与差距总览.md` §2.6 为准：后台/运维排障页、订单时间线增强、DLQ / 坏消息处理、写接口幂等扩展。
+- 我的钱包已新增 `wallet` 微服务；当前支付渠道为 mock，且司机完单后的结算/锁券/扣款/核销自动编排尚未贯通；接真实支付宝/微信前还需补第三方签约、回调验签、退款和补偿对账。
+- 车队营销优惠券后台、目标表结构、领券、锁券/核销/释放与结算快照已经落地；接真实支付前仍需完成退款、对账、回调幂等与财务评审。
+- 福利签到积分已落地；Redis/MySQL 异常补偿任务仍待建设。
+- 当前重点见 `TODO与差距总览.md` §2：司机端近期功能、后台派单诊断聚合、DLQ、写接口幂等扩展与真实支付闭环。

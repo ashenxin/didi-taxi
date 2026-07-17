@@ -3,7 +3,7 @@
 本文档用于前后端联调与自测，定义乘客端登录相关对外接口契约。  
 产品口径与技术实现分别见《乘客端_登录_PRD.md》《乘客端_登录_TECH.md》。
 
-对外统一经 `gateway` 访问（本地默认 `http://127.0.0.1:8080`），统一前缀：`/app/api/v1/auth`。
+对外统一经 `gateway` 访问（本地默认 `http://127.0.0.1:18080`），统一前缀：`/app/api/v1/auth`。
 
 ---
 
@@ -206,7 +206,7 @@
 ### 5.1 发送验证码
 
 ```bash
-curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/sms/send' \
+curl -X POST 'http://127.0.0.1:18080/app/api/v1/auth/sms/send' \
   -H 'Content-Type: application/json' \
   -d '{"phone":"13800138000"}'
 ```
@@ -214,7 +214,7 @@ curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/sms/send' \
 ### 5.2 验证码登录
 
 ```bash
-curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/login-sms' \
+curl -X POST 'http://127.0.0.1:18080/app/api/v1/auth/login-sms' \
   -H 'Content-Type: application/json' \
   -d '{"phone":"13800138000","code":"123456"}'
 ```
@@ -222,7 +222,7 @@ curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/login-sms' \
 ### 5.3 密码登录
 
 ```bash
-curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/login-password' \
+curl -X POST 'http://127.0.0.1:18080/app/api/v1/auth/login-password' \
   -H 'Content-Type: application/json' \
   -d '{"phone":"13800138000","password":"plaintext"}'
 ```
@@ -230,7 +230,7 @@ curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/login-password' \
 ### 5.4 退出登录（需先登录拿 token）
 
 ```bash
-curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/logout' \
+curl -X POST 'http://127.0.0.1:18080/app/api/v1/auth/logout' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <accessToken>' \
   -d '{}'
@@ -242,4 +242,3 @@ curl -X POST 'http://127.0.0.1:8080/app/api/v1/auth/logout' \
 
 - 网关验签通过后会注入 `X-User-Id`（值为 JWT `sub`）。
 - 后续订单/行程/资料等接口涉及乘客身份统一从 `X-User-Id` 获取 `customerId`，不再让客户端提交 `passengerId/customerId`。
-

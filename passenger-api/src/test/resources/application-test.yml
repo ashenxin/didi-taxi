@@ -1,0 +1,7 @@
+app:
+  jwt:
+    secret: test-didi-app-jwt-secret-at-least-32-bytes!!
+
+coupon:
+  claim-identity:
+    phone-hash-secret: test-coupon-phone-hash-secret-at-least-32-bytes

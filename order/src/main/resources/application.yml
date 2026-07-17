@@ -72,7 +72,7 @@ xxl:
       addresses: http://127.0.0.1:8081/xxl-job-admin
     executor:
       appname: order-executor
-      address: ${XXL_JOB_EXECUTOR_ADDRESS:http://127.0.0.1:9998}
+      address: ${XXL_JOB_ORDER_EXECUTOR_ADDRESS:http://127.0.0.1:9998}
       port: 9998
       log-path: ./logs/xxl-job
       log-retention-days: 7

@@ -45,8 +45,8 @@ admin:
     key-prefix: ${ADMIN_SECURITY_CONTEXT_CACHE_KEY_PREFIX:adm:user:}
     ttl-seconds: ${ADMIN_SECURITY_CONTEXT_CACHE_TTL_SECONDS:1800}
   jwt:
-    # 与网关 gateway.jwt.secret-admin 保持一致（生产用 JWT_SECRET_ADMIN）
-    secret: ${JWT_SECRET_ADMIN:${JWT_SECRET:dev-didi-admin-jwt-secret-change-me-32b!!}}
+    # 与网关 gateway.jwt.secret-admin 保持一致；非 local/dev/test 必须显式配置。
+    secret: ${JWT_SECRET_ADMIN:}
     expiration-seconds: ${JWT_EXPIRATION_SECONDS:43200}
     audience: admin-bff
 

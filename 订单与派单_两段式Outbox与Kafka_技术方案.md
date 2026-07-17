@@ -470,15 +470,11 @@ onMessage(event):
 
 ## 10. API 语义变更（对外）
 
-### 10.1 新增接口：`create`（推荐）
+### 10.1 当前主入口：`POST /app/api/v1/orders`
 
-决策：**对外新增 `create` 接口**，用于“两段式”下单；保留既有 `createAndAssign` 作为兼容接口（可标记 deprecated，后续下线）。
+当前 H5 继续使用一步下单路径 `POST /app/api/v1/orders`，但其内部语义已经切换为“两段式创建 + 异步派单”。`POST /app/api/v1/orders/create` 作为历史兼容入口保留，行为与主入口一致。
 
-接口路径（已决策）：
-
-- `POST /app/api/v1/orders/create`
-
-两段式落地后，对外 `create` 的“下单成功”含义变为：
+当前“下单成功”的含义为：
 
 - **订单已创建**（`orderNo` 已生成并落库）
 - 派单异步推进，可能短时间内仍为 `CREATED`
@@ -490,7 +486,7 @@ onMessage(event):
 
 ### 10.2 响应建议（MVP）
 
-`create` 接口返回最小字段即可：
+主入口返回最小字段：
 
 - `orderNo`
 - `status`：通常为 `CREATED`
@@ -500,10 +496,9 @@ onMessage(event):
 
 ### 10.3 兼容策略
 
-- `createAndAssign`：
-  - 短期内保留，便于旧前端不改即可继续跑（但建议尽快迁移到 `create`）
-  - 服务端可逐步把其内部实现改为“调用 `create` + 返回 CREATED”（即行为对齐），避免维护两套逻辑
-- 文档/前端联调以 `create` 为主；`createAndAssign` 进入淘汰计划
+- `POST /app/api/v1/orders`：当前 H5 权威入口，返回 `CREATED` 后由异步链路推进。
+- `POST /app/api/v1/orders/create`：历史兼容入口，不作为新前端推荐路径。
+- 两个入口都要求 `Idempotency-Key`，不得恢复同步 `assign/openOffer` 编排。
 
 ---
 
@@ -552,7 +547,7 @@ capacity-service：
 
 ---
 
-## 12. 迁移/发布计划（建议）
+## 12. 已完成迁移步骤
 
 1) 先在 order-service 增加 outbox 表与发布器（不改 passenger-api），灰度验证发布链路
 2) capacity 接入 consumer + processed_event 表，先只打印日志不执行派单（shadow）
@@ -567,7 +562,7 @@ capacity-service：
 - **outbox 多实例发布**：**CAS 领取 + PROCESSING 超时回收**（`9.1a`）
 - **capacity 选司机候选**：**Top3 + 同一次消费内重选**（`8.2`）
 - **消息契约 v1**：`5.3.1` 字段表 + `schemaVersion=1`；MVP 不做 DLQ，坏消息 **日志 + 指标**（`5.3.2`）
-- **对外 API**：新增 `POST /app/api/v1/orders/create`；`createAndAssign` 兼容淘汰（`10`）
+- **对外 API**：`POST /app/api/v1/orders` 为当前主入口，`/orders/create` 仅历史兼容（`10`）
 - **本地短延迟补偿**：本期不做（`9.2`）
 - **Kafka 客户端配置**：`earliest`、手动逐条 commit、固定 consumer group、幂等 producer（`5.4`）
 - 仍可能随环境变化的运维项（如 topic 生命周期/分区数/压测与 lag 监控等）见 `14.0`
@@ -608,7 +603,7 @@ capacity-service：
 
 ### 14.4 配置一致性（确认窗单一真源）
 
-- `offerSeconds` 与 `openDriverOffer` 默认窗口必须 **单一真源**：当前仓库默认 **30s**（`capacity.dispatch.driver-offer-seconds`、`passenger-api` `app.order.driver-offer-seconds`、`order` `OpenDriverOfferBody` 等对齐）；避免各服务各自默认导致「8s / 10s / 30s」并存。
+- `offerSeconds` 与 `openDriverOffer` 默认窗口必须 **单一真源**：当前异步派单主链路默认 **30s**，由 `capacity.dispatch.driver-offer-seconds` 配置并通过 order `OpenDriverOfferBody` 传入；避免各服务各自保留默认值导致「8s / 10s / 30s」并存。
 - `radiusMeters` 与 `candidateLimit` 作为 capacity 的算法参数，放配置文件（不放进 Kafka 消息，避免“消息里藏配置”难治理）
 
 ### 14.5 Top3 与算法一致性
@@ -629,4 +624,4 @@ capacity-service：
   - `order.assign` 以 DB CAS 为最终门闩
 - **配置**：`offerSeconds` 与仓库默认 **30s** 对齐（单点来源）；`radiusMeters=3000`；`candidateLimit=3`
 - **观测**：`malformed_message_total`、outbox 堆积、最老 PENDING 年龄、Kafka consumer lag
-- **回归**：`POST /app/api/v1/orders/create` 返回可 `CREATED` + 异步派单可推进到 `PENDING_DRIVER_CONFIRM`（以 DB 状态为准）
+- **回归**：`POST /app/api/v1/orders` 返回 `CREATED`，异步派单可推进到 `PENDING_DRIVER_CONFIRM`（以 DB 状态为准）；兼容 `/orders/create` 行为一致

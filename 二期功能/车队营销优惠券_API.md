@@ -1,6 +1,6 @@
 # 车队营销优惠券 API
 
-> 本文档描述车队营销优惠券一期接口草案。
+> 本文档描述当前已落地的车队营销优惠券一期接口契约。
 > 产品口径见《车队营销优惠券_PRD.md》，技术方案见《车队营销优惠券_TECH.md》，SQL 草案见《车队营销优惠券_SQL.md》。
 
 ## 0. 通用约定
@@ -21,7 +21,7 @@
 couponType: AMOUNT_OFF / PERCENT_OFF / SPECIAL
 templateStatus: DRAFT / PUBLISHED / OFFLINE
 userCouponStatus: UNUSED / LOCKED / USED / EXPIRED
-issueType: LOGIN_CLAIM
+issueType: LOGIN_POPUP
 sourceType: LOGIN_POPUP / BANNER / AD / ACTIVITY / CONFIG
 actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 ```
@@ -63,7 +63,7 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
   "pageSize": 20,
   "list": [
     {
-      "templateId": 1001,
+      "id": 1001,
       "name": "杭州快车满35减5",
       "companyId": 10,
       "companyName": "杭州一队",
@@ -93,7 +93,7 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ### 1.2 创建优惠券模板
 
-**POST** `/admin/api/v1/coupons/templates`
+**POST** `/admin/api/v1/pricing/fare-rules/{fareRuleId}/coupons`
 
 权限：超管。
 
@@ -130,14 +130,14 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ```json
 {
-  "templateId": 1001,
+  "id": 1001,
   "status": "DRAFT"
 }
 ```
 
 ### 1.3 更新优惠券模板
 
-**PUT** `/admin/api/v1/coupons/templates/{templateId}`
+**PUT** `/admin/api/v1/pricing/fare-rules/{fareRuleId}/coupons/{templateId}`
 
 权限：超管。
 
@@ -150,7 +150,7 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ### 1.4 发布优惠券模板
 
-**POST** `/admin/api/v1/coupons/templates/{templateId}/publish`
+**POST** `/admin/api/v1/pricing/fare-rules/{fareRuleId}/coupons/{templateId}/publish`
 
 权限：超管。
 
@@ -158,14 +158,14 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ```json
 {
-  "templateId": 1001,
+  "id": 1001,
   "status": "PUBLISHED"
 }
 ```
 
 ### 1.5 下架优惠券模板
 
-**POST** `/admin/api/v1/coupons/templates/{templateId}/offline`
+**POST** `/admin/api/v1/pricing/fare-rules/{fareRuleId}/coupons/{templateId}/offline`
 
 权限：超管。
 
@@ -173,14 +173,16 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ```json
 {
-  "templateId": 1001,
+  "id": 1001,
   "status": "OFFLINE"
 }
 ```
 
 ### 1.6 查询模板统计
 
-**GET** `/admin/api/v1/coupons/templates/{templateId}/stats`
+> 当前未实现独立统计 Controller，以下为后续规划契约，前端不得调用。
+
+**规划 GET** `/admin/api/v1/pricing/fare-rules/{fareRuleId}/coupons/{templateId}/stats`
 
 返回：
 
@@ -198,7 +200,7 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ### 2.1 查询登录后可领取券
 
-**GET** `/app/api/v1/coupons/claimable`
+**GET** `/app/api/v1/wallet/coupons/claimable`
 
 说明：
 
@@ -213,7 +215,7 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
   "claimableCount": 2,
   "list": [
     {
-      "templateId": 1001,
+      "id": 1001,
       "name": "杭州快车满35减5",
       "couponType": "AMOUNT_OFF",
       "thresholdAmount": "35.00",
@@ -231,7 +233,7 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ### 2.2 一键领取全部可领取券
 
-**POST** `/app/api/v1/coupons/claim-all`
+**POST** `/app/api/v1/wallet/coupons/claim-all`
 
 说明：
 
@@ -243,15 +245,7 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 ```json
 {
   "claimedCount": 2,
-  "skippedCount": 0,
-  "list": [
-    {
-      "userCouponId": 5001,
-      "templateId": 1001,
-      "couponName": "杭州快车满35减5",
-      "status": "UNUSED"
-    }
-  ]
+  "skippedCount": 0
 }
 ```
 
@@ -396,7 +390,9 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ### 5.4 全额退款恢复券
 
-**POST** `/internal/calculate/coupons/refund-restore`
+> 当前未实现；退款能力落地前不得调用。现有 calculate Controller 只提供锁定、核销与释放。
+
+**规划 POST** `/internal/calculate/coupons/refund-restore`
 
 请求：
 
@@ -413,7 +409,7 @@ actionType: LOCK / RELEASE / USE / REFUND_RESTORE / EXPIRE
 
 ### 6.1 写入结算快照
 
-**POST** `/internal/order/settlements`
+**POST** `/api/v1/orders/internal/settlements`
 
 请求：
 

@@ -140,7 +140,7 @@
 
 - `calculate_schema.sql`：建表/索引（含 `idx_fare_rule_company_scope`）
 - `calculate_seed.sql`：演示数据（公司 id 与 `capacity_seed.sql` 对齐）
-- 车队营销优惠券目标 SQL：见 `二期功能/车队营销优惠券_SQL.md`，后续应同步落入 calculate/order 的正式迁移脚本。
+- 车队营销优惠券目标结构已同步到 `calculate/src/main/resources/sql/calculate_schema.sql`、`calculate_coupon_identity_patch.sql` 与 `order/src/main/resources/sql/order_schema.sql`；设计口径见 `二期功能/车队营销优惠券_SQL.md`。
 
 测试 H2：`calculate/src/test/resources/schema-test.sql` 中 `fare_rule` 需与线上结构一致。
 
