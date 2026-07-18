@@ -16,6 +16,8 @@ import com.sx.order.model.TripOrderSettlement;
 import com.sx.order.model.dto.AssignOrderBody;
 import com.sx.order.model.dto.CancelOrderBody;
 import com.sx.order.model.dto.CreateOrderBody;
+import com.sx.order.model.dto.CreateOrderPreflightRequest;
+import com.sx.order.model.dto.CreateOrderPreflightResult;
 import com.sx.order.model.dto.FinishOrderBody;
 import com.sx.order.model.dto.OpenDriverOfferBody;
 import com.sx.order.model.dto.AssignedAwaitingRescheduleDto;
@@ -266,6 +268,70 @@ public class TripOrderWriteService {
             throw new IllegalArgumentException("Idempotency-Key长度不能超过128");
         }
         return key;
+    }
+
+    @Transactional
+    public CreateOrderPreflightResult preflightCreate(CreateOrderPreflightRequest request,
+                                                      String idempotencyKey) {
+        String requestId = normalizeIdempotencyKey(idempotencyKey);
+        OrderIdempotentRecord record = selectIdempotentRecord(requestId);
+        if (record == null) {
+            BlockingOrderResult blocking = findBlockingOrder(request.passengerId());
+            return blocking == null
+                    ? CreateOrderPreflightResult.allowCreate()
+                    : CreateOrderPreflightResult.blocked(blocking);
+        }
+        if (!IDEMPOTENT_ACTION_CREATE_ORDER.equals(record.getActionType())) {
+            throw new OrderConflictException("同一 Idempotency-Key 已用于其它操作");
+        }
+        if (!Objects.equals(request.passengerId(), record.getPassengerId())) {
+            throw new OrderConflictException("同一 Idempotency-Key 不能用于不同下单内容");
+        }
+        if (IDEMPOTENT_STATUS_PROCESSING.equals(record.getStatus())) {
+            throw new OrderConflictException("请求处理中，请稍后重试");
+        }
+        if (IDEMPOTENT_STATUS_FAILED.equals(record.getStatus())) {
+            throw new OrderConflictException("该 Idempotency-Key 对应的下单请求已失败，请重新发起下单");
+        }
+        if (!IDEMPOTENT_STATUS_SUCCESS.equals(record.getStatus()) || !StringUtils.hasText(record.getOrderNo())) {
+            throw new OrderConflictException("该 Idempotency-Key 状态异常，请重新发起下单");
+        }
+
+        TripOrder order = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
+                .eq(TripOrder::getOrderNo, record.getOrderNo())
+                .eq(TripOrder::getPassengerId, request.passengerId())
+                .eq(TripOrder::getIsDeleted, 0)
+                .last("LIMIT 1"));
+        if (order == null) {
+            throw new OrderConflictException("该 Idempotency-Key 对应订单不存在，请联系运营处理");
+        }
+        if (!sameCreateIntent(order, request)) {
+            throw new OrderConflictException("同一 Idempotency-Key 不能用于不同下单内容");
+        }
+        return CreateOrderPreflightResult.replay(new CreateOrderPreflightResult.TripOrderSnapshot(
+                order.getOrderNo(), order.getPlannedDistanceMeters(), order.getPlannedDurationSeconds(),
+                order.getDistanceSource(), order.getRouteMockVersion(), order.getEstimatedAmount(),
+                order.getFareRuleId(), order.getFareRuleSnapshot(), order.getFareCalculationVersion()));
+    }
+
+    private static boolean sameCreateIntent(TripOrder order, CreateOrderPreflightRequest request) {
+        return Objects.equals(trimToNull(order.getProvinceCode()), trimToNull(request.provinceCode()))
+                && Objects.equals(trimToNull(order.getCityCode()), trimToNull(request.cityCode()))
+                && Objects.equals(trimToNull(order.getProductCode()), trimToNull(request.productCode()))
+                && samePlace(order.getOriginAddress(), order.getOriginLat(), order.getOriginLng(), request.origin())
+                && samePlace(order.getDestAddress(), order.getDestLat(), order.getDestLng(), request.dest());
+    }
+
+    private static boolean samePlace(String address, BigDecimal lat, BigDecimal lng,
+                                     com.sx.order.model.dto.Place requested) {
+        return requested != null
+                && Objects.equals(trimToNull(address), trimToNull(requested.getAddress()))
+                && sameDecimal(lat, requested.getLat())
+                && sameDecimal(lng, requested.getLng());
+    }
+
+    private static boolean sameDecimal(BigDecimal left, BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
     }
 
     private String requestHash(CreateOrderBody body) {

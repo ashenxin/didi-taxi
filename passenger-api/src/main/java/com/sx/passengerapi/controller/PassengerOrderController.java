@@ -38,7 +38,7 @@ public class PassengerOrderController {
     }
 
     /**
-     * 下单（同步链路）：路线预估 → 费用预估 → 创建订单 → 最近司机派单（若有）。
+     * 下单主入口：幂等/阻塞预检 → 路线与费用预估 → 创建订单；派单异步推进。
      * {@code POST /app/api/v1/orders}
      */
     @PostMapping("/orders")
@@ -56,7 +56,7 @@ public class PassengerOrderController {
     }
 
     /**
-     * 下单（两段式）：路线/估价 → 创建订单；派单异步推进。
+     * 下单（两段式兼容入口）：幂等/阻塞预检 → 路线/估价 → 创建订单；派单异步推进。
      * {@code POST /app/api/v1/orders/create}
      */
     @PostMapping("/orders/create")

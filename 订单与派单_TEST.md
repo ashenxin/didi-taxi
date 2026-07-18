@@ -55,7 +55,7 @@
 
 同 key、同 body 串行和并发请求至少两次。
 
-预期：返回同一 orderNo；只存在一笔订单、一条创建事件、一条有效派单 Outbox；`order_idempotent_record` 保存请求 hash 与结果。
+预期：返回同一 orderNo；只存在一笔订单、一条创建事件、一条有效派单 Outbox；`order_idempotent_record` 保存请求 hash 与结果。第一次已成功后的串行重放应在 order 预检阶段返回原冻结路线/计价快照，passenger-api 不得再次调用 map、capacity、calculate、order create 或重复发送 WS 通知。
 
 ### T-DISPATCH-04 同 key 不同请求
 

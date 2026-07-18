@@ -14,6 +14,7 @@ import com.sx.passengerapi.model.order.OrderStatus;
 import com.sx.passengerapi.model.order.Place;
 import com.sx.passengerapi.model.ordercore.CreateOrderResult;
 import com.sx.passengerapi.model.ordercore.CreateOrderBody;
+import com.sx.passengerapi.model.ordercore.CreateOrderPreflightResult;
 import com.sx.passengerapi.ws.PassengerWsNotifyService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -44,7 +46,8 @@ class PassengerOrderServiceAsyncCreateTest {
 
     @Test
     void createAndAssignOnlyCreatesOrderAndLeavesDispatchToAsyncOutbox() {
-        when(orderClient.blockingOrder(10001L, "idem-async-1")).thenReturn(ResponseVo.success(null));
+        when(orderClient.createPreflight(eq("idem-async-1"), any()))
+                .thenReturn(ResponseVo.success(allowCreate()));
         RouteResponse route = new RouteResponse();
         route.setDistanceMeters(12_000L);
         route.setDurationSeconds(1_500L);
@@ -90,7 +93,6 @@ class PassengerOrderServiceAsyncCreateTest {
 
     @Test
     void missingCoordinatesAreRejectedWithoutExternalGeocoding() {
-        when(orderClient.blockingOrder(10001L, "idem-no-coordinates")).thenReturn(ResponseVo.success(null));
         CreateAndAssignOrderBody body = body();
         body.getDest().setLat(null);
         body.getDest().setLng(null);
@@ -106,7 +108,21 @@ class PassengerOrderServiceAsyncCreateTest {
     @Test
     void lostSuccessResponseCanRetryWithSameKeyAndRecoverOriginalOrder() {
         String key = "lost-response-key";
-        when(orderClient.blockingOrder(10001L, key)).thenReturn(ResponseVo.success(null));
+        CreateOrderPreflightResult allow = new CreateOrderPreflightResult();
+        allow.setDecision("ALLOW_CREATE");
+        CreateOrderPreflightResult replayResult = new CreateOrderPreflightResult();
+        replayResult.setDecision("REPLAY_SUCCESS");
+        replayResult.setOrderNo("O-ORIGINAL");
+        replayResult.setPlannedDistanceMeters(12_000L);
+        replayResult.setPlannedDurationSeconds(1_500L);
+        replayResult.setDistanceSource("LOCAL_MOCK_ROUTE");
+        replayResult.setRouteMockVersion("mock-route-v1");
+        replayResult.setEstimatedAmount(new BigDecimal("35.00"));
+        replayResult.setFareRuleId(7L);
+        replayResult.setFareRuleSnapshot("{\"baseFare\":12.00}");
+        replayResult.setFareCalculationVersion("fare-v1");
+        when(orderClient.createPreflight(eq(key), any())).thenReturn(
+                ResponseVo.success(allow), ResponseVo.success(replayResult));
         RouteResponse route = new RouteResponse();
         route.setDistanceMeters(12_000L);
         route.setDurationSeconds(1_500L);
@@ -132,9 +148,39 @@ class PassengerOrderServiceAsyncCreateTest {
 
         assertThat(first.getOrderNo()).isEqualTo("O-ORIGINAL");
         assertThat(replay.getOrderNo()).isEqualTo("O-ORIGINAL");
-        verify(orderClient, times(2)).blockingOrder(10001L, key);
-        verify(orderClient, times(2)).create(org.mockito.ArgumentMatchers.eq(key),
-                org.mockito.ArgumentMatchers.any());
+        assertThat(replay.getRoute().getDistanceMeters()).isEqualTo(12_000L);
+        assertThat(replay.getEstimate().getEstimatedAmount()).isEqualByComparingTo("35.00");
+        verify(orderClient, times(2)).createPreflight(eq(key), any());
+        verify(mapClient, times(1)).drivingRoute(any());
+        verify(capacityDispatchClient, times(1))
+                .nearestDriver(anyString(), anyString(), anyDouble(), anyDouble(), anyLong());
+        verify(calculateClient, times(1)).estimate(any());
+        verify(orderClient, times(1)).create(eq(key), any());
+        verify(wsNotifyService, times(1)).notifyOrderChanged(10001L, "O-ORIGINAL");
+    }
+
+    @Test
+    void replayWithIncompleteFrozenRouteSnapshotFailsClosed() {
+        CreateOrderPreflightResult replay = new CreateOrderPreflightResult();
+        replay.setDecision("REPLAY_SUCCESS");
+        replay.setOrderNo("O-BROKEN");
+        replay.setPlannedDistanceMeters(12_000L);
+        replay.setPlannedDurationSeconds(1_500L);
+        replay.setDistanceSource("LOCAL_MOCK_ROUTE");
+        replay.setEstimatedAmount(new BigDecimal("35.00"));
+        replay.setFareRuleId(7L);
+        replay.setFareRuleSnapshot("{\"baseFare\":12.00}");
+        replay.setFareCalculationVersion("fare-v1");
+        when(orderClient.createPreflight(eq("broken-snapshot-key"), any()))
+                .thenReturn(ResponseVo.success(replay));
+
+        assertThatThrownBy(() -> service.createTwoPhase(body(), "broken-snapshot-key"))
+                .isInstanceOf(BizErrorException.class)
+                .satisfies(ex -> assertThat(((BizErrorException) ex).getErrorCode()).isEqualTo(502))
+                .hasMessageContaining("快照不完整");
+
+        verify(mapClient, never()).drivingRoute(any());
+        verify(orderClient, never()).create(anyString(), any());
     }
 
     private static CreateAndAssignOrderBody body() {
@@ -155,5 +201,11 @@ class PassengerOrderServiceAsyncCreateTest {
         p.setLat(lat);
         p.setLng(lng);
         return p;
+    }
+
+    private static CreateOrderPreflightResult allowCreate() {
+        CreateOrderPreflightResult result = new CreateOrderPreflightResult();
+        result.setDecision("ALLOW_CREATE");
+        return result;
     }
 }

@@ -8,7 +8,7 @@ import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderBody;
 import com.sx.passengerapi.model.order.Place;
-import com.sx.passengerapi.model.ordercore.BlockingOrderResult;
+import com.sx.passengerapi.model.ordercore.CreateOrderPreflightResult;
 import com.sx.passengerapi.model.calculate.EstimateFareResult;
 import com.sx.passengerapi.model.map.RouteResponse;
 import com.sx.passengerapi.ws.PassengerWsNotifyService;
@@ -32,11 +32,13 @@ class PassengerOrderUnsettledGateTest {
 
     @Test
     void blockingOrderStopsBeforeRouteAndFareCalls() {
-        BlockingOrderResult blocking = new BlockingOrderResult();
-        blocking.setBlockingOrderNo("OLD-1");
-        blocking.setSettlementStatus("PAYMENT_REQUIRED");
-        blocking.setAction("GO_TO_PAYMENT");
-        when(orderClient.blockingOrder(10001L, "key")).thenReturn(ResponseVo.success(blocking));
+        CreateOrderPreflightResult blocked = new CreateOrderPreflightResult();
+        blocked.setDecision("BLOCKED");
+        blocked.setOrderNo("OLD-1");
+        blocked.setBlockingSettlementStatus("PAYMENT_REQUIRED");
+        blocked.setBlockingAction("GO_TO_PAYMENT");
+        when(orderClient.createPreflight(org.mockito.ArgumentMatchers.eq("key"), any()))
+                .thenReturn(ResponseVo.success(blocked));
 
         BizErrorException error = catchThrowableOfType(
                 () -> service.createTwoPhase(body(), "key"), BizErrorException.class);
@@ -49,12 +51,26 @@ class PassengerOrderUnsettledGateTest {
 
     @Test
     void precheckFailureClosesBookingFlow() {
-        when(orderClient.blockingOrder(10001L, "key")).thenThrow(new IllegalStateException("order unavailable"));
+        when(orderClient.createPreflight(org.mockito.ArgumentMatchers.eq("key"), any()))
+                .thenThrow(new IllegalStateException("order unavailable"));
 
         BizErrorException error = catchThrowableOfType(
                 () -> service.createTwoPhase(body(), "key"), BizErrorException.class);
 
         assertThat(error.getErrorCode()).isEqualTo(502);
+        verify(mapClient, never()).drivingRoute(any());
+    }
+
+    @Test
+    void nullPreflightDecisionClosesBeforeRouteCall() {
+        when(orderClient.createPreflight(org.mockito.ArgumentMatchers.eq("key"), any()))
+                .thenReturn(ResponseVo.success(null));
+
+        BizErrorException error = catchThrowableOfType(
+                () -> service.createTwoPhase(body(), "key"), BizErrorException.class);
+
+        assertThat(error.getErrorCode()).isEqualTo(502);
+        assertThat(error).hasMessageContaining("预检");
         verify(mapClient, never()).drivingRoute(any());
     }
 

@@ -9,21 +9,29 @@ import com.sx.order.dao.TripOrderEntityMapper;
 import com.sx.order.model.OrderIdempotentRecord;
 import com.sx.order.model.TripOrder;
 import com.sx.order.model.dto.CreateOrderBody;
+import com.sx.order.model.dto.CreateOrderPreflightRequest;
 import com.sx.order.model.dto.Place;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
 @ActiveProfiles("test")
+@AutoConfigureMockMvc
 class TripOrderCreateIdempotencyTest {
 
     @Autowired
@@ -36,6 +44,8 @@ class TripOrderCreateIdempotencyTest {
     private OrderOutboxEventMapper outboxMapper;
     @Autowired
     private OrderIdempotentRecordMapper idempotentMapper;
+    @Autowired
+    private MockMvc mockMvc;
 
     @BeforeEach
     void clean() {
@@ -124,6 +134,69 @@ class TripOrderCreateIdempotencyTest {
         assertThat(second).isEqualTo(first);
     }
 
+    @Test
+    void successfulCreatePreflightReturnsFrozenReplayWithoutStartingAnotherCreate() throws Exception {
+        CreateOrderBody original = body(90006L, "ECONOMY");
+        String orderNo = service.create(original, "idem-preflight-replay");
+
+        mockMvc.perform(post("/api/v1/orders/internal/create-preflight")
+                        .header("Idempotency-Key", "idem-preflight-replay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "passengerId": 90006,
+                                  "provinceCode": "330000",
+                                  "cityCode": "330100",
+                                  "productCode": "ECONOMY",
+                                  "origin": {"address": "杭州东站", "lat": 30.2912000, "lng": 120.2120000},
+                                  "dest": {"address": "龙翔桥", "lat": 30.2592000, "lng": 120.1640000}
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.decision").value("REPLAY_SUCCESS"))
+                .andExpect(jsonPath("$.data.orderNo").value(orderNo))
+                .andExpect(jsonPath("$.data.plannedDistanceMeters").value(12340))
+                .andExpect(jsonPath("$.data.plannedDurationSeconds").value(1560))
+                .andExpect(jsonPath("$.data.distanceSource").value("LOCAL_MOCK_ROUTE"))
+                .andExpect(jsonPath("$.data.routeMockVersion").value("mock-route-v1"))
+                .andExpect(jsonPath("$.data.estimatedAmount").value(35.00))
+                .andExpect(jsonPath("$.data.fareRuleId").value(1))
+                .andExpect(jsonPath("$.data.fareCalculationVersion").value("fare-v1"));
+    }
+
+    @Test
+    void preflightAllowsNewCreateWhenKeyAndBlockingOrderAreAbsent() {
+        var result = service.preflightCreate(preflightRequest(body(90007L, "ECONOMY")), "new-key");
+
+        assertThat(result.decision()).isEqualTo("ALLOW_CREATE");
+        assertThat(result.orderNo()).isNull();
+    }
+
+    @Test
+    void preflightBlocksNewKeyWhenPassengerAlreadyHasActiveOrder() {
+        CreateOrderBody original = body(90008L, "ECONOMY");
+        String orderNo = service.create(original, "original-key");
+
+        var result = service.preflightCreate(preflightRequest(original), "another-key");
+
+        assertThat(result.decision()).isEqualTo("BLOCKED");
+        assertThat(result.orderNo()).isEqualTo(orderNo);
+        assertThat(result.blockingAction()).isEqualTo("WAIT");
+    }
+
+    @Test
+    void preflightRejectsSameKeyWhenOriginalBookingIntentChanged() {
+        CreateOrderBody original = body(90009L, "ECONOMY");
+        service.create(original, "changed-intent-key");
+        CreateOrderBody changed = body(90009L, "PREMIUM");
+
+        assertThatThrownBy(() -> service.preflightCreate(
+                preflightRequest(changed), "changed-intent-key"))
+                .isInstanceOf(OrderConflictException.class)
+                .hasMessageContaining("不能用于不同下单内容");
+    }
+
     private String hashFor(CreateOrderBody body) {
         String orderNo = service.create(body, "hash-source");
         OrderIdempotentRecord record = idempotentMapper.selectOne(Wrappers.<OrderIdempotentRecord>lambdaQuery()
@@ -135,6 +208,11 @@ class TripOrderCreateIdempotencyTest {
         idempotentMapper.delete(Wrappers.<OrderIdempotentRecord>lambdaQuery()
                 .eq(OrderIdempotentRecord::getRequestId, "hash-source"));
         return record.getRequestHash();
+    }
+
+    private static CreateOrderPreflightRequest preflightRequest(CreateOrderBody body) {
+        return new CreateOrderPreflightRequest(body.getPassengerId(), body.getProvinceCode(),
+                body.getCityCode(), body.getProductCode(), body.getOrigin(), body.getDest());
     }
 
     private static CreateOrderBody body(Long passengerId, String productCode) {

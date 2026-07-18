@@ -30,11 +30,12 @@ import com.sx.passengerapi.model.ordercore.AssignOrderBody;
 import com.sx.passengerapi.model.ordercore.CancelOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderResult;
+import com.sx.passengerapi.model.ordercore.CreateOrderPreflightRequest;
+import com.sx.passengerapi.model.ordercore.CreateOrderPreflightResult;
 import com.sx.passengerapi.model.ordercore.OrderEventRow;
 import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.capacity.PendingOrderIndexBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
-import com.sx.passengerapi.model.ordercore.BlockingOrderResult;
 import com.sx.passengerapi.model.ordercore.SettlementSummaryRow;
 import com.sx.passengerapi.ws.PassengerWsNotifyService;
 import lombok.extern.slf4j.Slf4j;
@@ -274,8 +275,11 @@ public class PassengerOrderService {
      * 不做同步指派与打开确认窗口。
      */
     public CreateOrderResultV1 createTwoPhase(CreateAndAssignOrderBody body, String idempotencyKey) {
-        precheckBlockingOrder(body.getPassengerId(), idempotencyKey);
         resolveCoordinatesByGeocodeIfNeeded(body);
+        CreateOrderResultV1 replay = preflightCreate(body, idempotencyKey);
+        if (replay != null) {
+            return replay;
+        }
         RouteResponse route = route(body);
         NearestDriverResult nearest = searchNearestDriver(body);
         Long companyId = nearest == null ? null : nearest.getCompanyId();
@@ -300,30 +304,83 @@ public class PassengerOrderService {
         return out;
     }
 
-    private void precheckBlockingOrder(Long passengerId, String idempotencyKey) {
-        if (passengerId == null) {
+    private CreateOrderResultV1 preflightCreate(CreateAndAssignOrderBody body, String idempotencyKey) {
+        if (body.getPassengerId() == null) {
             throw new BizErrorException(400, "passengerId不能为空");
         }
-        final com.sx.passengerapi.common.vo.ResponseVo<BlockingOrderResult> response;
+        CreateOrderPreflightRequest request = new CreateOrderPreflightRequest();
+        request.setPassengerId(body.getPassengerId());
+        request.setProvinceCode(body.getProvinceCode());
+        request.setCityCode(body.getCityCode());
+        request.setProductCode(body.getProductCode());
+        request.setOrigin(toOrderPlace(body.getOrigin()));
+        request.setDest(toOrderPlace(body.getDest()));
+
+        final com.sx.passengerapi.common.vo.ResponseVo<CreateOrderPreflightResult> response;
         try {
-            response = orderClient.blockingOrder(passengerId, idempotencyKey);
+            response = orderClient.createPreflight(idempotencyKey, request);
         } catch (RuntimeException ex) {
-            log.warn("下单前查询未结清订单失败 passengerId={}", passengerId, ex);
+            log.warn("下单预检失败 passengerId={}", body.getPassengerId(), ex);
             throw new BizErrorException(502, "暂时无法确认上一笔订单状态，请稍后重试");
         }
         if (response == null || response.getCode() == null || response.getCode() != 200) {
-            throw new BizErrorException(502, "暂时无法确认上一笔订单状态，请稍后重试");
+            int code = response == null || response.getCode() == null ? 502 : response.getCode();
+            String message = response != null && StringUtils.hasText(response.getMsg())
+                    ? response.getMsg() : "暂时无法确认上一笔订单状态，请稍后重试";
+            throw new BizErrorException(code, message);
         }
-        BlockingOrderResult blocking = response.getData();
-        if (blocking == null) {
-            return;
+        CreateOrderPreflightResult result = response.getData();
+        if (result == null || !StringUtils.hasText(result.getDecision())) {
+            throw new BizErrorException(502, "下单预检返回为空");
         }
-        String message = switch (blocking.getAction() == null ? "WAIT" : blocking.getAction()) {
+        if ("ALLOW_CREATE".equals(result.getDecision())) {
+            return null;
+        }
+        if ("REPLAY_SUCCESS".equals(result.getDecision())) {
+            return replayResult(result);
+        }
+        if (!"BLOCKED".equals(result.getDecision())) {
+            throw new BizErrorException(502, "下单预检返回未知状态");
+        }
+        String message = switch (result.getBlockingAction() == null ? "WAIT" : result.getBlockingAction()) {
             case "GO_TO_PAYMENT" -> "您有一笔待支付订单，请结清后再叫车";
             case "CONTACT_OPERATIONS" -> "上一笔订单结算异常，请联系运营处理";
             default -> "您有一笔订单正在处理，请稍后再叫车";
         };
         throw new BizErrorException(409, message);
+    }
+
+    private CreateOrderResultV1 replayResult(CreateOrderPreflightResult result) {
+        if (!StringUtils.hasText(result.getOrderNo()) || result.getPlannedDistanceMeters() == null
+                || result.getPlannedDurationSeconds() == null || result.getEstimatedAmount() == null
+                || !StringUtils.hasText(result.getDistanceSource())
+                || !StringUtils.hasText(result.getRouteMockVersion())
+                || result.getFareRuleId() == null || !StringUtils.hasText(result.getFareRuleSnapshot())
+                || !StringUtils.hasText(result.getFareCalculationVersion())) {
+            throw new BizErrorException(502, "原订单快照不完整，请联系运营处理");
+        }
+        RouteResponse route = new RouteResponse();
+        route.setDistanceMeters(result.getPlannedDistanceMeters());
+        route.setDurationSeconds(result.getPlannedDurationSeconds());
+        route.setProvider(result.getDistanceSource());
+        route.setVersion(result.getRouteMockVersion());
+
+        EstimateFareResult estimate = new EstimateFareResult();
+        estimate.setRuleId(result.getFareRuleId());
+        estimate.setEstimatedAmount(result.getEstimatedAmount());
+        estimate.setDistanceMeters(result.getPlannedDistanceMeters());
+        estimate.setDurationSeconds(result.getPlannedDurationSeconds());
+        estimate.setFareRuleSnapshot(result.getFareRuleSnapshot());
+        estimate.setFareCalculationVersion(result.getFareCalculationVersion());
+
+        CreateOrderResultV1 replay = new CreateOrderResultV1();
+        replay.setOrderNo(result.getOrderNo());
+        replay.setStatus(OrderStatus.CREATED);
+        replay.setAssignedDriver(null);
+        replay.setRoute(route);
+        replay.setEstimate(estimate);
+        log.info("下单幂等预检命中 orderNo={}", result.getOrderNo());
+        return replay;
     }
 
     /**

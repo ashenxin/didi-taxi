@@ -333,7 +333,7 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 以 `TODO与差距总览.md` 为准，当前需要注意的后续项：
 
 - 乘客/司机 WS 单实例主路径已收口；Redis Pub/Sub / Sticky 跨实例广播本阶段不开发。
-- 两段式异步指派、Outbox、Kafka 与下单 `Idempotency-Key` 主路径已落地；后续重点转为后台/运维排障入口、DLQ、指标告警与写接口幂等扩展。
+- 两段式异步指派、Outbox、Kafka 与下单 `Idempotency-Key` 主路径已落地；下单成功重放已通过 order 预检在地图、运力、计价之前短路。后续重点转为后台/运维排障入口、DLQ、指标告警与写接口幂等扩展。
 - 接驾 ETA 仍需实时坐标和 matrix 能力补齐；当前阶段暂不继续接入高德地图服务，先保留为后续体验项。
 - 司机心跳续 GEO 与司机级 Presence 防僵尸策略已落地；XXL `capacityDriverPresenceCleanup` 仍需在运行环境配置启用。
 - 司机登出后 `ACCEPTED`（司机已接单）到达前自动释单口径已明确并落地：释放改派回 `CREATED`（待派单/重新派单），不是乘客侧 `CANCELLED`（已取消）终态。

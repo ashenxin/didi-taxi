@@ -4,6 +4,8 @@ import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ordercore.AssignOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderBody;
 import com.sx.passengerapi.model.ordercore.CreateOrderResult;
+import com.sx.passengerapi.model.ordercore.CreateOrderPreflightRequest;
+import com.sx.passengerapi.model.ordercore.CreateOrderPreflightResult;
 import com.sx.passengerapi.model.ordercore.CancelOrderBody;
 import com.sx.passengerapi.model.ordercore.OpenDriverOfferBody;
 import com.sx.passengerapi.model.ordercore.OrderEventRow;
@@ -31,6 +33,11 @@ public interface OrderClient {
     @PostMapping("/api/v1/orders")
     ResponseVo<CreateOrderResult> create(@RequestHeader("Idempotency-Key") String idempotencyKey,
                                          @RequestBody CreateOrderBody body);
+
+    @PostMapping("/api/v1/orders/internal/create-preflight")
+    ResponseVo<CreateOrderPreflightResult> createPreflight(
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody CreateOrderPreflightRequest body);
 
     @PostMapping("/api/v1/orders/{orderNo}/assign")
     ResponseVo<Void> assign(@PathVariable("orderNo") String orderNo, @RequestBody AssignOrderBody body);

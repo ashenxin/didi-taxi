@@ -717,6 +717,44 @@
 }
 ```
 
+### 4.1a 下单预检（内部接口，已实现）
+
+**POST** `/api/v1/orders/internal/create-preflight`
+
+由 passenger-api 在每次下单时调用，位于地图、运力、计价和订单创建之前；乘客端不得直接调用。
+
+**请求头**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| Idempotency-Key | string | 是 | 与对外下单请求相同；长度不超过 128 |
+
+**请求体**：只携带乘客、城市、产品和起终点等原始下单意图，不携带路线或计价派生结果。
+
+**响应 data**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| decision | string | 是 | `ALLOW_CREATE`、`REPLAY_SUCCESS` 或 `BLOCKED` |
+| orderNo | string\|null | 否 | 重放命中的原订单号，或当前阻塞订单号 |
+| blockingSettlementStatus | string\|null | 否 | `BLOCKED` 时的结算状态 |
+| blockingAction | string\|null | 否 | `WAIT`、`GO_TO_PAYMENT` 或 `CONTACT_OPERATIONS` |
+| plannedDistanceMeters | number\|null | 否 | `REPLAY_SUCCESS` 时返回原冻结路线距离 |
+| plannedDurationSeconds | number\|null | 否 | `REPLAY_SUCCESS` 时返回原冻结预计时长 |
+| distanceSource | string\|null | 否 | 原路线来源 |
+| routeMockVersion | string\|null | 否 | 原路线 mock 版本 |
+| estimatedAmount | number\|null | 否 | 原预估金额 |
+| fareRuleId | number\|null | 否 | 原计价规则 ID |
+| fareRuleSnapshot | string\|null | 否 | 原计价规则快照 |
+| fareCalculationVersion | string\|null | 否 | 原计价版本 |
+
+处理约定：
+
+- `ALLOW_CREATE`：passenger-api 才继续调用 map、capacity、calculate 和 order create。
+- `REPLAY_SUCCESS`：passenger-api 直接重建第一次响应，不重复调用上述服务，也不重复发送 WS 通知。
+- `BLOCKED`：passenger-api 按 action 返回“进行中、待支付或联系运营”等 409 提示。
+- 相同 key 但乘客、产品、城市或起终点不同，以及 key 为 `PROCESSING/FAILED` 等状态时，order-service 返回对应 409，最终创建接口仍保留权威幂等与并发兜底。
+
 ### 4.2 司机拒单（状态机写接口，已实现）
 
 **POST** `/api/v1/orders/{orderNo}/reject`

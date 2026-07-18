@@ -10,6 +10,8 @@ import com.sx.order.model.dto.AssignedAwaitingRescheduleDto;
 import com.sx.order.model.dto.AssignOrderBody;
 import com.sx.order.model.dto.CancelOrderBody;
 import com.sx.order.model.dto.CreateOrderBody;
+import com.sx.order.model.dto.CreateOrderPreflightRequest;
+import com.sx.order.model.dto.CreateOrderPreflightResult;
 import com.sx.order.model.dto.CreateOrderResult;
 import com.sx.order.model.dto.DriverCancelBeforeArriveBody;
 import com.sx.order.model.dto.DriverIdBody;
@@ -68,6 +70,21 @@ public class TripOrderController {
         }
         String orderNo = tripOrderWriteService.create(body, idempotencyKey);
         return ResultUtil.success(new CreateOrderResult(orderNo));
+    }
+
+    /**
+     * 内部下单预检：在路线规划和计价前校验幂等键，并返回进行中或未结清订单的阻塞信息。
+     * 本接口不创建订单；{@code passenger-api} 应使用同一 {@code Idempotency-Key} 继续正式建单。
+     * {@code POST /api/v1/orders/internal/create-preflight}
+     */
+    @PostMapping("/internal/create-preflight")
+    public ResponseVo<CreateOrderPreflightResult> createPreflight(
+            @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
+            @RequestBody @Valid CreateOrderPreflightRequest request) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return ResultUtil.requestError("Idempotency-Key不能为空");
+        }
+        return ResultUtil.success(tripOrderWriteService.preflightCreate(request, idempotencyKey));
     }
 
     /**
