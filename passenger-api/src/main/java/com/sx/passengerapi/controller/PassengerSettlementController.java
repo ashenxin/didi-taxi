@@ -10,6 +10,10 @@ import com.sx.passengerapi.service.PassengerSettlementService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 乘客端订单结算 BFF：查询权威账单并发起未结清订单的主动支付。
+ * 统一前缀：{@code /app/api/v1/orders}；乘客身份取自网关注入的 {@code X-User-Id}。
+ */
 @RestController
 @RequestMapping("/app/api/v1/orders")
 public class PassengerSettlementController {
@@ -19,6 +23,10 @@ public class PassengerSettlementController {
         this.service = service;
     }
 
+    /**
+     * 查询当前乘客名下订单的结算详情与支付状态。
+     * {@code GET /app/api/v1/orders/{orderNo}/settlement}
+     */
     @GetMapping("/{orderNo}/settlement")
     public ResponseVo<SettlementDetailVO> get(@PathVariable String orderNo,
             @RequestHeader(value = "X-User-Id", required = false) Long passengerId) {
@@ -26,6 +34,10 @@ public class PassengerSettlementController {
         return ResultUtil.success(service.get(orderNo, passengerId));
     }
 
+    /**
+     * 为当前乘客的未结清订单发起主动支付；每次支付尝试须携带新的 {@code Idempotency-Key}。
+     * {@code POST /app/api/v1/orders/{orderNo}/payments}
+     */
     @PostMapping("/{orderNo}/payments")
     public ResponseVo<PaymentInvokeResult> pay(@PathVariable String orderNo,
             @RequestHeader(value = "X-User-Id", required = false) Long passengerId,

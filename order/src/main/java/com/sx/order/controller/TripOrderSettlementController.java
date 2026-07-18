@@ -28,6 +28,10 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
+/**
+ * 订单结算内部接口：维护权威结算快照，并提供未结清阻塞、乘客账单和主动支付编排能力。
+ * 统一前缀：{@code /api/v1/orders/internal/settlements}；主要供结算任务与 {@code passenger-api} 调用。
+ */
 @RestController
 @RequestMapping("/api/v1/orders/internal/settlements")
 public class TripOrderSettlementController {
@@ -46,6 +50,10 @@ public class TripOrderSettlementController {
         this.settlementService = settlementService;
     }
 
+    /**
+     * 新增或更新订单结算快照，并统一校验原价、优惠、应付金额及收入分配金额。
+     * {@code POST /api/v1/orders/internal/settlements}
+     */
     @PostMapping
     public ResponseVo<TripOrderSettlement> upsert(@Valid @RequestBody SettlementUpsertRequest request) {
         SettlementAmountValidator.ValidatedAmounts amounts = amountValidator.validate(
@@ -93,6 +101,10 @@ public class TripOrderSettlementController {
         return ResultUtil.success(settlement);
     }
 
+    /**
+     * 按订单号查询权威结算记录，不存在时返回业务码 404。
+     * {@code GET /api/v1/orders/internal/settlements/{orderNo}}
+     */
     @GetMapping("/{orderNo}")
     public ResponseVo<TripOrderSettlement> get(@PathVariable String orderNo) {
         TripOrderSettlement settlement = getByOrderNo(orderNo);
@@ -105,6 +117,7 @@ public class TripOrderSettlementController {
     /**
      * 注销账号前检查是否存在未结清订单。
      * 有应付金额时必须支付成功且状态为 PAID；零应付订单允许 PAID/CLOSED。
+     * {@code GET /api/v1/orders/internal/settlements/unsettled-exists?passengerId=}
      */
     @GetMapping("/unsettled-exists")
     public ResponseVo<UnsettledOrderCheckResult> unsettledExists(@RequestParam("passengerId") Long passengerId) {
@@ -116,6 +129,10 @@ public class TripOrderSettlementController {
         return ResultUtil.success(new UnsettledOrderCheckResult(n > 0, n));
     }
 
+    /**
+     * 下单预检：查询会阻塞乘客创建新订单的进行中或未结清订单；幂等重放订单不作为阻塞项。
+     * {@code GET /api/v1/orders/internal/settlements/blocking-order?passengerId=}
+     */
     @GetMapping("/blocking-order")
     public ResponseVo<BlockingOrderResult> blockingOrder(
             @RequestParam("passengerId") Long passengerId,
@@ -123,6 +140,10 @@ public class TripOrderSettlementController {
         return ResultUtil.success(orderWriteService.findBlockingOrder(passengerId, idempotencyKey));
     }
 
+    /**
+     * 查询乘客可见的订单结算详情，并校验订单归属。
+     * {@code GET /api/v1/orders/internal/settlements/{orderNo}/passenger?passengerId=}
+     */
     @GetMapping("/{orderNo}/passenger")
     public ResponseVo<TripOrderSettlement> passengerSettlement(
             @PathVariable String orderNo,
@@ -130,6 +151,10 @@ public class TripOrderSettlementController {
         return ResultUtil.success(settlementService.getPassengerSettlement(orderNo, passengerId));
     }
 
+    /**
+     * 为未结清订单创建主动支付尝试；{@code Idempotency-Key} 用于单次支付请求幂等。
+     * {@code POST /api/v1/orders/internal/settlements/{orderNo}/payments?passengerId=}
+     */
     @PostMapping("/{orderNo}/payments")
     public ResponseVo<PaymentAttemptResult> createManualPayment(
             @PathVariable String orderNo,
@@ -140,6 +165,10 @@ public class TripOrderSettlementController {
                 orderNo, passengerId, idempotencyKey, command));
     }
 
+    /**
+     * 批量查询订单结算摘要，供订单列表补充支付与结算状态。
+     * {@code POST /api/v1/orders/internal/settlements/batch-query}
+     */
     @PostMapping("/batch-query")
     public ResponseVo<List<SettlementSummaryResult>> batchQuery(@RequestBody List<String> orderNos) {
         return ResultUtil.success(settlementService.getSettlementSummaries(orderNos));

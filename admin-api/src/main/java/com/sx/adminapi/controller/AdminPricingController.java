@@ -88,6 +88,10 @@ public class AdminPricingController {
         return ResultUtil.success(null);
     }
 
+    /**
+     * 查询指定计价规则关联的优惠券模板；规则和模板均受当前管理员数据域约束。
+     * {@code GET /admin/api/v1/pricing/fare-rules/{id}/coupons?status=&pageNo=&pageSize=}
+     */
     @GetMapping("/{id}/coupons")
     public ResponseVo<Map<String, Object>> couponTemplates(@PathVariable Long id,
                                                            @RequestParam(required = false) String status,
@@ -96,12 +100,20 @@ public class AdminPricingController {
         return ResultUtil.success(adminPricingService.couponTemplates(id, status, pageNo, pageSize));
     }
 
+    /**
+     * 为指定计价规则创建优惠券模板，模板的公司、城市和产品线继承该规则的归属。
+     * {@code POST /admin/api/v1/pricing/fare-rules/{id}/coupons}
+     */
     @PostMapping("/{id}/coupons")
     public ResponseVo<Map<String, Object>> createCouponTemplate(@PathVariable Long id,
                                                                 @RequestBody Map<String, Object> body) {
         return ResultUtil.success(adminPricingService.createCouponTemplate(id, body));
     }
 
+    /**
+     * 更新指定计价规则下的优惠券模板；不允许跨规则或跨数据域修改。
+     * {@code PUT /admin/api/v1/pricing/fare-rules/{id}/coupons/{templateId}}
+     */
     @PutMapping("/{id}/coupons/{templateId}")
     public ResponseVo<Map<String, Object>> updateCouponTemplate(@PathVariable Long id,
                                                                 @PathVariable Long templateId,
@@ -109,12 +121,20 @@ public class AdminPricingController {
         return ResultUtil.success(adminPricingService.updateCouponTemplate(id, templateId, body));
     }
 
+    /**
+     * 发布优惠券模板，使其进入可领取状态。
+     * {@code POST /admin/api/v1/pricing/fare-rules/{id}/coupons/{templateId}/publish}
+     */
     @PostMapping("/{id}/coupons/{templateId}/publish")
     public ResponseVo<Map<String, Object>> publishCouponTemplate(@PathVariable Long id,
                                                                  @PathVariable Long templateId) {
         return ResultUtil.success(adminPricingService.publishCouponTemplate(id, templateId));
     }
 
+    /**
+     * 下线优惠券模板，停止后续领取但保留历史券与核销记录。
+     * {@code POST /admin/api/v1/pricing/fare-rules/{id}/coupons/{templateId}/offline}
+     */
     @PostMapping("/{id}/coupons/{templateId}/offline")
     public ResponseVo<Map<String, Object>> offlineCouponTemplate(@PathVariable Long id,
                                                                  @PathVariable Long templateId) {

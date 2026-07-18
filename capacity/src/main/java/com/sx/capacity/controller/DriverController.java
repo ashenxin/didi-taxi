@@ -40,6 +40,10 @@ public class DriverController {
         this.driverStatusService = driverStatusService;
     }
 
+    /**
+     * 司机听单心跳：续期司机 Presence；请求携带经纬度时同时刷新 Redis GEO 位置。
+     * {@code POST /api/v1/drivers/{driverId}/heartbeat}
+     */
     @PostMapping("/{driverId}/heartbeat")
     public ResponseVo<Void> heartbeat(@PathVariable Long driverId, @RequestBody DriverHeartbeatBody body) {
         try {

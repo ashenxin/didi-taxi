@@ -19,6 +19,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * 本地联调用 Mock 收银台与支付结果控制接口。
+ * 仅在 {@code wallet.mock-payment.enabled=true} 时允许展示收银台和推进模拟支付状态。
+ */
 @RestController
 public class MockCashierController {
     private final PaymentAttemptService paymentAttemptService;
@@ -30,6 +34,10 @@ public class MockCashierController {
         this.mockProperties = mockProperties;
     }
 
+    /**
+     * 展示指定支付尝试单的 Mock 收银台 HTML；访问 token 用于校验支付单链接。
+     * {@code GET /mock-cashier/{paymentNo}?token=}
+     */
     @GetMapping(value = "/mock-cashier/{paymentNo}", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> cashier(@PathVariable String paymentNo, @RequestParam String token) {
         requireMockEnabled();
@@ -37,11 +45,19 @@ public class MockCashierController {
         return ResponseEntity.ok().contentType(MediaType.TEXT_HTML).body(renderCashier(payment, token));
     }
 
+    /**
+     * 内部查询指定支付尝试单的当前状态。
+     * {@code GET /internal/wallet/payment-attempts/{paymentNo}}
+     */
     @GetMapping("/internal/wallet/payment-attempts/{paymentNo}")
     public ResponseVo<PaymentResult> getPaymentAttempt(@PathVariable String paymentNo) {
         return ResultUtil.success(paymentAttemptService.getPaymentAttempt(paymentNo));
     }
 
+    /**
+     * Mock 环境推进支付尝试单状态，并触发与真实渠道回调一致的后续处理。
+     * {@code POST /internal/wallet/payment-attempts/{paymentNo}/mock-resolve}
+     */
     @PostMapping("/internal/wallet/payment-attempts/{paymentNo}/mock-resolve")
     public ResponseVo<PaymentResult> resolve(@PathVariable String paymentNo,
                                              @Valid @RequestBody ResolveMockPaymentRequest request) {
