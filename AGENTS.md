@@ -174,12 +174,17 @@
 
 ```bash
 mvn test
+mvn verify
 mvn -pl passenger-api test
 mvn -pl order test
 mvn -pl gateway spring-boot:run -Dspring-boot.run.profiles=local
 mvn -pl passenger-api spring-boot:run -Dspring-boot.run.profiles=local
 mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 ```
+
+全仓覆盖率使用 JaCoCo。执行 `mvn verify` 后，各业务子模块报告位于
+`<module>/target/site/jacoco/index.html`，XML/CSV 位于同一目录。当前统一行覆盖率门槛为 1%，
+只防止覆盖率采集完全失效；后续按模块基线逐步提高。覆盖率不能替代关键业务断言和端到端验收。
 
 本地启动统一使用 `local`（或明确使用 `dev`）profile；乘客和司机短信 mock 在默认 profile 中关闭，仅在 `local/dev` 中开启。
 

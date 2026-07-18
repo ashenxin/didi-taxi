@@ -54,10 +54,16 @@ COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET=<独立随机值，至少 32 字节>
 
 ```bash
 mvn test
+mvn verify
 mvn -pl passenger-api test
 mvn -pl order test
 mvn -pl wallet test
 ```
+
+`mvn verify` 会在各业务子模块生成 JaCoCo 覆盖率报告，例如
+`capacity/target/site/jacoco/index.html`；同目录还会生成可供 CI 或分析工具读取的 XML、CSV 报告。
+当前统一行覆盖率门槛为 1%，只用于防止 agent 或测试采集完全失效；覆盖率用于定位自动化测试盲区，
+不单独代表测试质量。后续应按模块基线逐步提高门槛。
 
 本地依赖：
 
