@@ -58,8 +58,8 @@ class TripOrderFinishSettlementTest {
         body.setDurationMin(9999);
         body.setFinalAmount(new BigDecimal("0.01"));
 
-        service.finish("T202607170001", body);
-        service.finish("T202607170001", body);
+        service.finish("T202607170001", body, "finish-idempotency-key");
+        service.finish("T202607170001", body, "finish-idempotency-key");
 
         TripOrder order = orderMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
                 .eq(TripOrder::getOrderNo, "T202607170001"));
@@ -102,7 +102,7 @@ class TripOrderFinishSettlementTest {
                 futures.add(pool.submit(() -> {
                     ready.countDown();
                     start.await();
-                    service.finish("T202607170001", body);
+                    service.finish("T202607170001", body, "finish-concurrent-" + Thread.currentThread().threadId());
                     return null;
                 }));
             }

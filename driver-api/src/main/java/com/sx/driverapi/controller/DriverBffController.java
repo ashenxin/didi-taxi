@@ -9,6 +9,7 @@ import com.sx.driverapi.model.order.AssignedOrderItemVO;
 import com.sx.driverapi.model.order.DriverIdBody;
 import com.sx.driverapi.model.order.DriverOrderReasonBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
+import com.sx.driverapi.model.ordercore.DriverActionResult;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
 import com.sx.driverapi.service.DriverBffService;
 import com.sx.driverapi.ws.DriverAssignedPushService;
@@ -32,6 +33,8 @@ import java.util.List;
 @RestController
 @RequestMapping("/driver/api/v1")
 public class DriverBffController {
+
+    private static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 
     private static final String USER_ID_HEADER = "X-User-Id";
 
@@ -115,14 +118,16 @@ public class DriverBffController {
      * 请求体：{@code { "driverId": 80001 }}，须与订单指派司机一致。
      */
     @PostMapping("/orders/{orderNo}/accept")
-    public ResponseVo<Void> accept(@PathVariable String orderNo,
+    public ResponseVo<DriverActionResult> accept(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                    @RequestBody @Valid DriverIdBody body) {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
-        driverBffService.accept(orderNo, authedDriverId);
+        DriverActionResult result = driverBffService.accept(
+                orderNo, authedDriverId, requireIdempotencyKey(idempotencyKey));
         driverAssignedPushService.pushAssignedIfChanged(authedDriverId, true);
-        return ResultUtil.success();
+        return ResultUtil.success(result);
     }
 
     /**
@@ -130,14 +135,17 @@ public class DriverBffController {
      * {@code POST /driver/api/v1/orders/{orderNo}/reject}
      */
     @PostMapping("/orders/{orderNo}/reject")
-    public ResponseVo<Void> reject(@PathVariable String orderNo,
+    public ResponseVo<DriverActionResult> reject(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                    @RequestBody @Valid DriverOrderReasonBody body) {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
-        driverBffService.reject(orderNo, authedDriverId, body.getReasonCode());
+        String requestId = requireIdempotencyKey(idempotencyKey);
+        DriverActionResult result = driverBffService.reject(
+                orderNo, authedDriverId, body.getReasonCode(), requestId);
         driverAssignedPushService.pushAssignedIfChanged(authedDriverId, true);
-        return ResultUtil.success();
+        return ResultUtil.success(result);
     }
 
     /**
@@ -145,14 +153,17 @@ public class DriverBffController {
      * {@code POST /driver/api/v1/orders/{orderNo}/cancel}
      */
     @PostMapping("/orders/{orderNo}/cancel")
-    public ResponseVo<Void> driverCancel(@PathVariable String orderNo,
+    public ResponseVo<DriverActionResult> driverCancel(@PathVariable String orderNo,
                                         @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                        @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                         @RequestBody @Valid DriverOrderReasonBody body) {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
-        driverBffService.driverCancelBeforeArrive(orderNo, authedDriverId, body.getReasonCode());
+        String requestId = requireIdempotencyKey(idempotencyKey);
+        DriverActionResult result = driverBffService.driverCancelBeforeArrive(
+                orderNo, authedDriverId, body.getReasonCode(), requestId);
         driverAssignedPushService.pushAssignedIfChanged(authedDriverId, true);
-        return ResultUtil.success();
+        return ResultUtil.success(result);
     }
 
     /**
@@ -160,13 +171,14 @@ public class DriverBffController {
      * {@code POST /driver/api/v1/orders/{orderNo}/arrive}
      */
     @PostMapping("/orders/{orderNo}/arrive")
-    public ResponseVo<Void> arrive(@PathVariable String orderNo,
+    public ResponseVo<DriverActionResult> arrive(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                    @RequestBody @Valid DriverIdBody body) {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
-        driverBffService.arrive(orderNo, authedDriverId);
-        return ResultUtil.success();
+        return ResultUtil.success(driverBffService.arrive(
+                orderNo, authedDriverId, requireIdempotencyKey(idempotencyKey)));
     }
 
     /**
@@ -174,25 +186,27 @@ public class DriverBffController {
      * {@code POST /driver/api/v1/orders/{orderNo}/start}
      */
     @PostMapping("/orders/{orderNo}/start")
-    public ResponseVo<Void> start(@PathVariable String orderNo,
+    public ResponseVo<DriverActionResult> start(@PathVariable String orderNo,
                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                  @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                   @RequestBody @Valid DriverIdBody body) {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
-        driverBffService.start(orderNo, authedDriverId);
-        return ResultUtil.success();
+        return ResultUtil.success(driverBffService.start(
+                orderNo, authedDriverId, requireIdempotencyKey(idempotencyKey)));
     }
 
     /** 完单只表达行程结束；兼容请求中的里程、时长和金额不会用于结算。 */
     @PostMapping("/orders/{orderNo}/finish")
-    public ResponseVo<Void> finish(@PathVariable String orderNo,
+    public ResponseVo<DriverActionResult> finish(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                    @RequestBody @Valid FinishOrderBody body) {
         Long authedDriverId = requireAuthedDriverId(userId);
         assertSameDriver(body.getDriverId(), authedDriverId);
         body.setDriverId(authedDriverId);
-        driverBffService.finish(orderNo, body);
-        return ResultUtil.success();
+        return ResultUtil.success(driverBffService.finish(
+                orderNo, body, requireIdempotencyKey(idempotencyKey)));
     }
 
     private static Long requireAuthedDriverId(String userId) {
@@ -210,5 +224,16 @@ public class DriverBffController {
         if (clientDriverId == null || !clientDriverId.equals(authedDriverId)) {
             throw new com.sx.driverapi.common.exception.BizErrorException(403, "禁止操作其他司机数据");
         }
+    }
+
+    private static String requireIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new com.sx.driverapi.common.exception.BizErrorException(400, "Idempotency-Key不能为空");
+        }
+        String key = idempotencyKey.trim();
+        if (key.length() > 128) {
+            throw new com.sx.driverapi.common.exception.BizErrorException(400, "Idempotency-Key长度不能超过128");
+        }
+        return key;
     }
 }

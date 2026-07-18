@@ -14,6 +14,8 @@ import com.sx.order.model.dto.CreateOrderPreflightRequest;
 import com.sx.order.model.dto.CreateOrderPreflightResult;
 import com.sx.order.model.dto.CreateOrderResult;
 import com.sx.order.model.dto.DriverCancelBeforeArriveBody;
+import com.sx.order.model.dto.AcceptOrderPreflightResult;
+import com.sx.order.model.dto.OrderActionResult;
 import com.sx.order.model.dto.DriverIdBody;
 import com.sx.order.model.dto.DriverRejectBody;
 import com.sx.order.model.dto.FinishOrderBody;
@@ -123,10 +125,12 @@ public class TripOrderController {
      * {@code POST /api/v1/orders/{orderNo}/cancel}
      */
     @PostMapping("/{orderNo}/cancel")
-    public ResponseVo<Void> cancel(@PathVariable String orderNo, @RequestBody @Valid CancelOrderBody body) {
+    public ResponseVo<OrderActionResult> cancel(
+            @PathVariable String orderNo,
+            @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
+            @RequestBody @Valid CancelOrderBody body) {
         try {
-            tripOrderWriteService.cancelByPassenger(orderNo, body);
-            return ResultUtil.success(null);
+            return ResultUtil.success(tripOrderWriteService.cancelByPassenger(orderNo, body, idempotencyKey));
         } catch (IllegalArgumentException ex) {
             String msg = ex.getMessage();
             if ("无权操作该订单".equals(msg)) {
@@ -237,13 +241,27 @@ public class TripOrderController {
      * {@code POST /api/v1/orders/{orderNo}/accept}
      */
     @PostMapping("/{orderNo}/accept")
-    public ResponseVo<Void> accept(@PathVariable String orderNo,
+    public ResponseVo<OrderActionResult> accept(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                    @RequestBody @Valid DriverIdBody body) {
-        return handleDriverWrite(() -> {
+        return handleDriverWriteResult(() -> {
             Long authedDriverId = requireAuthedDriverId(userId);
             assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
-            tripOrderWriteService.accept(orderNo, authedDriverId);
+            return tripOrderWriteService.accept(orderNo, authedDriverId, idempotencyKey);
+        });
+    }
+
+    @PostMapping("/{orderNo}/accept-preflight")
+    public ResponseVo<AcceptOrderPreflightResult> acceptPreflight(
+            @PathVariable String orderNo,
+            @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+            @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
+            @RequestBody @Valid DriverIdBody body) {
+        return handleDriverWriteResult(() -> {
+            Long authedDriverId = requireAuthedDriverId(userId);
+            assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
+            return tripOrderWriteService.preflightAccept(orderNo, authedDriverId, idempotencyKey);
         });
     }
 
@@ -252,13 +270,15 @@ public class TripOrderController {
      * {@code POST /api/v1/orders/{orderNo}/reject}
      */
     @PostMapping("/{orderNo}/reject")
-    public ResponseVo<Void> rejectByDriver(@PathVariable String orderNo,
+    public ResponseVo<OrderActionResult> rejectByDriver(@PathVariable String orderNo,
                                              @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                             @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                              @RequestBody @Valid DriverRejectBody body) {
-        return handleDriverWrite(() -> {
+        return handleDriverWriteResult(() -> {
             Long authedDriverId = requireAuthedDriverId(userId);
             assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
-            tripOrderWriteService.rejectByDriver(orderNo, authedDriverId, body.getReasonCode());
+            return tripOrderWriteService.rejectByDriver(
+                    orderNo, authedDriverId, body.getReasonCode(), idempotencyKey);
         });
     }
 
@@ -267,13 +287,15 @@ public class TripOrderController {
      * {@code POST /api/v1/orders/{orderNo}/driver/cancel}
      */
     @PostMapping("/{orderNo}/driver/cancel")
-    public ResponseVo<Void> driverCancelBeforeArrive(@PathVariable String orderNo,
+    public ResponseVo<OrderActionResult> driverCancelBeforeArrive(@PathVariable String orderNo,
                                                       @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                                      @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                                       @RequestBody @Valid DriverCancelBeforeArriveBody body) {
-        return handleDriverWrite(() -> {
+        return handleDriverWriteResult(() -> {
             Long authedDriverId = requireAuthedDriverId(userId);
             assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
-            tripOrderWriteService.driverCancelBeforeArrive(orderNo, authedDriverId, body.getReasonCode());
+            return tripOrderWriteService.driverCancelBeforeArrive(
+                    orderNo, authedDriverId, body.getReasonCode(), idempotencyKey);
         });
     }
 
@@ -282,13 +304,14 @@ public class TripOrderController {
      * {@code POST /api/v1/orders/{orderNo}/arrive}
      */
     @PostMapping("/{orderNo}/arrive")
-    public ResponseVo<Void> arrive(@PathVariable String orderNo,
+    public ResponseVo<OrderActionResult> arrive(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                    @RequestBody @Valid DriverIdBody body) {
-        return handleDriverWrite(() -> {
+        return handleDriverWriteResult(() -> {
             Long authedDriverId = requireAuthedDriverId(userId);
             assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
-            tripOrderWriteService.arrive(orderNo, authedDriverId);
+            return tripOrderWriteService.arrive(orderNo, authedDriverId, idempotencyKey);
         });
     }
 
@@ -297,28 +320,30 @@ public class TripOrderController {
      * {@code POST /api/v1/orders/{orderNo}/start}
      */
     @PostMapping("/{orderNo}/start")
-    public ResponseVo<Void> start(@PathVariable String orderNo,
+    public ResponseVo<OrderActionResult> start(@PathVariable String orderNo,
                                   @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                  @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                   @RequestBody @Valid DriverIdBody body) {
-        return handleDriverWrite(() -> {
+        return handleDriverWriteResult(() -> {
             Long authedDriverId = requireAuthedDriverId(userId);
             assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
-            tripOrderWriteService.start(orderNo, authedDriverId);
+            return tripOrderWriteService.start(orderNo, authedDriverId, idempotencyKey);
         });
     }
 
     /** 完单只推进 {@code STARTED → FINISHED} 并可靠登记异步结算任务。 */
     @PostMapping("/{orderNo}/finish")
-    public ResponseVo<Void> finish(@PathVariable String orderNo,
+    public ResponseVo<OrderActionResult> finish(@PathVariable String orderNo,
                                    @RequestHeader(value = USER_ID_HEADER, required = false) String userId,
+                                   @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                    @RequestBody @Valid FinishOrderBody body) {
-        return handleDriverWrite(() -> {
+        return handleDriverWriteResult(() -> {
             Long authedDriverId = requireAuthedDriverId(userId);
             assertSameDriverIfPresent(body == null ? null : body.getDriverId(), authedDriverId);
             if (body != null) {
                 body.setDriverId(authedDriverId);
             }
-            tripOrderWriteService.finish(orderNo, body);
+            return tripOrderWriteService.finish(orderNo, body, idempotencyKey);
         });
     }
 
@@ -326,27 +351,27 @@ public class TripOrderController {
      * 司机写操作统一异常转业务码：403/404/409/400。
      */
     private static ResponseVo<Void> handleDriverWrite(Runnable action) {
-        try {
+        return handleDriverWriteResult(() -> {
             action.run();
-            return ResultUtil.success(null);
+            return null;
+        });
+    }
+
+    private static <T> ResponseVo<T> handleDriverWriteResult(java.util.function.Supplier<T> action) {
+        try {
+            return ResultUtil.success(action.get());
         } catch (IllegalArgumentException ex) {
             String msg = ex.getMessage();
             if ("未授权，请重新登录".equals(msg)) {
                 return ResultUtil.error(401, msg);
             }
-            if ("禁止操作其他司机数据".equals(msg)) {
-                return ResultUtil.error(403, msg);
-            }
-            if ("非本单指派司机".equals(msg)) {
+            if ("禁止操作其他司机数据".equals(msg) || "非本单指派司机".equals(msg)) {
                 return ResultUtil.error(403, msg);
             }
             if ("订单不存在".equals(msg)) {
                 return ResultUtil.error(404, msg);
             }
-            if (msg != null && msg.contains("不允许")) {
-                return ResultUtil.error(409, msg);
-            }
-            if (msg != null && (msg.contains("失败") || msg.contains("请重试"))) {
+            if (msg != null && (msg.contains("不允许") || msg.contains("失败") || msg.contains("请重试"))) {
                 return ResultUtil.error(409, msg);
             }
             return ResultUtil.requestError(msg);

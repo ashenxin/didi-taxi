@@ -33,6 +33,7 @@ import com.sx.passengerapi.model.ordercore.CreateOrderResult;
 import com.sx.passengerapi.model.ordercore.CreateOrderPreflightRequest;
 import com.sx.passengerapi.model.ordercore.CreateOrderPreflightResult;
 import com.sx.passengerapi.model.ordercore.OrderEventRow;
+import com.sx.passengerapi.model.ordercore.OrderActionResult;
 import com.sx.passengerapi.model.ordercore.Place;
 import com.sx.passengerapi.model.capacity.PendingOrderIndexBody;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
@@ -49,6 +50,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -473,11 +475,11 @@ public class PassengerOrderService {
     /**
      * 乘客取消订单：透传 order-service {@code POST /api/v1/orders/{orderNo}/cancel}。
      */
-    public void cancelOrder(String orderNo, CancelOrderRequest req) {
+    public OrderActionResult cancelOrder(String orderNo, CancelOrderRequest req, String idempotencyKey) {
         CancelOrderBody body = new CancelOrderBody();
         body.setPassengerId(req.getPassengerId());
         body.setCancelReason(req.getCancelReason());
-        var resp = orderClient.cancel(orderNo, body);
+        var resp = orderClient.cancel(orderNo, idempotencyKey, body);
         if (resp == null) {
             throw new BizErrorException(502, "订单服务响应为空");
         }
@@ -485,8 +487,14 @@ public class PassengerOrderService {
             throw new BizErrorException(resp.getCode() == null ? 502 : resp.getCode(),
                     resp.getMsg() == null ? "取消订单失败" : resp.getMsg());
         }
-        log.info("乘客取消订单 orderNo={} passengerId={}", orderNo, req.getPassengerId());
+        OrderActionResult result = resp.getData();
+        if (result == null) {
+            throw new BizErrorException(502, "取消订单：下游响应缺少幂等结果");
+        }
+        log.info("乘客取消订单 orderNo={} passengerId={} replayed={}",
+                orderNo, req.getPassengerId(), result.replayed());
         passengerWsNotifyService.notifyOrderChanged(req.getPassengerId(), orderNo);
+        return result;
     }
 
     /**
@@ -532,7 +540,7 @@ public class PassengerOrderService {
                 CancelOrderRequest req = new CancelOrderRequest();
                 req.setPassengerId(passengerId);
                 req.setCancelReason("乘客退出登录");
-                cancelOrder(orderNo, req);
+                cancelOrder(orderNo, req, "passenger-logout-cancel:" + UUID.randomUUID());
                 cancelledCount++;
             } catch (BizErrorException e) {
                 log.warn("登出代取消失败 orderNo={} passengerId={} msg={}", orderNo, passengerId, e.getMessage());

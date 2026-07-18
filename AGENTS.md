@@ -49,6 +49,8 @@
 - 等待总时长默认 180 秒，配置见 `order.dispatch.wait-timeout-seconds`。
 - 司机确认窗默认 30 秒，BFF、order、capacity 需保持一致。
 - 拒单、到达前取消、offer 超时会触发收回/改派。
+- 乘客取消以及司机接单、拒单、到达前取消、到达、开始、完单必须携带 `Idempotency-Key`；同 key、同请求成功重放不重复写状态、事件、隔离键、Outbox 或结算，响应 `replayed=true`，BFF 仍补发乘客刷新通知；同 key 改内容或跨动作复用返回 409。
+- 接单先向 order 做幂等预检；已成功的重放会跳过 capacity 接单资格校验和最终订单写调用，避免重复外部副作用。
 - 司机与乘客拒单/取消后存在 30 分钟隔离匹配键：`tx:dispatch:block:dp:{driverId}:{passengerId}`。
 - 乘客详情中的 `reDispatching` 用于展示“正在重新派单”。
 
@@ -117,7 +119,7 @@
 | `POST` | `/app/api/v1/orders` | 当前 H5/MVP 权威一步下单入口 |
 | `POST` | `/app/api/v1/orders/create` | 历史兼容或后续两段式/Outbox 演进入口，不作为当前 H5 推荐入口 |
 | `GET` | `/app/api/v1/orders/{orderNo}` | 订单详情 |
-| `POST` | `/app/api/v1/orders/{orderNo}/cancel` | 乘客取消 |
+| `POST` | `/app/api/v1/orders/{orderNo}/cancel` | 乘客取消；必须携带 `Idempotency-Key` |
 | `GET` | `/app/api/v1/orders/{orderNo}/settlement` | 查询权威结算状态与账单；未结清时可据此引导处理 |
 | `POST` | `/app/api/v1/orders/{orderNo}/payments` | 主动支付；请求体仅 `channel`，需携带新的 `Idempotency-Key` |
 | `GET` | `/app/api/v1/wallet/summary` | 钱包首页摘要 |
@@ -142,11 +144,12 @@
 | `POST` | `/driver/api/v1/drivers/{driverId}/online` | 上线/下线听单 |
 | `GET` | `/driver/api/v1/orders/assigned` | 当前司机待接单列表 |
 | `GET` | `/driver/api/v1/orders/{orderNo}` | 订单详情 |
-| `POST` | `/driver/api/v1/orders/{orderNo}/accept` | 接单 |
-| `POST` | `/driver/api/v1/orders/{orderNo}/reject` | 拒单 |
-| `POST` | `/driver/api/v1/orders/{orderNo}/cancel` | 到达前取消 |
-| `POST` | `/driver/api/v1/orders/{orderNo}/arrive` | 到达上车点 |
-| `POST` | `/driver/api/v1/orders/{orderNo}/start` | 开始行程 |
+| `POST` | `/driver/api/v1/orders/{orderNo}/accept` | 接单；必须携带 `Idempotency-Key` |
+| `POST` | `/driver/api/v1/orders/{orderNo}/reject` | 拒单；必须携带 `Idempotency-Key` |
+| `POST` | `/driver/api/v1/orders/{orderNo}/cancel` | 到达前取消；必须携带 `Idempotency-Key` |
+| `POST` | `/driver/api/v1/orders/{orderNo}/arrive` | 到达上车点；必须携带 `Idempotency-Key` |
+| `POST` | `/driver/api/v1/orders/{orderNo}/start` | 开始行程；必须携带 `Idempotency-Key` |
+| `POST` | `/driver/api/v1/orders/{orderNo}/finish` | 完单；必须携带 `Idempotency-Key` |
 | `POST` | `/driver/api/v1/orders/{orderNo}/finish` | 完成行程 |
 
 ### 后台常用接口
@@ -333,11 +336,11 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 以 `TODO与差距总览.md` 为准，当前需要注意的后续项：
 
 - 乘客/司机 WS 单实例主路径已收口；Redis Pub/Sub / Sticky 跨实例广播本阶段不开发。
-- 两段式异步指派、Outbox、Kafka 与下单 `Idempotency-Key` 主路径已落地；下单成功重放已通过 order 预检在地图、运力、计价之前短路。后续重点转为后台/运维排障入口、DLQ、指标告警与写接口幂等扩展。
+- 两段式异步指派、Outbox、Kafka 与核心端侧订单写操作请求级幂等已落地；下单成功重放在地图、运力、计价前短路，接单成功重放在 capacity 校验前短路。后续重点转为后台/运维排障入口、DLQ、指标告警，以及内部管理写接口按风险扩展幂等。
 - 接驾 ETA 仍需实时坐标和 matrix 能力补齐；当前阶段暂不继续接入高德地图服务，先保留为后续体验项。
 - 司机心跳续 GEO 与司机级 Presence 防僵尸策略已落地；XXL `capacityDriverPresenceCleanup` 仍需在运行环境配置启用。
 - 司机登出后 `ACCEPTED`（司机已接单）到达前自动释单口径已明确并落地：释放改派回 `CREATED`（待派单/重新派单），不是乘客侧 `CANCELLED`（已取消）终态。
 - 完单结算 MVP 已落地为本地 mock 闭环；支付渠道仍是 mock。接真实支付宝/微信前还需完成第三方签约、回调验签、退款、对账和财务评审；支付失败不由后台定时自动重试。
 - 车队营销优惠券后台、目标表结构、领券、锁券/核销与结算快照已经落地；司机金额展示和车队/运营公司固定金额或比例分成仍需独立设计、实现和财务评审。
 - 福利签到积分已落地；Redis/MySQL 异常补偿任务仍待建设。
-- 当前重点见 `TODO与差距总览.md` §2：司机端近期功能、后台派单诊断聚合、DLQ、写接口幂等扩展与真实支付闭环。
+- 当前重点见 `TODO与差距总览.md` §2：司机端近期功能、后台派单诊断聚合、DLQ 与真实支付闭环。

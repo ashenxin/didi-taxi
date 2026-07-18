@@ -18,6 +18,8 @@ import com.sx.order.model.dto.CancelOrderBody;
 import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.CreateOrderPreflightRequest;
 import com.sx.order.model.dto.CreateOrderPreflightResult;
+import com.sx.order.model.dto.AcceptOrderPreflightResult;
+import com.sx.order.model.dto.OrderActionResult;
 import com.sx.order.model.dto.FinishOrderBody;
 import com.sx.order.model.dto.OpenDriverOfferBody;
 import com.sx.order.model.dto.AssignedAwaitingRescheduleDto;
@@ -43,6 +45,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
 @Service
 @Slf4j
 public class TripOrderWriteService {
@@ -63,6 +68,13 @@ public class TripOrderWriteService {
     /** 与表注释一致：系统取消（如司机已接其他单） */
     private static final int CANCEL_BY_SYSTEM = 3;
     private static final String IDEMPOTENT_ACTION_CREATE_ORDER = "CREATE_ORDER";
+    private static final String IDEMPOTENT_ACTION_PASSENGER_CANCEL_ORDER = "PASSENGER_CANCEL_ORDER";
+    private static final String IDEMPOTENT_ACTION_DRIVER_ACCEPT_ORDER = "DRIVER_ACCEPT_ORDER";
+    private static final String IDEMPOTENT_ACTION_DRIVER_REJECT_ORDER = "DRIVER_REJECT_ORDER";
+    private static final String IDEMPOTENT_ACTION_DRIVER_CANCEL_BEFORE_ARRIVE = "DRIVER_CANCEL_BEFORE_ARRIVE";
+    private static final String IDEMPOTENT_ACTION_DRIVER_ARRIVE_ORDER = "DRIVER_ARRIVE_ORDER";
+    private static final String IDEMPOTENT_ACTION_DRIVER_START_ORDER = "DRIVER_START_ORDER";
+    private static final String IDEMPOTENT_ACTION_DRIVER_FINISH_ORDER = "DRIVER_FINISH_ORDER";
     private static final String IDEMPOTENT_STATUS_PROCESSING = "PROCESSING";
     private static final String IDEMPOTENT_STATUS_SUCCESS = "SUCCESS";
     private static final String IDEMPOTENT_STATUS_FAILED = "FAILED";
@@ -351,17 +363,47 @@ public class TripOrderWriteService {
             root.put("distanceSource", trimToNull(body.getDistanceSource()));
             root.put("fareCalculationVersion", trimToNull(body.getFareCalculationVersion()));
             root.put("routeMockVersion", trimToNull(body.getRouteMockVersion()));
-            String json = objectMapper.writeValueAsString(root);
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] bytes = md.digest(json.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(bytes.length * 2);
-            for (byte b : bytes) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
+            return sha256(objectMapper.writeValueAsString(root));
         } catch (Exception e) {
             throw new IllegalStateException("下单幂等请求哈希生成失败", e);
         }
+    }
+
+    private String driverActionRequestHash(String actionType, String orderNo, Long driverId,
+                                           String reasonCode) {
+        try {
+            Map<String, Object> root = new LinkedHashMap<>();
+            root.put("actionType", actionType);
+            root.put("orderNo", trimToNull(orderNo));
+            root.put("driverId", driverId);
+            root.put("reasonCode", trimToNull(reasonCode));
+            return sha256(objectMapper.writeValueAsString(root));
+        } catch (Exception e) {
+            throw new IllegalStateException("司机订单操作幂等请求哈希生成失败", e);
+        }
+    }
+
+    private String passengerCancelRequestHash(String orderNo, Long passengerId, String cancelReason) {
+        try {
+            Map<String, Object> root = new LinkedHashMap<>();
+            root.put("actionType", IDEMPOTENT_ACTION_PASSENGER_CANCEL_ORDER);
+            root.put("orderNo", trimToNull(orderNo));
+            root.put("passengerId", passengerId);
+            root.put("cancelReason", trimToNull(cancelReason));
+            return sha256(objectMapper.writeValueAsString(root));
+        } catch (Exception e) {
+            throw new IllegalStateException("乘客取消幂等请求哈希生成失败", e);
+        }
+    }
+
+    private static String sha256(String value) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        byte[] bytes = md.digest(value.getBytes(StandardCharsets.UTF_8));
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     private static Map<String, Object> placeHashMap(com.sx.order.model.dto.Place place) {
@@ -657,10 +699,23 @@ public class TripOrderWriteService {
      * 乘客取消订单：仅允许 CREATED/ASSIGNED/ACCEPTED → CANCELLED，需校验 passengerId。
      */
     @Transactional(propagation = Propagation.REQUIRED)
-    public void cancelByPassenger(String orderNo, CancelOrderBody body) {
+    public OrderActionResult cancelByPassenger(String orderNo, CancelOrderBody body,
+                                               String idempotencyKey) {
         if (orderNo == null || orderNo.isBlank()) {
             throw new IllegalArgumentException("orderNo不能为空");
         }
+        if (body == null || body.getPassengerId() == null) {
+            throw new IllegalArgumentException("passengerId不能为空");
+        }
+        String requestHash = passengerCancelRequestHash(
+                orderNo, body.getPassengerId(), body.getCancelReason());
+        return executeIdempotentOrderAction(IDEMPOTENT_ACTION_PASSENGER_CANCEL_ORDER,
+                orderNo, requestHash, idempotencyKey,
+                () -> loadPassengerOrder(orderNo, body.getPassengerId()),
+                existing -> cancelByPassengerOnce(existing, body));
+    }
+
+    private TripOrder loadPassengerOrder(String orderNo, Long passengerId) {
         TripOrder existing = tripOrderEntityMapper.selectOne(com.baomidou.mybatisplus.core.toolkit.Wrappers.<TripOrder>lambdaQuery()
                 .eq(TripOrder::getOrderNo, orderNo)
                 .eq(TripOrder::getIsDeleted, 0)
@@ -668,14 +723,15 @@ public class TripOrderWriteService {
         if (existing == null) {
             throw new IllegalArgumentException("订单不存在");
         }
-        if (!Objects.equals(existing.getPassengerId(), body.getPassengerId())) {
+        if (!Objects.equals(existing.getPassengerId(), passengerId)) {
             throw new IllegalArgumentException("无权操作该订单");
         }
+        return existing;
+    }
+
+    private void cancelByPassengerOnce(TripOrder existing, CancelOrderBody body) {
+        String orderNo = existing.getOrderNo();
         Integer st = existing.getStatus();
-        if (Objects.equals(st, STATUS_CANCELLED)) {
-            log.info("取消订单跳过（已取消） orderNo={}", orderNo);
-            return;
-        }
         if (st == null || (st != STATUS_CREATED && st != STATUS_ASSIGNED && st != STATUS_PENDING_DRIVER_CONFIRM && st != STATUS_ACCEPTED)) {
             throw new IllegalArgumentException("订单当前状态不允许取消");
         }
@@ -1076,12 +1132,46 @@ public class TripOrderWriteService {
      * 司机接单：{@code ASSIGNED} 或 {@code PENDING_DRIVER_CONFIRM} → {@code ACCEPTED}（幂等：已是 ACCEPTED 则直接返回）。
      */
     @Transactional(propagation = Propagation.REQUIRED)
-    public void accept(String orderNo, Long driverId) {
-        TripOrder existing = loadActiveOrder(orderNo);
-        assertDriver(existing, driverId);
+    public OrderActionResult accept(String orderNo, Long driverId, String idempotencyKey) {
+        String requestHash = driverActionRequestHash(
+                IDEMPOTENT_ACTION_DRIVER_ACCEPT_ORDER, orderNo, driverId, null);
+        return executeIdempotentOrderAction(IDEMPOTENT_ACTION_DRIVER_ACCEPT_ORDER,
+                orderNo, requestHash, idempotencyKey,
+                () -> loadDriverOrder(orderNo, driverId), this::acceptOnce);
+    }
+
+    public AcceptOrderPreflightResult preflightAccept(String orderNo, Long driverId,
+                                                      String idempotencyKey) {
+        String requestId = normalizeIdempotencyKey(idempotencyKey);
+        String requestHash = driverActionRequestHash(
+                IDEMPOTENT_ACTION_DRIVER_ACCEPT_ORDER, orderNo, driverId, null);
+        OrderIdempotentRecord existing = selectIdempotentRecord(requestId);
+        if (existing != null) {
+            resolveExistingOrderAction(existing, IDEMPOTENT_ACTION_DRIVER_ACCEPT_ORDER, requestHash);
+            return new AcceptOrderPreflightResult(true);
+        }
+        TripOrder order = loadDriverOrder(orderNo, driverId);
+        Integer status = order.getStatus();
+        if (!Objects.equals(status, STATUS_ASSIGNED)
+                && !Objects.equals(status, STATUS_PENDING_DRIVER_CONFIRM)
+                && !Objects.equals(status, STATUS_ACCEPTED)) {
+            throw new IllegalArgumentException("订单当前状态不允许接单");
+        }
+        return new AcceptOrderPreflightResult(false);
+    }
+
+    private TripOrder loadDriverOrder(String orderNo, Long driverId) {
+        TripOrder order = loadActiveOrder(orderNo);
+        assertDriver(order, driverId);
+        return order;
+    }
+
+    private void acceptOnce(TripOrder existing) {
+        String orderNo = existing.getOrderNo();
+        Long driverId = existing.getDriverId();
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_ACCEPTED)) {
-            log.info("接单幂等（已接单） orderNo={} driverId={}", orderNo, driverId);
+            log.info("接单状态已满足 orderNo={} driverId={}", orderNo, driverId);
             return;
         }
         if (!Objects.equals(st, STATUS_ASSIGNED) && !Objects.equals(st, STATUS_PENDING_DRIVER_CONFIRM)) {
@@ -1113,10 +1203,16 @@ public class TripOrderWriteService {
      * 司机拒单：{@code ASSIGNED / PENDING_DRIVER_CONFIRM → CREATED}，清空指派并再次投递派单 Outbox（与下单时事件类型一致，供 capacity 消费）。
      */
     @Transactional(propagation = Propagation.REQUIRED)
-    public void rejectByDriver(String orderNo, Long driverId, String reasonCode) {
+    public OrderActionResult rejectByDriver(String orderNo, Long driverId, String reasonCode,
+                                             String idempotencyKey) {
         String code = normalizeReasonCode(reasonCode);
-        TripOrder existing = loadActiveOrder(orderNo);
-        assertDriver(existing, driverId);
+        return executeIdempotentDriverAction(IDEMPOTENT_ACTION_DRIVER_REJECT_ORDER,
+                orderNo, driverId, code, idempotencyKey, this::rejectByDriverOnce);
+    }
+
+    private void rejectByDriverOnce(TripOrder existing, String code) {
+        String orderNo = existing.getOrderNo();
+        Long driverId = existing.getDriverId();
         Integer st = existing.getStatus();
         if (!Objects.equals(st, STATUS_ASSIGNED) && !Objects.equals(st, STATUS_PENDING_DRIVER_CONFIRM)) {
             throw new IllegalArgumentException("订单当前状态不允许拒单");
@@ -1155,10 +1251,16 @@ public class TripOrderWriteService {
      * 司机取消（已接单、到达前）：{@code ACCEPTED → CREATED}，清空服务方并再次投递派单 Outbox。
      */
     @Transactional(propagation = Propagation.REQUIRED)
-    public void driverCancelBeforeArrive(String orderNo, Long driverId, String reasonCode) {
+    public OrderActionResult driverCancelBeforeArrive(String orderNo, Long driverId, String reasonCode,
+                                                       String idempotencyKey) {
         String code = normalizeReasonCode(reasonCode);
-        TripOrder existing = loadActiveOrder(orderNo);
-        assertDriver(existing, driverId);
+        return executeIdempotentDriverAction(IDEMPOTENT_ACTION_DRIVER_CANCEL_BEFORE_ARRIVE,
+                orderNo, driverId, code, idempotencyKey, this::driverCancelBeforeArriveOnce);
+    }
+
+    private void driverCancelBeforeArriveOnce(TripOrder existing, String code) {
+        String orderNo = existing.getOrderNo();
+        Long driverId = existing.getDriverId();
         Integer st = existing.getStatus();
         if (!Objects.equals(st, STATUS_ACCEPTED)) {
             throw new IllegalArgumentException("订单当前状态不允许司机取消");
@@ -1190,6 +1292,75 @@ public class TripOrderWriteService {
         TripOrder after = loadActiveOrder(orderNo);
         enqueueDispatchRequestedOutbox(after, now);
         log.info("司机已取消订单（到达前） orderNo={} driverId={} reasonCode={}", orderNo, driverId, code);
+    }
+
+    private OrderActionResult executeIdempotentDriverAction(
+            String actionType, String orderNo, Long driverId, String reasonCode,
+            String idempotencyKey, java.util.function.BiConsumer<TripOrder, String> action) {
+        String requestHash = driverActionRequestHash(actionType, orderNo, driverId, reasonCode);
+        return executeIdempotentOrderAction(actionType, orderNo, requestHash, idempotencyKey,
+                () -> loadDriverOrder(orderNo, driverId),
+                order -> action.accept(order, reasonCode));
+    }
+
+    private OrderActionResult executeIdempotentOrderAction(
+            String actionType, String orderNo, String requestHash, String idempotencyKey,
+            Supplier<TripOrder> validatedOrderSupplier, Consumer<TripOrder> action) {
+        String requestId = normalizeIdempotencyKey(idempotencyKey);
+        OrderIdempotentRecord existingRecord = selectIdempotentRecord(requestId);
+        if (existingRecord != null) {
+            return resolveExistingOrderAction(existingRecord, actionType, requestHash);
+        }
+
+        TripOrder order = validatedOrderSupplier.get();
+        LocalDateTime now = LocalDateTime.now();
+        OrderIdempotentRecord record = new OrderIdempotentRecord()
+                .setRequestId(requestId)
+                .setActionType(actionType)
+                .setPassengerId(order.getPassengerId())
+                .setOrderNo(orderNo)
+                .setStatus(IDEMPOTENT_STATUS_PROCESSING)
+                .setRequestHash(requestHash)
+                .setCreatedAt(now)
+                .setUpdatedAt(now);
+        try {
+            orderIdempotentRecordMapper.insert(record);
+        } catch (DuplicateKeyException e) {
+            OrderIdempotentRecord raced = selectIdempotentRecord(requestId);
+            if (raced != null) {
+                return resolveExistingOrderAction(raced, actionType, requestHash);
+            }
+            throw e;
+        }
+
+        action.accept(order);
+        record.setStatus(IDEMPOTENT_STATUS_SUCCESS)
+                .setResponseSnapshot("{\"replayed\":false}")
+                .setUpdatedAt(LocalDateTime.now());
+        orderIdempotentRecordMapper.updateById(record);
+        return OrderActionResult.executed();
+    }
+
+    private OrderActionResult resolveExistingOrderAction(OrderIdempotentRecord existing,
+                                                           String actionType, String requestHash) {
+        if (!actionType.equals(existing.getActionType())) {
+            throw new OrderConflictException("同一 Idempotency-Key 已用于其它操作");
+        }
+        if (!Objects.equals(requestHash, existing.getRequestHash())) {
+            throw new OrderConflictException("同一 Idempotency-Key 不能用于不同操作内容");
+        }
+        if (IDEMPOTENT_STATUS_SUCCESS.equals(existing.getStatus())) {
+            log.info("订单操作幂等命中 requestId={} actionType={} orderNo={}",
+                    existing.getRequestId(), actionType, existing.getOrderNo());
+            return OrderActionResult.replayedResult();
+        }
+        if (IDEMPOTENT_STATUS_PROCESSING.equals(existing.getStatus())) {
+            throw new OrderConflictException("请求处理中，请稍后重试");
+        }
+        if (IDEMPOTENT_STATUS_FAILED.equals(existing.getStatus())) {
+            throw new OrderConflictException("该 Idempotency-Key 对应的操作已失败，请使用新的 Idempotency-Key 重试");
+        }
+        throw new OrderConflictException("该 Idempotency-Key 状态异常，请使用新的 Idempotency-Key 重试");
     }
 
     private static String normalizeReasonCode(String reasonCode) {
@@ -1312,12 +1483,20 @@ public class TripOrderWriteService {
      * 到达上车点：ACCEPTED → ARRIVED。
      */
     @Transactional(propagation = Propagation.REQUIRED)
-    public void arrive(String orderNo, Long driverId) {
-        TripOrder existing = loadActiveOrder(orderNo);
-        assertDriver(existing, driverId);
+    public OrderActionResult arrive(String orderNo, Long driverId, String idempotencyKey) {
+        String requestHash = driverActionRequestHash(
+                IDEMPOTENT_ACTION_DRIVER_ARRIVE_ORDER, orderNo, driverId, null);
+        return executeIdempotentOrderAction(IDEMPOTENT_ACTION_DRIVER_ARRIVE_ORDER,
+                orderNo, requestHash, idempotencyKey,
+                () -> loadDriverOrder(orderNo, driverId), this::arriveOnce);
+    }
+
+    private void arriveOnce(TripOrder existing) {
+        String orderNo = existing.getOrderNo();
+        Long driverId = existing.getDriverId();
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_ARRIVED)) {
-            log.info("到达幂等 orderNo={} driverId={}", orderNo, driverId);
+            log.info("到达状态已满足 orderNo={} driverId={}", orderNo, driverId);
             return;
         }
         if (!Objects.equals(st, STATUS_ACCEPTED)) {
@@ -1346,12 +1525,20 @@ public class TripOrderWriteService {
      * 开始行程：ARRIVED → STARTED。
      */
     @Transactional(propagation = Propagation.REQUIRED)
-    public void start(String orderNo, Long driverId) {
-        TripOrder existing = loadActiveOrder(orderNo);
-        assertDriver(existing, driverId);
+    public OrderActionResult start(String orderNo, Long driverId, String idempotencyKey) {
+        String requestHash = driverActionRequestHash(
+                IDEMPOTENT_ACTION_DRIVER_START_ORDER, orderNo, driverId, null);
+        return executeIdempotentOrderAction(IDEMPOTENT_ACTION_DRIVER_START_ORDER,
+                orderNo, requestHash, idempotencyKey,
+                () -> loadDriverOrder(orderNo, driverId), this::startOnce);
+    }
+
+    private void startOnce(TripOrder existing) {
+        String orderNo = existing.getOrderNo();
+        Long driverId = existing.getDriverId();
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_STARTED)) {
-            log.info("开始行程幂等 orderNo={} driverId={}", orderNo, driverId);
+            log.info("开始行程状态已满足 orderNo={} driverId={}", orderNo, driverId);
             return;
         }
         if (!Objects.equals(st, STATUS_ARRIVED)) {
@@ -1378,13 +1565,22 @@ public class TripOrderWriteService {
 
     /** 完单只表达行程结束；最终金额由异步结算使用冻结快照计算。 */
     @Transactional(propagation = Propagation.REQUIRED)
-    public void finish(String orderNo, FinishOrderBody body) {
+    public OrderActionResult finish(String orderNo, FinishOrderBody body, String idempotencyKey) {
         Long driverId = body.getDriverId();
-        TripOrder existing = loadActiveOrder(orderNo);
-        assertDriver(existing, driverId);
+        String requestHash = driverActionRequestHash(
+                IDEMPOTENT_ACTION_DRIVER_FINISH_ORDER, orderNo, driverId, null);
+        return executeIdempotentOrderAction(IDEMPOTENT_ACTION_DRIVER_FINISH_ORDER,
+                orderNo, requestHash, idempotencyKey,
+                () -> loadDriverOrder(orderNo, driverId),
+                existing -> finishOnce(existing, body));
+    }
+
+    private void finishOnce(TripOrder existing, FinishOrderBody body) {
+        String orderNo = existing.getOrderNo();
+        Long driverId = body.getDriverId();
         Integer st = existing.getStatus();
         if (Objects.equals(st, STATUS_FINISHED)) {
-            log.info("完单幂等 orderNo={} driverId={}", orderNo, driverId);
+            log.info("完单状态已满足 orderNo={} driverId={}", orderNo, driverId);
             return;
         }
         if (!Objects.equals(st, STATUS_STARTED)) {

@@ -14,6 +14,8 @@ import com.sx.driverapi.model.order.DriverIdBody;
 import com.sx.driverapi.model.order.DriverOrderReasonBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
+import com.sx.driverapi.model.ordercore.DriverActionResult;
+import com.sx.driverapi.model.ordercore.AcceptOrderPreflightResult;
 import com.sx.driverapi.model.passenger.OrderChangedNotifyBody;
 import feign.FeignException;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -106,22 +109,41 @@ public class DriverBffService {
         return out;
     }
 
-    public void accept(String orderNo, Long driverId) {
-        unwrap(capacityDriverClient.acceptReadiness(driverId), "接单资格校验");
+    public DriverActionResult accept(String orderNo, Long driverId, String idempotencyKey) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
-        unwrap(orderClient.accept(orderNo, String.valueOf(driverId), body), "确认接单");
+        CoreResponseVo<AcceptOrderPreflightResult> preflightResponse = orderClient.acceptPreflight(
+                orderNo, String.valueOf(driverId), idempotencyKey, body);
+        unwrap(preflightResponse, "接单幂等预检");
+        AcceptOrderPreflightResult preflight = preflightResponse.getData();
+        if (preflight == null) {
+            throw new BizErrorException(502, "接单幂等预检：下游响应缺少预检结果");
+        }
+        if (preflight.replayed()) {
+            DriverActionResult replayed = new DriverActionResult(true);
+            notifyPassengerOrderChanged(orderNo, "司机接单重放");
+            log.info("司机接单请求已重放 orderNo={} driverId={}", orderNo, driverId);
+            return replayed;
+        }
+        unwrap(capacityDriverClient.acceptReadiness(driverId), "接单资格校验");
+        DriverActionResult result = unwrapDriverAction(
+                orderClient.accept(orderNo, String.valueOf(driverId), idempotencyKey, body), "确认接单");
         notifyPassengerOrderChanged(orderNo, "司机接单");
-        log.info("司机已接单 orderNo={} driverId={}", orderNo, driverId);
+        log.info("司机已接单 orderNo={} driverId={} replayed={}", orderNo, driverId, result.replayed());
+        return result;
     }
 
-    public void reject(String orderNo, Long driverId, String reasonCode) {
+    public DriverActionResult reject(String orderNo, Long driverId, String reasonCode, String idempotencyKey) {
         DriverOrderReasonBody body = new DriverOrderReasonBody();
         body.setDriverId(driverId);
         body.setReasonCode(reasonCode);
-        unwrap(orderClient.reject(orderNo, String.valueOf(driverId), body), "拒单");
+        CoreResponseVo<DriverActionResult> resp = orderClient.reject(
+                orderNo, String.valueOf(driverId), idempotencyKey, body);
+        DriverActionResult result = unwrapDriverAction(resp, "拒单");
         notifyPassengerOrderChanged(orderNo, "司机拒单");
-        log.info("司机已拒单 orderNo={} driverId={} reasonCode={}", orderNo, driverId, reasonCode);
+        log.info("司机已拒单 orderNo={} driverId={} reasonCode={} replayed={}",
+                orderNo, driverId, reasonCode, result.replayed());
+        return result;
     }
 
     /**
@@ -138,7 +160,7 @@ public class DriverBffService {
                 continue;
             }
             try {
-                reject(vo.getOrderNo(), driverId, REASON_DRIVER_LOGOUT);
+                reject(vo.getOrderNo(), driverId, REASON_DRIVER_LOGOUT, newInternalIdempotencyKey("logout-reject"));
             } catch (Exception e) {
                 log.warn("登出批量拒单跳过 orderNo={} driverId={} err={}", vo.getOrderNo(), driverId, e.toString());
             }
@@ -168,7 +190,8 @@ public class DriverBffService {
             }
             attempted++;
             try {
-                driverCancelBeforeArrive(row.getOrderNo(), driverId, REASON_DRIVER_LOGOUT);
+                driverCancelBeforeArrive(row.getOrderNo(), driverId, REASON_DRIVER_LOGOUT,
+                        newInternalIdempotencyKey("logout-cancel"));
             } catch (Exception e) {
                 log.warn("登出释放已接未到订单跳过 orderNo={} driverId={} err={}",
                         row.getOrderNo(), driverId, e.toString());
@@ -183,36 +206,48 @@ public class DriverBffService {
         return resp.getData() == null ? List.of() : resp.getData();
     }
 
-    public void driverCancelBeforeArrive(String orderNo, Long driverId, String reasonCode) {
+    public DriverActionResult driverCancelBeforeArrive(String orderNo, Long driverId, String reasonCode,
+                                                       String idempotencyKey) {
         DriverOrderReasonBody body = new DriverOrderReasonBody();
         body.setDriverId(driverId);
         body.setReasonCode(reasonCode);
-        unwrap(orderClient.driverCancelBeforeArrive(orderNo, String.valueOf(driverId), body), "司机取消");
+        CoreResponseVo<DriverActionResult> resp = orderClient.driverCancelBeforeArrive(
+                orderNo, String.valueOf(driverId), idempotencyKey, body);
+        DriverActionResult result = unwrapDriverAction(resp, "司机取消");
         notifyPassengerOrderChanged(orderNo, "司机取消");
-        log.info("司机已取消（到达前） orderNo={} driverId={} reasonCode={}", orderNo, driverId, reasonCode);
+        log.info("司机已取消（到达前） orderNo={} driverId={} reasonCode={} replayed={}",
+                orderNo, driverId, reasonCode, result.replayed());
+        return result;
     }
 
-    public void arrive(String orderNo, Long driverId) {
+    public DriverActionResult arrive(String orderNo, Long driverId, String idempotencyKey) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
-        unwrap(orderClient.arrive(orderNo, String.valueOf(driverId), body), "到达上报");
+        DriverActionResult result = unwrapDriverAction(
+                orderClient.arrive(orderNo, String.valueOf(driverId), idempotencyKey, body), "到达上报");
         notifyPassengerOrderChanged(orderNo, "司机到达");
-        log.info("司机已到达 orderNo={} driverId={}", orderNo, driverId);
+        log.info("司机已到达 orderNo={} driverId={} replayed={}", orderNo, driverId, result.replayed());
+        return result;
     }
 
-    public void start(String orderNo, Long driverId) {
+    public DriverActionResult start(String orderNo, Long driverId, String idempotencyKey) {
         DriverIdBody body = new DriverIdBody();
         body.setDriverId(driverId);
-        unwrap(orderClient.start(orderNo, String.valueOf(driverId), body), "开始行程");
+        DriverActionResult result = unwrapDriverAction(
+                orderClient.start(orderNo, String.valueOf(driverId), idempotencyKey, body), "开始行程");
         notifyPassengerOrderChanged(orderNo, "开始行程");
-        log.info("司机已开始行程 orderNo={} driverId={}", orderNo, driverId);
+        log.info("司机已开始行程 orderNo={} driverId={} replayed={}", orderNo, driverId, result.replayed());
+        return result;
     }
 
-    public void finish(String orderNo, FinishOrderBody body) {
+    public DriverActionResult finish(String orderNo, FinishOrderBody body, String idempotencyKey) {
         Long driverId = body == null ? null : body.getDriverId();
-        unwrap(orderClient.finish(orderNo, driverId == null ? "" : String.valueOf(driverId), body), "完单");
+        DriverActionResult result = unwrapDriverAction(orderClient.finish(
+                orderNo, driverId == null ? "" : String.valueOf(driverId), idempotencyKey, body), "完单");
         notifyPassengerOrderChanged(orderNo, "司机完单");
-        log.info("司机已完单 orderNo={} driverId={}", orderNo, body != null ? body.getDriverId() : null);
+        log.info("司机已完单 orderNo={} driverId={} replayed={}",
+                orderNo, body != null ? body.getDriverId() : null, result.replayed());
+        return result;
     }
 
     /**
@@ -286,5 +321,18 @@ public class DriverBffService {
             String msg = resp.getMsg();
             throw new BizErrorException(c, msg == null ? action + "失败" : msg);
         }
+    }
+
+    private static DriverActionResult unwrapDriverAction(CoreResponseVo<DriverActionResult> resp,
+                                                         String action) {
+        unwrap(resp, action);
+        if (resp.getData() == null) {
+            throw new BizErrorException(502, action + "：下游响应缺少幂等结果");
+        }
+        return resp.getData();
+    }
+
+    private static String newInternalIdempotencyKey(String action) {
+        return action + ":" + UUID.randomUUID();
     }
 }

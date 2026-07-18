@@ -4,6 +4,8 @@ import com.sx.driverapi.model.order.DriverIdBody;
 import com.sx.driverapi.model.order.DriverOrderReasonBody;
 import com.sx.driverapi.model.order.FinishOrderBody;
 import com.sx.driverapi.model.ordercore.TripOrderRow;
+import com.sx.driverapi.model.ordercore.DriverActionResult;
+import com.sx.driverapi.model.ordercore.AcceptOrderPreflightResult;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,33 +30,46 @@ public interface OrderClient {
     @GetMapping("/api/v1/orders/{orderNo}")
     CoreResponseVo<TripOrderRow> getByOrderNo(@PathVariable("orderNo") String orderNo);
 
+    @PostMapping("/api/v1/orders/{orderNo}/accept-preflight")
+    CoreResponseVo<AcceptOrderPreflightResult> acceptPreflight(
+            @PathVariable("orderNo") String orderNo,
+            @RequestHeader("X-User-Id") String userId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody DriverIdBody body);
+
     @PostMapping("/api/v1/orders/{orderNo}/accept")
-    CoreResponseVo<Void> accept(@PathVariable("orderNo") String orderNo,
+    CoreResponseVo<DriverActionResult> accept(@PathVariable("orderNo") String orderNo,
                                 @RequestHeader("X-User-Id") String userId,
+                                @RequestHeader("Idempotency-Key") String idempotencyKey,
                                 @RequestBody DriverIdBody body);
 
     @PostMapping("/api/v1/orders/{orderNo}/reject")
-    CoreResponseVo<Void> reject(@PathVariable("orderNo") String orderNo,
+    CoreResponseVo<DriverActionResult> reject(@PathVariable("orderNo") String orderNo,
                                 @RequestHeader("X-User-Id") String userId,
+                                @RequestHeader("Idempotency-Key") String idempotencyKey,
                                 @RequestBody DriverOrderReasonBody body);
 
     @PostMapping("/api/v1/orders/{orderNo}/driver/cancel")
-    CoreResponseVo<Void> driverCancelBeforeArrive(@PathVariable("orderNo") String orderNo,
+    CoreResponseVo<DriverActionResult> driverCancelBeforeArrive(@PathVariable("orderNo") String orderNo,
                                                   @RequestHeader("X-User-Id") String userId,
+                                                  @RequestHeader("Idempotency-Key") String idempotencyKey,
                                                   @RequestBody DriverOrderReasonBody body);
 
     @PostMapping("/api/v1/orders/{orderNo}/arrive")
-    CoreResponseVo<Void> arrive(@PathVariable("orderNo") String orderNo,
+    CoreResponseVo<DriverActionResult> arrive(@PathVariable("orderNo") String orderNo,
                                 @RequestHeader("X-User-Id") String userId,
+                                @RequestHeader("Idempotency-Key") String idempotencyKey,
                                 @RequestBody DriverIdBody body);
 
     @PostMapping("/api/v1/orders/{orderNo}/start")
-    CoreResponseVo<Void> start(@PathVariable("orderNo") String orderNo,
+    CoreResponseVo<DriverActionResult> start(@PathVariable("orderNo") String orderNo,
                                @RequestHeader("X-User-Id") String userId,
+                               @RequestHeader("Idempotency-Key") String idempotencyKey,
                                @RequestBody DriverIdBody body);
 
     @PostMapping("/api/v1/orders/{orderNo}/finish")
-    CoreResponseVo<Void> finish(@PathVariable("orderNo") String orderNo,
+    CoreResponseVo<DriverActionResult> finish(@PathVariable("orderNo") String orderNo,
                                 @RequestHeader("X-User-Id") String userId,
+                                @RequestHeader("Idempotency-Key") String idempotencyKey,
                                 @RequestBody FinishOrderBody body);
 }

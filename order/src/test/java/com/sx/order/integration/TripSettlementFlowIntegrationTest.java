@@ -42,7 +42,7 @@ class TripSettlementFlowIntegrationTest {
         TripOrder order = startedOrder();
         orderMapper.insert(order);
         FinishOrderBody finish = new FinishOrderBody(); finish.setDriverId(80001L);
-        orderService.finish(order.getOrderNo(), finish);
+        orderService.finish(order.getOrderNo(), finish, "flow-finish-key");
         assertThat(settlementMapper.selectList(null)).singleElement()
                 .extracting("settlementStatus").isEqualTo("CALCULATING");
 

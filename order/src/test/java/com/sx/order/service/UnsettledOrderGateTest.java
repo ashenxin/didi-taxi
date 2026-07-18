@@ -136,7 +136,7 @@ class UnsettledOrderGateTest {
         cancel.setPassengerId(91010L);
         cancel.setCancelReason("计划有变");
 
-        service.cancelByPassenger(passengerCancelled.getOrderNo(), cancel);
+        service.cancelByPassenger(passengerCancelled.getOrderNo(), cancel, "passenger-cancel-key");
 
         assertThat(order(passengerCancelled.getOrderNo()).getBlocksNewOrder()).isNull();
 

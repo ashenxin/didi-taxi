@@ -429,7 +429,7 @@
 
 **POST** `/app/api/v1/orders/{orderNo}/cancel`
 
-**请求头**：同上  
+**请求头**：除登录身份外，必须携带 **`Idempotency-Key`**（非空、长度不超过 128）；超时重试复用原 key。
 **Path 参数**：`orderNo`
 
 **请求体**（`CancelOrderRequest`）
@@ -439,7 +439,7 @@
 | passengerId | number | 否 | 客户端无需传；若传必须与身份一致，否则 400 |
 | cancelReason | string | 否 | 一期建议前端做单选原因（无长文本输入） |
 
-**响应 data**：无
+**响应 data**：`{ "replayed": false }`；同 key、同订单、同乘客及同取消原因的成功重放为 `true`。
 
 **请求示例**
 
@@ -455,9 +455,11 @@
 {
   "code": 200,
   "msg": "success",
-  "data": null
+  "data": { "replayed": false }
 }
 ```
+
+同 key 改订单、乘客或取消原因，或把该 key 用于其它动作时返回 `409`。成功重放不重复改变状态或写取消事件，但仍通知乘客端刷新。
 
 ---
 
@@ -597,13 +599,15 @@
 
 **POST** `/driver/api/v1/orders/{orderNo}/accept`
 
+**请求头**：必须携带 **`Idempotency-Key`**（非空、长度不超过 128）；超时重试复用原 key。
+
 **请求体**
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
 | driverId | number | 是 | 必须与登录身份一致 |
 
-**响应 data**：无
+**响应 data**：`{ "replayed": false }`；成功重放为 `true`。重放会在 capacity 接单资格校验前短路，不重复执行外部校验或订单写入，但仍通知乘客刷新。
 
 **请求示例**
 
@@ -619,6 +623,8 @@
 
 **POST** `/driver/api/v1/orders/{orderNo}/reject`
 
+**请求头**：必须携带新的 **`Idempotency-Key`**（非空、长度不超过 128）；客户端因超时重试时复用原 key。
+
 **请求体**
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -626,9 +632,10 @@
 | driverId | number | 是 | 必须与登录身份一致 |
 | reasonCode | string | 是 | 单选原因码（前端写死；无输入） |
 
-**响应 data**：无  
+**响应 data**：`{ "replayed": false }`；同 key、同请求成功重放时为 `true`。
 **语义**：`order-service` 将订单从 **`ASSIGNED` / `PENDING_DRIVER_CONFIRM` → `CREATED`**，清空指派与确认窗口字段，写 **`ORDER_DRIVER_REJECTED`** 事件，并再次投递 **`ORDER_CREATED_NEED_DISPATCH`** Outbox，进入重新派单；**`reasonCode` 不对乘客展示**。
 同时写入 Redis 隔离键 `tx:dispatch:block:dp:{driverId}:{passengerId}`（TTL 30 分钟）：隔离期内 capacity 派单会跳过该司机-乘客组合，司机刷新指派单也会跳过该乘客订单。
+同 key、同 `orderNo + driverId + reasonCode` 只执行一次状态迁移、事件、隔离与 Outbox；同 key 改请求内容或跨动作复用返回 `409`。
 
 **请求示例**
 
@@ -647,6 +654,8 @@
 
 > 与乘客取消 **`POST /app/api/v1/orders/{orderNo}/cancel`** 路径语义不同：本接口为 **司机端 BFF**，到达前释放订单并改派。
 
+**请求头**：必须携带新的 **`Idempotency-Key`**（非空、长度不超过 128）；客户端因超时重试时复用原 key。
+
 **请求体**
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -654,9 +663,10 @@
 | driverId | number | 是 | 必须与登录身份一致 |
 | reasonCode | string | 是 | 单选原因码（前端写死；无输入） |
 
-**响应 data**：无  
+**响应 data**：`{ "replayed": false }`；同 key、同请求成功重放时为 `true`。
 **语义**：`order-service` **`POST /api/v1/orders/{orderNo}/driver/cancel`** 将 **`ACCEPTED` → `CREATED`**（仅到达前；到达后应业务错误），清空服务方与确认相关字段，写 **`ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE`**，并再次投递派单 Outbox；**`reasonCode` 不对乘客展示**。
 同时写入 Redis 隔离键 `tx:dispatch:block:dp:{driverId}:{passengerId}`（TTL 30 分钟）：隔离期内 capacity 派单会跳过该司机-乘客组合，司机刷新指派单也会跳过该乘客订单。
+同 key、同 `orderNo + driverId + reasonCode` 只执行一次状态迁移、事件、隔离与 Outbox；同 key 改请求内容或跨动作复用返回 `409`。
 
 **请求示例**
 
@@ -666,6 +676,18 @@
   "reasonCode": "TEMPORARILY_UNAVAILABLE"
 }
 ```
+
+---
+
+### 3.8 到达、开始与完单（已实现）
+
+| 动作 | 接口 | 状态迁移 |
+|---|---|---|
+| 到达 | `POST /driver/api/v1/orders/{orderNo}/arrive` | `ACCEPTED → ARRIVED` |
+| 开始 | `POST /driver/api/v1/orders/{orderNo}/start` | `ARRIVED → STARTED` |
+| 完单 | `POST /driver/api/v1/orders/{orderNo}/finish` | `STARTED → FINISHED` 并登记异步结算 |
+
+三个接口都须携带登录身份和 **`Idempotency-Key`**，请求体中的 `driverId` 必须与登录身份一致。响应 data 均为 `{ "replayed": boolean }`。同 key、同请求成功重放不重复写状态、事件、结算记录或结算任务；同 key 改关键内容或跨动作复用返回 `409`。完单兼容字段 `distanceKm/durationMin/finalAmount` 不参与结算，也不参与幂等意图判断。
 
 ---
 
@@ -759,7 +781,7 @@
 
 **POST** `/api/v1/orders/{orderNo}/reject`
 
-**请求头**：与司机其它写接口一致，须带 **`X-User-Id`**（与 body `driverId` 一致）；BFF 经 Feign 转发时会透传。
+**请求头**：须带 **`X-User-Id`**（与 body `driverId` 一致）和 **`Idempotency-Key`**；BFF 经 Feign 转发时会透传。
 
 **请求体**
 
@@ -768,9 +790,9 @@
 | driverId | number | 是 | 指派司机 id |
 | reasonCode | string | 是 | 单选原因码（不对乘客展示） |
 
-**响应 data**：无
+**响应 data**：`{ "replayed": boolean }`。第一次执行为 `false`；成功重放为 `true`，且不重复写事件、隔离键和派单 Outbox。
 
-**错误语义（节选）**：`403` 非指派司机；`404` 订单不存在；`409` 当前状态不允许拒单（含并发 CAS 失败）。
+**错误语义（节选）**：`400` 缺失或超长 key；`403` 非指派司机；`404` 订单不存在；`409` 当前状态冲突、同 key 改内容或跨动作复用。
 
 **请求示例**
 
@@ -789,7 +811,7 @@
 
 > 与 **`POST /api/v1/orders/{orderNo}/cancel`（乘客取消）** 路径不同；本接口仅处理 **司机**在 **`ACCEPTED`** 阶段的到达前释放。
 
-**请求头**：**`X-User-Id`** 与 body **`driverId`** 一致。
+**请求头**：**`X-User-Id`** 与 body **`driverId`** 一致，并携带 **`Idempotency-Key`**。
 
 **请求体**
 
@@ -798,7 +820,7 @@
 | driverId | number | 是 | 当前服务司机 id |
 | reasonCode | string | 是 | 单选原因码（不对乘客展示） |
 
-**响应 data**：无
+**响应 data**：`{ "replayed": boolean }`。第一次执行为 `false`；成功重放为 `true`，且不重复写事件、隔离键和派单 Outbox。
 
 **错误语义（节选）**：`403` 非本单司机；`404` 订单不存在；`409` 当前状态不允许司机取消（如已到达或已非 `ACCEPTED`）。
 
@@ -810,6 +832,12 @@
   "reasonCode": "TEMPORARILY_UNAVAILABLE"
 }
 ```
+
+### 4.4 其余端侧状态写接口（已实现）
+
+乘客取消 `/{orderNo}/cancel`，以及司机接单 `/{orderNo}/accept`、到达 `/{orderNo}/arrive`、开始 `/{orderNo}/start`、完单 `/{orderNo}/finish` 均要求 `Idempotency-Key`，返回 `{ "replayed": boolean }`，并与拒单/司机取消共用 `order_idempotent_record` 的请求级裁决。相同 key 只能绑定一个动作和一份关键请求内容。
+
+司机接单另提供内部预检 `POST /{orderNo}/accept-preflight`。BFF 在 capacity 资格校验前调用：返回 `replayed=true` 时直接恢复原成功结果；返回 `false` 时才继续资格校验并用同一 key 调用正式接单接口。
 
 ---
 

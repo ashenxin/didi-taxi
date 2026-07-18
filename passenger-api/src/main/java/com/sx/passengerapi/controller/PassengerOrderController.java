@@ -10,6 +10,7 @@ import com.sx.passengerapi.model.order.CreateOrderResultV1;
 import com.sx.passengerapi.model.order.PassengerOrderDetailVO;
 import com.sx.passengerapi.model.order.PassengerOrderListType;
 import com.sx.passengerapi.model.order.PassengerOrderPageVO;
+import com.sx.passengerapi.model.ordercore.OrderActionResult;
 import com.sx.passengerapi.service.PassengerOrderService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -109,16 +110,17 @@ public class PassengerOrderController {
      * {@code POST /app/api/v1/orders/{orderNo}/cancel}
      */
     @PostMapping("/orders/{orderNo}/cancel")
-    public ResponseVo<Void> cancelOrder(@PathVariable String orderNo,
+    public ResponseVo<OrderActionResult> cancelOrder(@PathVariable String orderNo,
                                         @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+                                        @RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
                                         @RequestBody @Valid CancelOrderRequest body) {
         if (passengerId == null) {
             throw new BizErrorException(401, "未授权，请重新登录");
         }
         rejectPassengerIdBodyMismatch(passengerId, body.getPassengerId());
         body.setPassengerId(passengerId);
-        passengerOrderService.cancelOrder(orderNo, body);
-        return ResultUtil.success(null);
+        String requestId = normalizeIdempotencyKey(idempotencyKey);
+        return ResultUtil.success(passengerOrderService.cancelOrder(orderNo, body, requestId));
     }
 
     /**
@@ -131,11 +133,17 @@ public class PassengerOrderController {
     }
 
     private static void rejectBlankIdempotencyKey(String idempotencyKey) {
+        normalizeIdempotencyKey(idempotencyKey);
+    }
+
+    private static String normalizeIdempotencyKey(String idempotencyKey) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new BizErrorException(400, "Idempotency-Key不能为空");
         }
-        if (idempotencyKey.trim().length() > 128) {
+        String key = idempotencyKey.trim();
+        if (key.length() > 128) {
             throw new BizErrorException(400, "Idempotency-Key长度不能超过128");
         }
+        return key;
     }
 }

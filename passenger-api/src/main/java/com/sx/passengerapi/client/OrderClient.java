@@ -8,6 +8,7 @@ import com.sx.passengerapi.model.ordercore.CreateOrderPreflightRequest;
 import com.sx.passengerapi.model.ordercore.CreateOrderPreflightResult;
 import com.sx.passengerapi.model.ordercore.CancelOrderBody;
 import com.sx.passengerapi.model.ordercore.OpenDriverOfferBody;
+import com.sx.passengerapi.model.ordercore.OrderActionResult;
 import com.sx.passengerapi.model.ordercore.OrderEventRow;
 import com.sx.passengerapi.model.ordercore.TripOrderRow;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
@@ -61,7 +62,10 @@ public interface OrderClient {
             @RequestParam(value = "pageSize", required = false) Integer pageSize);
 
     @PostMapping("/api/v1/orders/{orderNo}/cancel")
-    ResponseVo<Void> cancel(@PathVariable("orderNo") String orderNo, @RequestBody CancelOrderBody body);
+    ResponseVo<OrderActionResult> cancel(
+            @PathVariable("orderNo") String orderNo,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody CancelOrderBody body);
 
     @GetMapping("/api/v1/orders/internal/settlements/unsettled-exists")
     ResponseVo<UnsettledOrderCheckResult> unsettledExists(@RequestParam("passengerId") Long passengerId);

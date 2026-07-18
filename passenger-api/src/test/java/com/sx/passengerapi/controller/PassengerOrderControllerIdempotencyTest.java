@@ -4,6 +4,8 @@ import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderBody;
 import com.sx.passengerapi.model.order.CreateAndAssignOrderResult;
 import com.sx.passengerapi.model.order.CreateOrderResultV1;
+import com.sx.passengerapi.model.order.CancelOrderRequest;
+import com.sx.passengerapi.model.ordercore.OrderActionResult;
 import com.sx.passengerapi.service.PassengerOrderService;
 import org.junit.jupiter.api.Test;
 
@@ -55,5 +57,29 @@ class PassengerOrderControllerIdempotencyTest {
 
         assertThat(resp.getData().getOrderNo()).isEqualTo("O2");
         verify(service).createTwoPhase(any(CreateAndAssignOrderBody.class), org.mockito.ArgumentMatchers.eq("idem-2"));
+    }
+
+    @Test
+    void cancelRequiresIdempotencyKey() {
+        CancelOrderRequest body = new CancelOrderRequest();
+        body.setPassengerId(10001L);
+
+        assertThatThrownBy(() -> controller.cancelOrder("O3", 10001L, " ", body))
+                .isInstanceOf(BizErrorException.class)
+                .hasMessageContaining("Idempotency-Key不能为空");
+    }
+
+    @Test
+    void cancelPassesTrimmedKeyAndReturnsReplayResult() {
+        CancelOrderRequest body = new CancelOrderRequest();
+        body.setPassengerId(10001L);
+        body.setCancelReason("行程有变");
+        when(service.cancelOrder("O3", body, "cancel-key"))
+                .thenReturn(new OrderActionResult(true));
+
+        var resp = controller.cancelOrder("O3", 10001L, " cancel-key ", body);
+
+        assertThat(resp.getData().replayed()).isTrue();
+        verify(service).cancelOrder("O3", body, "cancel-key");
     }
 }
