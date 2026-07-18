@@ -185,7 +185,21 @@ Access-Control-Request-Headers: authorization,content-type,idempotency-key
 
 ## 7. 回归命令与证据
 
-建议保留：curl/浏览器 Network 结果、网关和 BFF 同一 Request-Id 日志、WS 101 截图。当前 gateway 缺少独立自动化测试，配置或 Filter 变更时本文用例不可省略。
+```bash
+mvn -pl gateway test
+mvn -pl gateway verify
+```
+
+当前自动化测试包括：
+
+- `GatewaySecurityFiltersTest`：可信身份头注入、伪造头清理、受保护路径缺 token、公开路径、WS 白名单和 OPTIONS。
+- `GatewayJwtVerifierTest`：正确 audience 与跨端 token 拒绝。
+- `GatewaySecurityStartupValidatorTest`：生产安全配置失败关闭。
+- `RequestIdGlobalFilterTest`：Request-Id 透传与生成。
+- `StripDownstreamCorsHttpHeadersFilterTest`：清理下游重复 CORS 响应头并保留业务响应头。
+
+自动化不能替代真实代理链路。仍需保留 curl/浏览器 Network 结果、网关和 BFF 同一 Request-Id 日志、
+乘客/司机 WS 101 与消息收发证据；真实 WS Upgrade、小票握手和跨服务 CORS 仍按本文执行端到端回归。
 
 ## 8. 2026-07-17 实测结果
 
@@ -193,3 +207,10 @@ Access-Control-Request-Headers: authorization,content-type,idempotency-key
 - 乘客和司机 WS 均通过网关完成小票握手与消息回归，订单变化能触发端侧 HTTP 对齐。
 - gateway、admin-api 以及本次补齐 Actuator 的 passenger、capacity、calculate、wallet 均能返回标准健康响应；其中 passenger/admin-api/capacity/calculate/wallet 实测为 HTTP 200、`{"status":"UP"}`。
 - 本次未关闭 `GATEWAY_JWT_REQUIRE_AUTH`，生产启动安全校验仍保持开启口径。
+
+## 9. 2026-07-18 自动化补强结果
+
+- 网关安全过滤器回归已覆盖客户端伪造 `X-User-Id`、缺失 Bearer token、公开登录/WS/OPTIONS 白名单和可选鉴权身份注入。
+- Request-Id 与下游 CORS 头清理已有独立单元测试；生产代码安全校验变异会被测试捕获。
+- `mvn -pl gateway verify` 通过，JaCoCo 行覆盖率基线为 73.88%。
+- 未自动化部分仍是经真实 gateway 转发的 WS 101、小票握手、消息收发和浏览器跨域行为。

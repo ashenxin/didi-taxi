@@ -268,7 +268,14 @@ mvn -pl order test
 mvn -pl capacity test
 mvn -pl passenger-api test
 mvn -pl driver-api test
+mvn verify
 ```
+
+2026-07-18 已补充的 capacity 自动化包括：
+
+- `DispatchRequestedConsumerTest`：正常派单、重复事件短路、Top3 首候选冲突后换候选、无司机结论与 ack。
+- `ProcessedEventServiceTest`：H2 真实唯一索引下 `(consumer_group,event_id)` 去重，以及不同 consumer group 的隔离。
+- `OfferRescheduleServiceTest`：同司机续开确认窗、跨司机改派、改派失败不移动 Redis 待确认索引。
 
 端到端验收还应保存：订单三张关键表快照、Redis GEO/Presence/隔离键、Kafka offset、XXL 执行日志和同一 orderNo 的跨服务日志。
 
@@ -280,4 +287,12 @@ mvn -pl driver-api test
 - Redis GEO 中可查询测试司机，派单使用的司机、车辆、公司与订单详情一致。
 - 管理后台时间线可读出 `ORDER_CREATED`、`ORDER_ASSIGNED`、`ORDER_OFFER_OPENED`、`ORDER_OFFER_TIMED_OUT`、`ORDER_ACCEPTED`、`ORDER_DRIVER_ARRIVED`、`ORDER_TRIP_STARTED`、`ORDER_FINISHED`，状态 7 已正确映射。
 - 已知非正确性问题：重复下单请求仍会在 passenger-api 命中 order 幂等记录前重新计算地图路线/估价；不会产生重复订单，但后续可增加 BFF 级结果短路以减少外部调用。
-- 未通过项：完单后尚未自动创建/推进 `trip_order_settlement`，仍属于 P0 业务闭环差距。
+- 当日未通过项（后续已补齐）：完单后尚未自动创建/推进 `trip_order_settlement`；当前实现状态见下节。
+
+## 12. 2026-07-18 自动化补强结果
+
+- capacity 派单、改派和事件幂等新增 9 项测试；`capacity` 模块合计 15 项通过。
+- 重复 `eventId` 不再重复调用选司机、assign 或 openOffer；临时关闭短路时测试可捕获重复副作用。
+- 完单结算 MVP 已由 `TripSettlementFlowIntegrationTest` 等测试覆盖：完单后登记并推进结算，不再属于“尚未自动创建结算”的未通过项。
+- `mvn verify` 全仓通过；JaCoCo 行覆盖率基线为 order 44.43%、capacity 26.31%。
+- 单元/集成测试仍不能替代 MySQL、Redis、Kafka、XXL-JOB 和真实端侧同时运行的跨服务验收。

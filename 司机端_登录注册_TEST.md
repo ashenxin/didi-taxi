@@ -176,4 +176,12 @@ mvn -pl driver-api test
 mvn -pl capacity test
 ```
 
-重点现有测试：`DriverBffServiceLogoutTest`、`DriverNoticeWebSocketHandlerTest`、`DriverWsHandshakeInterceptorTest`。自动化通过后仍需执行 GEO/Presence/Kafka 端到端用例。
+重点现有测试：
+
+- `DriverBffControllerOrderActionsTest`：接单、到达、开始、完单的可信 `X-User-Id`、伪造 `driverId` 拒绝、请求校验和状态冲突 HTTP 语义。
+- `DriverBffServiceLogoutTest`：登出释放到达前订单。
+- `DriverNoticeWebSocketHandlerTest`、`DriverWsHandshakeInterceptorTest`：司机 WS 会话、心跳与握手小票。
+- `DriverSecurityStartupValidatorTest`：生产安全配置失败关闭。
+
+2026-07-18 回归：`driver-api` 28 项测试通过，JaCoCo 行覆盖率基线为 32.88%。
+自动化通过后仍需执行 GEO/Presence/Kafka、真实网关转发和 WS 101 端到端用例。

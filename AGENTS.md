@@ -322,10 +322,10 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 
 ### 完单结算 MVP
 
-- `docs/superpowers/specs/2026-07-17-完单结算方案设计.md`
-- `docs/superpowers/plans/2026-07-17-完单结算实施计划.md`
-- `docs/api/完单结算接口说明.md`
-- `docs/testing/完单结算本地模拟联调手册.md`
+- `docs/superpowers/specs/2026-07-17-完单结算_DESIGN.md`
+- `docs/superpowers/plans/2026-07-17-完单结算_PLAN.md`
+- `docs/api/完单结算_API.md`
+- `docs/testing/完单结算_TEST.md`
 - `乘客司机端_完单结算方案讨论.md`（历史讨论与决策追溯）
 
 ## 当前已知差距摘录
