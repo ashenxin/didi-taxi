@@ -96,3 +96,32 @@ CREATE INDEX IF NOT EXISTS idx_points_flow_account_time
 
 CREATE INDEX IF NOT EXISTS idx_points_flow_sign_record
     ON benefit_points_flow (sign_record_id);
+
+CREATE TABLE IF NOT EXISTS benefit_reconciliation_issue (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    issue_key CHAR(64) NOT NULL,
+    issue_type VARCHAR(64) NOT NULL,
+    severity VARCHAR(16) NOT NULL,
+    customer_id BIGINT NOT NULL,
+    sign_date DATE NULL,
+    year_month CHAR(6) NULL,
+    reference_type VARCHAR(32) NULL,
+    reference_id VARCHAR(64) NULL,
+    expected_snapshot CLOB NULL,
+    actual_snapshot CLOB NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'OPEN',
+    first_detected_at TIMESTAMP NOT NULL,
+    last_detected_at TIMESTAMP NOT NULL,
+    resolved_at TIMESTAMP NULL,
+    occurrence_count INT NOT NULL DEFAULT 1,
+    last_run_id VARCHAR(64) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_benefit_reconciliation_issue_key UNIQUE (issue_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_benefit_issue_customer_status
+    ON benefit_reconciliation_issue (customer_id, status, last_detected_at);
+
+CREATE INDEX IF NOT EXISTS idx_benefit_issue_type_status
+    ON benefit_reconciliation_issue (issue_type, status, last_detected_at);

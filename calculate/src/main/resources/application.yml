@@ -48,6 +48,19 @@ mybatis-plus:
       id-type: auto
   mapper-locations: classpath*:mapper/**/*.xml
 
+xxl:
+  job:
+    enabled: ${XXL_JOB_CALCULATE_ENABLED:false}
+    access-token: ${XXL_JOB_ACCESS_TOKEN:default_token}
+    admin:
+      addresses: ${XXL_JOB_ADMIN_ADDRESSES:http://127.0.0.1:8081/xxl-job-admin}
+    executor:
+      appname: calculate-executor
+      address: ${XXL_JOB_CALCULATE_EXECUTOR_ADDRESS:http://127.0.0.1:9996}
+      port: 9996
+      log-path: ./logs/xxl-job
+      log-retention-days: 7
+
 ---
 spring:
   config:

@@ -180,6 +180,7 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 - `二期功能/乘客端_福利签到_API.md`
 - `二期功能/乘客端_福利签到_SQL.md`
 - `二期功能/乘客端_福利签到_TEST.md`
+- `二期功能/乘客端_福利签到_异常补偿_TECH.md`
 - `二期功能/司机_换队功能_PRD.md`
 - `二期功能/司机_换队功能_TECH.md`
 - `二期功能/司机_换队功能_API.md`

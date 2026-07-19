@@ -1,7 +1,7 @@
-# 乘客端「福利签到」SQL 草案
+# 乘客端「福利签到」SQL
 
-> 记录日期：2026-07-14
-> 范围：每月 28 天签到、积分账户、积分流水、注销清零。
+> 记录日期：2026-07-14；2026-07-19 按当前实现修订签到事务与 Redis 同步顺序。
+> 范围：每月 28 天签到、积分账户、积分流水、注销清零、异常对账留痕。
 > 状态：已同步至 `calculate/src/main/resources/sql/calculate_schema.sql` 与测试 schema；当前实现以代码和正式 API/TECH 文档为准。
 
 ---
@@ -13,6 +13,7 @@
 | `calculate` | `benefit_sign_record` | 乘客签到记录 |
 | `calculate` | `benefit_points_account` | 乘客积分账户 |
 | `calculate` | `benefit_points_flow` | 乘客积分流水 |
+| `calculate` | `benefit_reconciliation_issue` | 福利签到与积分对账异常；不自动修改积分 |
 
 定版口径：
 
@@ -192,7 +193,53 @@ CREATE TABLE IF NOT EXISTS `benefit_points_flow` (
 
 ---
 
-## 5. 可选 CHECK 约束
+## 5. calculate.benefit_reconciliation_issue
+
+用途：
+
+- 持久化 Redis Bitmap、签到记录、积分流水和积分账户之间的异常。
+- 相同问题重复发现时更新最近发现时间与次数，不重复生成新记录。
+- 源数据恢复一致后将问题标记为 `RESOLVED`。
+- 本表只记录问题，不触发积分增加、扣减、补发或清零。
+- 任务批次信息使用 XXL-Job 日志，不创建 `benefit_reconciliation_run` 表。
+
+目标 DDL：
+
+```sql
+CREATE TABLE IF NOT EXISTS `benefit_reconciliation_issue` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `issue_key` CHAR(64) NOT NULL COMMENT '稳定问题键，SHA-256(异常类型/乘客/范围/业务主键)',
+    `issue_type` VARCHAR(64) NOT NULL COMMENT '异常类型',
+    `severity` VARCHAR(16) NOT NULL COMMENT 'HIGH/MEDIUM/LOW',
+    `customer_id` BIGINT NOT NULL COMMENT '乘客ID，对应 passenger.customer.id',
+    `sign_date` DATE NULL COMMENT '关联签到日期',
+    `year_month` CHAR(6) NULL COMMENT '关联签到年月 yyyyMM',
+    `reference_type` VARCHAR(32) NULL COMMENT '关联对象类型：SIGN_RECORD/POINTS_FLOW/POINTS_ACCOUNT/BITMAP',
+    `reference_id` VARCHAR(64) NULL COMMENT '关联对象ID或 Bitmap offset',
+    `expected_snapshot` JSON NULL COMMENT '期望值快照，不得包含手机号、token等敏感信息',
+    `actual_snapshot` JSON NULL COMMENT '实际值快照，不得包含手机号、token等敏感信息',
+    `status` VARCHAR(16) NOT NULL DEFAULT 'OPEN' COMMENT 'OPEN/RESOLVED',
+    `first_detected_at` DATETIME NOT NULL COMMENT '首次发现时间',
+    `last_detected_at` DATETIME NOT NULL COMMENT '最近发现时间',
+    `resolved_at` DATETIME NULL COMMENT '恢复时间',
+    `occurrence_count` INT NOT NULL DEFAULT 1 COMMENT '重复发现次数',
+    `last_run_id` VARCHAR(64) NOT NULL COMMENT '最近一次扫描批次号，仅用于日志串联',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_benefit_reconciliation_issue_key` (`issue_key`),
+    KEY `idx_benefit_issue_customer_status` (`customer_id`, `status`, `last_detected_at`),
+    KEY `idx_benefit_issue_type_status` (`issue_type`, `status`, `last_detected_at`),
+    KEY `idx_benefit_issue_severity_status` (`severity`, `status`, `last_detected_at`),
+    KEY `idx_benefit_issue_last_run` (`last_run_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='福利签到与积分对账异常';
+```
+
+`issue_key` 必须包含 `customerId`，避免不同乘客恰好拥有相同业务主键时发生唯一键冲突。`last_run_id` 只是应用生成的日志串联号，不设置外键。
+
+---
+
+## 6. 可选 CHECK 约束
 
 如果确认 MySQL 版本和测试环境都支持 `CHECK`，可加以下约束。否则先由服务层校验。
 
@@ -211,36 +258,36 @@ ALTER TABLE `benefit_points_account`
 
 ---
 
-## 6. 推荐事务顺序草案
+## 7. 推荐事务顺序草案
 
-### 6.1 签到入账
+### 7.1 签到入账
 
 ```text
 1. 校验登录态、账号状态、日期范围。
 2. 读取并校验签到配置文件。
-3. Redis Lua 判断并写入当日 Bitmap。
-4. 开启 MySQL 事务。
-5. 获取或创建 benefit_points_account，并锁定账户行。
-6. 再次确认账户 status = ACTIVE。
-7. 计算 continuous_days、reward_points、reward_rule_code。
-8. 插入 benefit_sign_record。
-9. 插入 benefit_points_flow。
-10. 更新 benefit_sign_record.points_flow_id。
-11. 更新 benefit_points_account 余额与 last_sign_date。
-12. 提交事务。
+3. 开启 MySQL 事务。
+4. 获取或创建 benefit_points_account，并锁定账户行。
+5. 再次确认账户 status = ACTIVE。
+6. 计算 continuous_days、reward_points、reward_rule_code。
+7. 插入 benefit_sign_record。
+8. 插入 benefit_points_flow。
+9. 更新 benefit_sign_record.points_flow_id。
+10. 更新 benefit_points_account 余额与 last_sign_date。
+11. 提交事务。
+12. afterCommit 执行 Redis SETBIT，记录当日 Bitmap。
 ```
 
 说明：
 
-- 配置文件缺失或非法时，直接返回系统配置错误；不写 Redis，不写 MySQL。
+- 配置文件缺失或非法时，直接返回系统配置错误；不写 MySQL，也不触发提交后的 Redis 写入。
 - `benefit_sign_record`、`benefit_points_flow`、`benefit_points_account` 三张表写操作必须在同一个 MySQL 事务中完成。
 - 积分账户采用懒创建：查询积分时账户不存在返回 0；首次签到成功时在本事务内创建 `benefit_points_account` 并入账。
-- 如果第 8 步唯一索引冲突，说明已签到；接口返回已签到。
-- 如果 Redis 成功但 MySQL 失败，第一期只输出一行异常日志，包含 `customerId/signDate/requestId`；定时补偿任务记录为 TODO，暂不实现。
-- MySQL 成功但 Redis 丢失的情况第一期先不处理，后续可用 MySQL 签到记录重建当月 Bitmap。
-- 若强一致优先，也可以先 MySQL 后 Redis，但会降低 Bitmap 幂等前置价值；本草案先按 Redis 前置。
+- 如果第 7 步唯一索引冲突，说明已签到；接口返回已签到，不重复发放积分。
+- Redis Bitmap 是 MySQL 签到事实的派生索引，不参与首次签到裁决。
+- MySQL 成功但 Redis 写入失败时记录包含 `customerId/signDate/requestId` 的警告；自动重建和三表对账见《乘客端_福利签到_异常补偿_TECH.md》。
+- 异常补偿只自动修复 Bitmap；MySQL 积分异常只检测和留痕，不自动修改积分。
 
-### 6.2 注销清零
+### 7.2 注销清零
 
 ```text
 1. 开启 MySQL 事务。
@@ -258,7 +305,7 @@ ALTER TABLE `benefit_points_account`
 
 ---
 
-## 7. 落库状态与后续 TODO
+## 8. 落库状态与后续 TODO
 
 1. DDL 已合并到：
 
@@ -272,17 +319,19 @@ calculate/src/main/resources/sql/calculate_schema.sql
 calculate/src/test/resources/schema-test.sql
 ```
 
-3. 仍待补：已有生产库的独立增量迁移 SQL：
+3. 已有 calculate 数据库的独立增量 SQL 已补充：
 
 ```text
-CREATE TABLE benefit_sign_record ...
-CREATE TABLE benefit_points_account ...
-CREATE TABLE benefit_points_flow ...
+calculate/src/main/resources/sql/calculate_benefit_reconciliation_patch.sql
 ```
 
-4. 定时补偿任务暂不实现，只记录 TODO：
+4. 异常补偿任务已经实施：
 
 ```text
-Redis SETBIT 成功但 MySQL 事务失败时，第一期仅输出异常日志。
-后续如需要，再按异常日志或 MySQL 签到/流水差异补偿。
+MySQL 提交成功但 Redis SETBIT 失败时，当前实时链路记录警告日志。
+XXL-Job 按 MySQL 补齐或重建 Bitmap，并检测三表差异。
+MySQL 积分异常只留痕，不由任务自动修改。
+任务执行状态使用 XXL-Job 日志，不创建独立批次表。
 ```
+
+详见《乘客端_福利签到_异常补偿_TECH.md》。

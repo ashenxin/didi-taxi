@@ -1,6 +1,6 @@
 # 乘客端福利签到 TEST
 
-对应福利签到 PRD/API/TECH/SQL，覆盖当前已落地的 1～28 日月度签到和积分能力。MySQL 是签到与积分权威，Redis Bitmap 仅作签到事实辅助索引。
+对应福利签到 PRD/API/TECH/SQL 及异常补偿 TECH，覆盖当前已落地的 1～28 日月度签到、积分和定时对账补偿。MySQL 是签到与积分权威，Redis Bitmap 仅作签到事实辅助索引。
 
 ## 0. 当前规则
 
@@ -19,7 +19,7 @@ continuous everyDays=7 reward=35 includeDefault=false
 
 ## 1. 环境与数据
 
-- 启动 gateway、passenger-api、calculate、Redis、MySQL。
+- 启动 gateway、passenger-api、calculate、Redis、MySQL；验证定时任务时同时启动 XXL-Job Admin。
 - 执行 calculate 正式 schema 和测试 schema。
 - 准备乘客 A（无积分）、B（已有连续签到）、C（已注销积分账户）。
 - 涉及日期边界时使用测试时钟/隔离环境，不直接修改生产系统时间。
@@ -30,6 +30,7 @@ continuous everyDays=7 reward=35 includeDefault=false
 - `benefit_sign_record`
 - `benefit_points_account`
 - `benefit_points_flow`
+- `benefit_reconciliation_issue`
 
 Redis：`benefit:sign:bitmap:{customerId}:{yyyyMM}`。
 
@@ -221,7 +222,33 @@ accountStatus 正确
 
 删除当月 Bitmap 后查询 overview、再次签到。
 
-预期：overview 基于 MySQL 仍正确；不得因 Bitmap 丢失重复发分。自动重建任务当前未实现，应记录为运维差距。
+预期：overview 基于 MySQL 仍正确；不得因 Bitmap 丢失重复发分。执行 `benefitSignReconciliation` 后，当月缺失 bit 被补齐，已结束月份的 Bitmap 按 MySQL 精确重建。
+
+### T-BENEFIT-26A 当月 Bitmap 多余位
+
+构造 MySQL 无签到、当月 Bitmap 为 1 的日期。
+
+预期：写入 `BITMAP_EXTRA_BIT` 问题，不在当月并发签到窗口内清除 bit；不修改任何 MySQL 积分字段。
+
+### T-BENEFIT-26B 已结束月份精确重建
+
+构造历史月 Bitmap 缺位、多位与不存在三种情况。
+
+预期：使用带 `runId` 的临时 key 按 MySQL 重建，临时 key 先设置 TTL，原子替换后对正式 key 执行 `PERSIST` 并逐位复核。`PERSIST` 失败时任务必须返回部分失败并留下 `BITMAP_REPAIR_FAILED`，不得把会自动过期的正式 key 报为成功。
+
+### T-BENEFIT-26C Redis 不可用
+
+预期：本次摘要为 `PARTIAL_FAILED`，失败数增加并留下 `BITMAP_REPAIR_FAILED`；MySQL 签到、流水和账户不变，下次任务可重试。
+
+### T-BENEFIT-26D MySQL 三表对账
+
+分别构造签到缺流水、重复流水、关联/奖励/规则不一致，以及账户余额、累计获得、累计清零、最后流水/签到指针、注销后余额和流水链差异。
+
+预期：每种差异按稳定 `issue_key` 写入 `benefit_reconciliation_issue`；重复扫描只增加 `occurrence_count`，数据人工修正后再扫描转为 `RESOLVED`；全过程不自动改积分。
+
+### T-BENEFIT-26E 任务参数与范围
+
+预期：`DAILY/MONTH/CUSTOMER/FULL_AUDIT` 按约定范围扫描；非法 `mode/yearMonth/pageSize`、`CUSTOMER` 缺少 `customerId` 时直接失败；游标分页不遗漏不重复，任务串行执行。
 
 ## 10. 配置与安全
 
@@ -244,4 +271,4 @@ mvn -pl calculate test
 mvn -pl passenger-api test
 ```
 
-重点执行 `BenefitServiceTest`，并保留三表快照、Bitmap bit、注销前后账户和并发测试结果。
+重点执行 `BenefitServiceTest`、`BenefitReconciliationServiceTest` 和 `BenefitReconciliationJobTest`，并保留三表快照、对账问题表、Bitmap bit、注销前后账户和并发测试结果。

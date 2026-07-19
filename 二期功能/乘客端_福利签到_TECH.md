@@ -1,8 +1,8 @@
 # 乘客端「福利签到」TECH
 
-> 记录日期：2026-07-14
+> 记录日期：2026-07-14；2026-07-19 按当前实现修订 Redis 职责与失败补偿口径。
 > 范围：Redis Bitmap、后端计算、MySQL 事务、失败补偿、注销/换号联动。
-> 状态：技术方案草案，待接口和 SQL 评审后落地。
+> 状态：主功能与异常补偿均已落地，见《乘客端_福利签到_异常补偿_TECH.md》。
 
 ---
 
@@ -17,7 +17,7 @@ Redis Bitmap + MySQL 账本 + 简单 YAML 配置
 职责划分：
 
 ```text
-Redis Bitmap：记录用户某天是否签到，负责快速判断和幂等前置。
+Redis Bitmap：记录用户某天是否签到，作为可由 MySQL 重建的派生索引。
 后端服务：读取配置，计算连续天数和奖励积分。
 MySQL：记录签到事实、积分账户、积分流水，作为最终权威。
 ```
@@ -57,17 +57,15 @@ offset = dayOfMonth - 1
 
 虽然页面只展示 28 天，Redis 仍按自然月日期记录，29-31 号不写签到记录、不发积分。
 
-### 2.2 Lua 幂等
+### 2.2 提交后同步
 
-Redis Lua 只做“今天是否首次签到”：
+当前实现不使用 Redis 裁决首次签到。MySQL 事务提交后，通过 `afterCommit` 执行：
 
 ```text
-GETBIT key offset
-如果已为 1，返回已签到
-否则 SETBIT key offset 1，返回新签到
+SETBIT key offset 1
 ```
 
-Redis 只是前置防重，最终权威仍是 MySQL。
+重复签到由 MySQL 签到记录查询和唯一索引 `uk_sign_customer_date(customer_id, sign_date)` 兜底。Redis 写入失败不回滚已经提交的积分账本，后续由《乘客端_福利签到_异常补偿_TECH.md》定义的任务自动收敛。
 
 ---
 
@@ -115,16 +113,16 @@ benefit:
 ```text
 1. 校验登录态、账号状态、日期范围。
 2. 读取并校验签到配置文件。
-3. Redis Lua 判断并写入当日 Bitmap。
-4. 开启 MySQL 事务。
-5. 获取或创建 benefit_points_account，并锁定账户行。
-6. 再次确认账户 status = ACTIVE。
-7. 计算 continuous_days、reward_points、reward_rule_code。
-8. 插入 benefit_sign_record。
-9. 插入 benefit_points_flow。
-10. 更新 benefit_sign_record.points_flow_id。
-11. 更新 benefit_points_account 余额与 last_sign_date。
-12. 提交事务。
+3. 开启 MySQL 事务。
+4. 获取或创建 benefit_points_account，并锁定账户行。
+5. 再次确认账户 status = ACTIVE。
+6. 计算 continuous_days、reward_points、reward_rule_code。
+7. 插入 benefit_sign_record。
+8. 插入 benefit_points_flow。
+9. 更新 benefit_sign_record.points_flow_id。
+10. 更新 benefit_points_account 余额与 last_sign_date。
+11. 提交事务。
+12. afterCommit 将当日签到写入 Redis Bitmap；失败只影响派生索引，不改变 MySQL 成功结果。
 ```
 
 说明：
@@ -140,10 +138,10 @@ benefit:
 
 ### 5.1 重复点击
 
-使用两层防线：
+使用两层 MySQL 防线：
 
 ```text
-Redis Lua
+签到前查询 benefit_sign_record
 MySQL unique(customer_id, sign_date)
 ```
 
@@ -162,23 +160,18 @@ MySQL unique(customer_id, sign_date)
 
 ## 6. 失败补偿
 
-### 6.1 Redis 成功但 MySQL 失败
+### 6.1 MySQL 事务失败
 
-第一期处理：
-
-- 代码输出一行异常日志。
-- 日志包含 `customerId/signDate/requestId`。
-- 定时补偿任务先记录为 TODO，不在第一期实现。
+签到记录、积分流水和积分账户在同一个事务中回滚；Redis 写入只在提交后执行，不应为失败事务留下可靠的签到 bit。
 
 ### 6.2 MySQL 成功但 Redis 丢失
 
-第一期先不处理。
+当前实时链路记录包含 `customerId/signDate/requestId` 的警告日志，并在用户重复签到时机会式补写当天 bit。自动重建、异常留痕和 MySQL 三表对账采用独立专题方案：
 
-原因：
-
-- 概率较低。
-- MySQL 是权威。
-- 后续可通过 MySQL 签到记录重建当月 Bitmap。
+- 《乘客端_福利签到_异常补偿_TECH.md》
+- Redis Bitmap 可以自动补偿；
+- MySQL 积分异常只检测和记录，不自动改积分；
+- 通过 XXL-Job 执行，不增加内部 HTTP 触发接口。
 
 ---
 

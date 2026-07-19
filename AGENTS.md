@@ -321,6 +321,7 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 - `二期功能/车队营销优惠券规则_讨论稿.md`
 - `二期功能/乘客端_券包与登录领券_{PRD,TECH,API,TEST}.md`
 - `二期功能/乘客端_福利签到_{PRD,TECH,API,SQL,TEST}.md`
+- `二期功能/乘客端_福利签到_异常补偿_TECH.md`
 - `二期功能/司机端_下周开发_TODO.md`
 
 ### 完单结算 MVP
@@ -342,5 +343,5 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 - 司机登出后 `ACCEPTED`（司机已接单）到达前自动释单口径已明确并落地：释放改派回 `CREATED`（待派单/重新派单），不是乘客侧 `CANCELLED`（已取消）终态。
 - 完单结算 MVP 已落地为本地 mock 闭环；支付渠道仍是 mock。接真实支付宝/微信前还需完成第三方签约、回调验签、退款、对账和财务评审；支付失败不由后台定时自动重试。
 - 车队营销优惠券后台、目标表结构、领券、锁券/核销与结算快照已经落地；司机金额展示和车队/运营公司固定金额或比例分成仍需独立设计、实现和财务评审。
-- 福利签到积分已落地；Redis/MySQL 异常补偿任务仍待建设。
+- 福利签到积分与异常对账补偿已落地；XXL-Job Handler 为 `benefitSignReconciliation`，Redis Bitmap 可自动收敛，MySQL 差异只写入 `benefit_reconciliation_issue` 供人工处理，不自动改积分。
 - 当前重点见 `TODO与差距总览.md` §2：司机端近期功能、后台派单诊断聚合、DLQ 与真实支付闭环。
