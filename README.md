@@ -23,6 +23,8 @@
 常用启动命令：
 
 本地联调统一显式激活 `local` profile；不要依赖应用默认 profile。`dev` 仅用于需要开发级调试配置时手动替换。
+父 POM 已将 `spring-boot:run` 的工作目录固定为对应模块目录，因此从仓库根目录执行下列命令时，
+各服务的相对日志路径仍落在 `<module>/logs`，不会写入仓库根部的 `logs`。
 
 ```bash
 mvn -pl gateway spring-boot:run -Dspring-boot.run.profiles=local

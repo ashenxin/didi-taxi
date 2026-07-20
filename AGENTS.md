@@ -190,6 +190,8 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 只防止覆盖率采集完全失效；后续按模块基线逐步提高。覆盖率不能替代关键业务断言和端到端验收。
 
 本地启动统一使用 `local`（或明确使用 `dev`）profile；乘客和司机短信 mock 在默认 profile 中关闭，仅在 `local/dev` 中开启。
+父 POM 已将 `spring-boot:run` 的工作目录固定为各模块的 `${project.basedir}`；即使从仓库根目录使用
+`mvn -pl <module> spring-boot:run`，相对日志路径也应落在对应模块的 `logs`，不要在仓库根部维护第二套日志目录。
 
 ### 本地依赖
 
