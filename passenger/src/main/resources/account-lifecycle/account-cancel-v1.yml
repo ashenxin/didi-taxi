@@ -1,0 +1,141 @@
+schemaVersion: 1
+code: account-cancel
+version: 1
+operationType: ACCOUNT_CANCEL
+status: ACTIVE
+description: 注销：栅栏后复检、受限会话、领域清理、最终释放手机号
+
+steps:
+  # 正式提交前另有只读预检；以下检查发生在 ACTIVE -> CANCELLING 栅栏建立后。
+  - code: ORDER_FINAL_CHECK
+    participant: ORDER
+    phase: PRECONDITION
+    executionMode: SYNC_CHECK
+    criticality: REQUIRED
+    sequence: 100
+    timeoutSeconds: 10
+    retry:
+      maxAttempts: 3
+      initialIntervalSeconds: 5
+
+  - code: WALLET_FINAL_CHECK
+    participant: WALLET
+    phase: PRECONDITION
+    executionMode: SYNC_CHECK
+    criticality: REQUIRED
+    sequence: 100
+    timeoutSeconds: 10
+    retry:
+      maxAttempts: 3
+      initialIntervalSeconds: 5
+
+  - code: CALCULATE_FINAL_CHECK
+    participant: CALCULATE
+    phase: PRECONDITION
+    executionMode: SYNC_CHECK
+    criticality: REQUIRED
+    sequence: 100
+    timeoutSeconds: 10
+    retry:
+      maxAttempts: 3
+      initialIntervalSeconds: 5
+
+  - code: IDENTITY_FINAL_CHECK
+    participant: IDENTITY
+    phase: PRECONDITION
+    executionMode: LOCAL_TRANSACTION
+    criticality: REQUIRED
+    sequence: 100
+    timeoutSeconds: 5
+    retry:
+      maxAttempts: 0
+      initialIntervalSeconds: 5
+
+  - code: SESSION_REVOKE_NORMAL
+    participant: SESSION
+    phase: ACTION
+    executionMode: LOCAL_TRANSACTION
+    criticality: REQUIRED
+    sequence: 200
+    timeoutSeconds: 5
+    retry:
+      maxAttempts: 0
+      initialIntervalSeconds: 5
+
+  # 进入 sequence=300 前，Operation 必须原子设置 irreversible_started=1。
+  - code: WALLET_CLOSE_AUTO_PAY
+    participant: WALLET
+    phase: ACTION
+    executionMode: ASYNC_COMMAND
+    criticality: REQUIRED
+    sequence: 300
+    timeoutSeconds: 30
+    retry:
+      maxAttempts: 10
+      initialIntervalSeconds: 10
+
+  - code: CALCULATE_INVALIDATE_UNUSED_COUPONS
+    participant: CALCULATE
+    phase: ACTION
+    executionMode: ASYNC_COMMAND
+    criticality: REQUIRED
+    sequence: 300
+    timeoutSeconds: 30
+    retry:
+      maxAttempts: 10
+      initialIntervalSeconds: 5
+
+  - code: CALCULATE_CLEAR_POINTS
+    participant: CALCULATE
+    phase: ACTION
+    executionMode: ASYNC_COMMAND
+    criticality: REQUIRED
+    sequence: 300
+    timeoutSeconds: 30
+    retry:
+      maxAttempts: 10
+      initialIntervalSeconds: 5
+
+  - code: IDENTITY_REVOKE_OAUTH
+    participant: IDENTITY
+    phase: ACTION
+    executionMode: LOCAL_TRANSACTION
+    criticality: REQUIRED
+    sequence: 300
+    timeoutSeconds: 10
+    retry:
+      maxAttempts: 3
+      initialIntervalSeconds: 5
+
+  - code: IDENTITY_REGISTER_RETENTION
+    participant: IDENTITY
+    phase: RETENTION
+    executionMode: LOCAL_TRANSACTION
+    criticality: REQUIRED
+    sequence: 400
+    timeoutSeconds: 10
+    retry:
+      maxAttempts: 3
+      initialIntervalSeconds: 5
+
+  - code: SESSION_CLOSE_WS
+    participant: SESSION
+    phase: POST_ACTION
+    executionMode: ASYNC_COMMAND
+    criticality: POST_ACTION
+    sequence: 500
+    timeoutSeconds: 15
+    retry:
+      maxAttempts: 10
+      initialIntervalSeconds: 5
+
+  - code: ACCOUNT_FINALIZE_CANCEL
+    participant: ACCOUNT
+    phase: FINALIZE
+    executionMode: LOCAL_TRANSACTION
+    criticality: REQUIRED
+    sequence: 600
+    timeoutSeconds: 10
+    retry:
+      maxAttempts: 0
+      initialIntervalSeconds: 5
