@@ -35,6 +35,11 @@ public final class ImmutableLifecyclePlanRegistry implements LifecyclePlanRegist
                 throw new InvalidLifecyclePlanException("multiple ACTIVE lifecycle plans for " + type);
             }
         }
+        for (LifecycleOperationType type : LifecycleOperationType.values()) {
+            if (!active.containsKey(type)) {
+                throw new InvalidLifecyclePlanException("Missing ACTIVE lifecycle plan for " + type);
+            }
+        }
         return new ImmutableLifecyclePlanRegistry(active, versions);
     }
 
