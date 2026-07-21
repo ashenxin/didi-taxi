@@ -1,0 +1,29 @@
+schemaVersion: 1
+code: phone-change
+version: 1
+operationType: PHONE_CHANGE
+status: ACTIVE
+description: 换号：同一事务更新手机号绑定、生命周期版本、认证代次和 Outbox
+
+steps:
+  - code: IDENTITY_COMMIT_PHONE_CHANGE
+    participant: IDENTITY
+    phase: ACTION
+    executionMode: LOCAL_TRANSACTION
+    criticality: REQUIRED
+    sequence: 100
+    timeoutSeconds: 10
+    retry:
+      maxAttempts: 0
+      initialIntervalSeconds: 5
+
+  - code: SESSION_CLOSE_WS_AFTER_PHONE_CHANGE
+    participant: SESSION
+    phase: POST_ACTION
+    executionMode: ASYNC_COMMAND
+    criticality: POST_ACTION
+    sequence: 200
+    timeoutSeconds: 15
+    retry:
+      maxAttempts: 10
+      initialIntervalSeconds: 5
