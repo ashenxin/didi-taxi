@@ -53,6 +53,12 @@ public class Customer {
     @NotNull(message = "账号状态不能为空")
     private Integer status;
 
+    private String lifecycleStatus;
+    private Long lifecycleVersion;
+    private Long authEpoch;
+    private String currentLifecycleOperationNo;
+    private LocalDateTime cancelledAt;
+
     /**
      * 真实姓名，按需实名
      */
