@@ -26,7 +26,6 @@ import com.sx.passengerapi.model.settings.PhoneChangeSmsSendRequest;
 import com.sx.passengerapi.model.settings.SettingsProfileVO;
 import com.sx.passengerapi.model.settings.SettingsSmsSendResultVO;
 import com.sx.passengerapi.model.wallet.CouponInvalidateRequest;
-import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -39,17 +38,17 @@ public class PassengerSettingsService {
     private final PassengerCoreSettingsClient passengerCoreSettingsClient;
     private final OrderClient orderClient;
     private final CalculateClient calculateClient;
-    private final PassengerWsSessionRegistry sessions;
+    private final PassengerLifecycleOrchestrator lifecycleOrchestrator;
 
     public PassengerSettingsService(
             PassengerCoreSettingsClient passengerCoreSettingsClient,
             OrderClient orderClient,
             CalculateClient calculateClient,
-            PassengerWsSessionRegistry sessions) {
+            PassengerLifecycleOrchestrator lifecycleOrchestrator) {
         this.passengerCoreSettingsClient = passengerCoreSettingsClient;
         this.orderClient = orderClient;
         this.calculateClient = calculateClient;
-        this.sessions = sessions;
+        this.lifecycleOrchestrator = lifecycleOrchestrator;
     }
 
     public SettingsProfileVO profile(long customerId) {
@@ -71,9 +70,8 @@ public class PassengerSettingsService {
     }
 
     public PhoneChangeResultVO confirmPhoneChange(long customerId, PhoneChangeConfirmRequest req) {
-        AppPhoneChangeResult data = unwrap(passengerCoreSettingsClient.confirmPhoneChange(
-                new AppPhoneChangeConfirmRequest(customerId, req.getNewPhone(), req.getCode())));
-        sessions.closeCustomerSessions(customerId, "phone_changed");
+        AppPhoneChangeResult data = lifecycleOrchestrator.confirmPhoneChange(
+                new AppPhoneChangeConfirmRequest(customerId, req.getNewPhone(), req.getCode()));
 
         PhoneChangeResultVO out = new PhoneChangeResultVO();
         out.setChanged(data.getChanged());
@@ -102,9 +100,8 @@ public class PassengerSettingsService {
         if (hasLockedCoupon(customerId)) {
             throw new BizErrorException(409, "当前存在订单锁定中的优惠券，请先完成或取消相关订单后再注销");
         }
-        AppAccountCancelResult data = unwrap(passengerCoreSettingsClient.confirmAccountCancel(
-                new AppAccountCancelConfirmRequest(customerId, req.getCode(), req.getConfirm())));
-        sessions.closeCustomerSessions(customerId, "account_cancelled");
+        AppAccountCancelResult data = lifecycleOrchestrator.confirmAccountCancel(
+                new AppAccountCancelConfirmRequest(customerId, req.getCode(), req.getConfirm()));
         tryInvalidateUnusedCoupons(customerId);
         tryClearBenefitPoints(customerId);
 

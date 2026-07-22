@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.sx.passenger.dao.CustomerEntityMapper">
+    <select id="selectAuthEpochById" resultType="java.lang.Long">
+        SELECT auth_epoch
+        FROM customer
+        WHERE id = #{customerId}
+    </select>
+
     <update id="bumpAuthEpochForAuthentication">
         UPDATE customer
         SET auth_epoch = auth_epoch + 1,

@@ -2,8 +2,9 @@ package com.sx.passengerapi.service;
 
 import com.sx.passengerapi.client.CalculateClient;
 import com.sx.passengerapi.client.OrderClient;
-import com.sx.passengerapi.client.PassengerCoreSettingsClient;
+import com.sx.passengerapi.client.dto.AppAccountCancelConfirmRequest;
 import com.sx.passengerapi.client.dto.AppAccountCancelResult;
+import com.sx.passengerapi.client.dto.AppPhoneChangeConfirmRequest;
 import com.sx.passengerapi.client.dto.AppPhoneChangeResult;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
@@ -11,7 +12,6 @@ import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
 import com.sx.passengerapi.model.settings.AccountCancelConfirmRequest;
 import com.sx.passengerapi.model.settings.AccountCancelResultVO;
 import com.sx.passengerapi.model.settings.PhoneChangeConfirmRequest;
-import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -25,12 +25,12 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class PassengerSettingsServiceTest {
-    private final PassengerCoreSettingsClient passengerCoreSettingsClient = mock(PassengerCoreSettingsClient.class);
     private final OrderClient orderClient = mock(OrderClient.class);
     private final CalculateClient calculateClient = mock(CalculateClient.class);
-    private final PassengerWsSessionRegistry sessions = mock(PassengerWsSessionRegistry.class);
+    private final PassengerLifecycleOrchestrator lifecycleOrchestrator = mock(PassengerLifecycleOrchestrator.class);
     private final PassengerSettingsService service = new PassengerSettingsService(
-            passengerCoreSettingsClient, orderClient, calculateClient, sessions);
+            mock(com.sx.passengerapi.client.PassengerCoreSettingsClient.class),
+            orderClient, calculateClient, lifecycleOrchestrator);
 
     @Test
     void successfulPhoneChangeClosesOldWsWithoutStartingSaga() {
@@ -38,11 +38,11 @@ class PassengerSettingsServiceTest {
         changed.setChanged(true);
         changed.setRequireLogin(true);
         changed.setMaskedNewPhone("****8000");
-        when(passengerCoreSettingsClient.confirmPhoneChange(any())).thenReturn(ResponseVo.success(changed));
+        when(lifecycleOrchestrator.confirmPhoneChange(any())).thenReturn(changed);
 
         service.confirmPhoneChange(10001L, phoneChangeRequest());
 
-        verify(sessions).closeCustomerSessions(10001L, "phone_changed");
+        verify(lifecycleOrchestrator).confirmPhoneChange(any(AppPhoneChangeConfirmRequest.class));
         verifyNoInteractions(orderClient, calculateClient);
     }
 
@@ -53,7 +53,7 @@ class PassengerSettingsServiceTest {
         unsettled.setExists(false);
         when(orderClient.unsettledExists(10001L)).thenReturn(ResponseVo.success(unsettled));
         when(calculateClient.lockedCouponsExists(10001L)).thenReturn(ResponseVo.success(false));
-        when(passengerCoreSettingsClient.confirmAccountCancel(any())).thenReturn(ResponseVo.success(cancelledResult()));
+        when(lifecycleOrchestrator.confirmAccountCancel(any())).thenReturn(cancelledResult());
         when(calculateClient.invalidateCouponsByPassenger(any())).thenReturn(ResponseVo.success(0));
         when(calculateClient.clearBenefitPointsByAccountCancel(any()))
                 .thenReturn(new ResponseVo<>(502, "福利积分服务暂时不可用"));
@@ -62,7 +62,7 @@ class PassengerSettingsServiceTest {
 
         assertThat(result.getCancelled()).isTrue();
         assertThat(result.getRequireLogin()).isTrue();
-        verify(sessions).closeCustomerSessions(10001L, "account_cancelled");
+        verify(lifecycleOrchestrator).confirmAccountCancel(any(AppAccountCancelConfirmRequest.class));
     }
 
     private static OrderPageData emptyOrderPage() {

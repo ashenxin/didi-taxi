@@ -12,14 +12,18 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ServletRequestPathUtils;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
 
 import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
+import java.util.List;
 import java.time.Duration;
 
 import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
@@ -33,7 +37,17 @@ import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTE
 public class PassengerJwtAuthFilter extends OncePerRequestFilter {
 
     private static final String BEARER = "Bearer ";
-    private static final Set<String> RESTRICTED_LIFECYCLE_PATHS = Set.of();
+    private static final PathPattern ACTUATOR_ROOT = pathPattern("/actuator");
+    private static final PathPattern ACTUATOR_DESCENDANTS = pathPattern("/actuator/**");
+    private static final PathPattern INTERNAL_ROOT = pathPattern("/app/internal");
+    private static final PathPattern INTERNAL_DESCENDANTS = pathPattern("/app/internal/**");
+    private static final PathPattern WS_ROOT = pathPattern("/app/ws");
+    private static final PathPattern WS_DESCENDANTS = pathPattern("/app/ws/**");
+    private static final List<PathPattern> PUBLIC_AUTH_PATHS = List.of(
+            pathPattern("/app/api/v1/auth/sms/send"),
+            pathPattern("/app/api/v1/auth/login-sms"),
+            pathPattern("/app/api/v1/auth/login-password"));
+    private static final List<PathPattern> RESTRICTED_LIFECYCLE_PATHS = List.of();
 
     private final AppJwtService jwtService;
     private final PassengerCoreAuthStateClient authStateClient;
@@ -62,8 +76,13 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI();
-        return path == null || !path.startsWith("/app/api/v1");
+        PathContainer path = pathWithinApplication(request);
+        return ACTUATOR_ROOT.matches(path)
+                || ACTUATOR_DESCENDANTS.matches(path)
+                || INTERNAL_ROOT.matches(path)
+                || INTERNAL_DESCENDANTS.matches(path)
+                || WS_ROOT.matches(path)
+                || WS_DESCENDANTS.matches(path);
     }
 
     @Override
@@ -73,11 +92,7 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        String path = request.getRequestURI();
-        if (path.startsWith("/actuator/")) {
-            filterChain.doFilter(request, response);
-            return;
-        }
+        PathContainer path = pathWithinApplication(request);
         if (isPublicAuth(path, request.getMethod())) {
             filterChain.doFilter(request, response);
             return;
@@ -142,17 +157,23 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
         filterChain.doFilter(new PassengerAuthRequestWrapper(request, authContext), response);
     }
 
-    private static boolean isPublicAuth(String path, String method) {
+    private static boolean isPublicAuth(PathContainer path, String method) {
         if (!"POST".equalsIgnoreCase(method)) {
             return false;
         }
-        return "/app/api/v1/auth/sms/send".equals(path)
-                || "/app/api/v1/auth/login-sms".equals(path)
-                || "/app/api/v1/auth/login-password".equals(path);
+        return PUBLIC_AUTH_PATHS.stream().anyMatch(pattern -> pattern.matches(path));
     }
 
-    private static boolean isRestrictedLifecyclePath(String path) {
-        return RESTRICTED_LIFECYCLE_PATHS.contains(path);
+    private static boolean isRestrictedLifecyclePath(PathContainer path) {
+        return RESTRICTED_LIFECYCLE_PATHS.stream().anyMatch(pattern -> pattern.matches(path));
+    }
+
+    private static PathContainer pathWithinApplication(HttpServletRequest request) {
+        return ServletRequestPathUtils.parseAndCache(request).pathWithinApplication();
+    }
+
+    private static PathPattern pathPattern(String pattern) {
+        return PathPatternParser.defaultInstance.parse(pattern);
     }
 
     private void writeJsonError(HttpServletResponse response, int httpStatus, String msg) throws IOException {

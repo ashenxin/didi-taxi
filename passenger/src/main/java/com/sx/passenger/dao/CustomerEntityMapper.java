@@ -9,6 +9,8 @@ import java.time.LocalDateTime;
 
 @Repository
 public interface CustomerEntityMapper extends BaseMapper<Customer> {
+    Long selectAuthEpochById(@Param("customerId") long customerId);
+
     int bumpAuthEpochForAuthentication(@Param("customerId") long customerId);
 
     int bumpAuthEpochForLogout(@Param("customerId") long customerId,

@@ -218,6 +218,13 @@ closeCustomerSessions(long customerId, String reason)
 
 登出、换号、注销建栅栏和注销完成时调用。关闭原因不得包含手机号或 Token。旧 WS Token 重连因数据库 epoch 不匹配而拒绝。P2 只保证本节点；跨实例广播和重试属于 P6。
 
+换号与注销在 BFF 侧统一经过未公开的 `PassengerLifecycleOrchestrator`。核心 passenger 只有在数据库 CAS
+成功后才返回 `customerId + newAuthEpoch + requireLogin + revocationReason`；BFF 校验这些撤销事实以及具体操作的
+成功标志后，才同步调用 `closeCustomerSessions`，从而复用同一条 generation 栅栏。核心失败、响应不完整、
+customerId 不一致或操作未完成时均不得关闭会话。现阶段不新增 lifecycle Controller，也不伪造跨服务结果；
+未来任何公开换号/注销入口必须调用该编排器，不得在 Controller 或各业务 Service 中自行复制 WS 撤销逻辑。
+当前编排只影响本 passenger-api 实例，跨实例可靠撤销仍属于 P6。
+
 ## 12. 内部安全
 
 - passenger-api 使用独立内部服务 Token 调 passenger。

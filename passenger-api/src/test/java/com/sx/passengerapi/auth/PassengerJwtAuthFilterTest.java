@@ -129,6 +129,80 @@ class PassengerJwtAuthFilterTest {
         verify(authStateClient, never()).get(any(Long.class));
     }
 
+    @Test
+    void publicLoginPatternIsExactAndDoesNotExposeDescendants() throws Exception {
+        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 1, null));
+        when(authStateClient.get(7L)).thenReturn(ok(state(7L, "ACTIVE", 9L, null, "NORMAL", true)));
+        FilterChain chain = mock(FilterChain.class);
+
+        MockHttpServletResponse response = execute(
+                request("POST", "/app/api/v1/auth/login-sms/extra", "", true), chain);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        verify(authStateClient).get(7L);
+        verify(chain).doFilter(any(PassengerAuthRequestWrapper.class), any());
+    }
+
+    @Test
+    void contextPathCannotBypassProtectedAuthenticationOrInjectTrustedHeaders() throws Exception {
+        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 1, null));
+        when(authStateClient.get(7L)).thenReturn(ok(state(7L, "ACTIVE", 9L, null, "NORMAL", true)));
+        FilterChain chain = mock(FilterChain.class);
+        MockHttpServletRequest request = request("GET", "/taxi/app/api/v1/orders/current", "/taxi", true);
+        request.addHeader(PassengerAuthRequestWrapper.USER_ID, "999");
+
+        MockHttpServletResponse response = execute(request, chain);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        ArgumentCaptor<ServletRequest> captured = ArgumentCaptor.forClass(ServletRequest.class);
+        verify(chain).doFilter(captured.capture(), any());
+        assertThat(captured.getValue()).isInstanceOf(PassengerAuthRequestWrapper.class);
+        assertThat(((PassengerAuthRequestWrapper) captured.getValue())
+                .getHeader(PassengerAuthRequestWrapper.USER_ID)).isEqualTo("7");
+        verify(authStateClient).get(7L);
+    }
+
+    @Test
+    void matrixPathsUseNormalizedExactPublicAndProtectedPatterns() throws Exception {
+        FilterChain publicChain = mock(FilterChain.class);
+
+        MockHttpServletResponse publicResponse = execute(
+                request("POST", "/app/api/v1/auth/login-sms;channel=app", "", false), publicChain);
+
+        assertThat(publicResponse.getStatus()).isEqualTo(200);
+        verify(publicChain).doFilter(any(), any());
+        verify(authStateClient, never()).get(any(Long.class));
+
+        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 1, null));
+        when(authStateClient.get(7L)).thenReturn(ok(state(7L, "ACTIVE", 9L, null, "NORMAL", true)));
+        FilterChain protectedChain = mock(FilterChain.class);
+
+        MockHttpServletResponse protectedResponse = execute(
+                request("GET", "/app/api/v1/orders;view=current", "", true), protectedChain);
+
+        assertThat(protectedResponse.getStatus()).isEqualTo(200);
+        verify(authStateClient).get(7L);
+    }
+
+    @Test
+    void encodedAndDoubleEncodedAppPathsFailClosedThroughDatabaseAuthentication() throws Exception {
+        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 1, null));
+        when(authStateClient.get(7L)).thenReturn(ok(state(7L, "ACTIVE", 9L, null, "NORMAL", true)));
+
+        FilterChain encodedChain = mock(FilterChain.class);
+        MockHttpServletResponse encoded = execute(
+                request("GET", "/app%2Fapi%2Fv1/orders/current", "", true), encodedChain);
+        FilterChain doubleEncodedChain = mock(FilterChain.class);
+        MockHttpServletResponse doubleEncoded = execute(
+                request("GET", "/app%252Fapi%252Fv1/orders/current", "", true), doubleEncodedChain);
+
+        assertThat(encoded.getStatus()).isEqualTo(200);
+        assertThat(doubleEncoded.getStatus()).isEqualTo(200);
+        verify(authStateClient, times(2)).get(7L);
+        verify(encodedChain).doFilter(any(PassengerAuthRequestWrapper.class), any());
+        verify(doubleEncodedChain).doFilter(any(PassengerAuthRequestWrapper.class), any());
+    }
+
     private void assertUnauthorized(ParsedPassengerJwt token, InternalAuthStateResponse state) throws Exception {
         clearInvocations(authStateClient, metrics);
         when(jwtService.parseAndVerify("jwt-value")).thenReturn(token);
@@ -151,14 +225,25 @@ class PassengerJwtAuthFilterTest {
 
     private MockHttpServletResponse execute(String method, String path, FilterChain chain, boolean authorized)
             throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest(method, path);
-        request.setRequestURI(path);
-        if (authorized) {
-            request.addHeader("Authorization", "Bearer jwt-value");
-        }
+        MockHttpServletRequest request = request(method, path, "", authorized);
+        return execute(request, chain);
+    }
+
+    private MockHttpServletResponse execute(MockHttpServletRequest request, FilterChain chain) throws Exception {
         MockHttpServletResponse response = new MockHttpServletResponse();
         filter.doFilter(request, response, chain);
         return response;
+    }
+
+    private static MockHttpServletRequest request(
+            String method, String requestUri, String contextPath, boolean authorized) {
+        MockHttpServletRequest request = new MockHttpServletRequest(method, requestUri);
+        request.setContextPath(contextPath);
+        request.setRequestURI(requestUri);
+        if (authorized) {
+            request.addHeader("Authorization", "Bearer jwt-value");
+        }
+        return request;
     }
 
     private static ParsedPassengerJwt token(PassengerSessionScope scope, int audit, String operationNo) {

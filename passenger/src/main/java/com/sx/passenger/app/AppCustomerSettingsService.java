@@ -147,11 +147,15 @@ public class AppCustomerSettingsService {
                     PassengerAuthMetrics.OperationResult.CONFLICT);
             return ResultUtil.error(409, "该手机号已被使用");
         }
+        long newAuthEpoch = authoritativeAuthEpoch(current.getId());
         metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE);
         AppPhoneChangeResult out = new AppPhoneChangeResult();
         out.setChanged(true);
         out.setRequireLogin(true);
         out.setMaskedNewPhone(maskPhone(newPhone));
+        out.setCustomerId(current.getId());
+        out.setNewAuthEpoch(newAuthEpoch);
+        out.setRevocationReason("phone_changed");
         log.info("乘客更换手机号成功 customerId={} oldPhone={} newPhone={}",
                 req.getCustomerId(), maskPhone(current.getPhone()), maskPhone(newPhone));
         return ResultUtil.success(out);
@@ -205,10 +209,14 @@ public class AppCustomerSettingsService {
                     PassengerAuthMetrics.OperationResult.CONFLICT);
             return ResultUtil.error(409, "账号状态已变化，请重试");
         }
+        long newAuthEpoch = authoritativeAuthEpoch(current.getId());
         metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL);
         AppAccountCancelResult out = new AppAccountCancelResult();
         out.setCancelled(true);
         out.setRequireLogin(true);
+        out.setCustomerId(current.getId());
+        out.setNewAuthEpoch(newAuthEpoch);
+        out.setRevocationReason("account_cancelled");
         log.info("乘客账号已逻辑注销 customerId={} phone={}", req.getCustomerId(), maskPhone(current.getPhone()));
         return ResultUtil.success(out);
     }
@@ -234,6 +242,14 @@ public class AppCustomerSettingsService {
         String code = String.format("%06d", RANDOM.nextInt(1_000_000));
         otpService.store(purpose, subject, code, Duration.ofSeconds(smsProps.getCodeTtlSeconds()));
         return code;
+    }
+
+    private long authoritativeAuthEpoch(long customerId) {
+        Long authEpoch = customerMapper.selectAuthEpochById(customerId);
+        if (authEpoch == null || authEpoch < 1) {
+            throw new IllegalStateException("Customer authEpoch is unavailable after lifecycle update");
+        }
+        return authEpoch;
     }
 
     private static long lifecycleVersion(Customer customer) {

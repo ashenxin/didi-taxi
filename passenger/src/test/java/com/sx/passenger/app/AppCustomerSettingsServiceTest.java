@@ -1,7 +1,9 @@
 package com.sx.passenger.app;
 
 import com.sx.passenger.app.dto.AppAccountCancelConfirmRequest;
+import com.sx.passenger.app.dto.AppAccountCancelResult;
 import com.sx.passenger.app.dto.AppPhoneChangeConfirmRequest;
+import com.sx.passenger.app.dto.AppPhoneChangeResult;
 import com.sx.passenger.app.dto.AppPhoneChangeSmsSendRequest;
 import com.sx.passenger.app.dto.AppSettingsProfileResponse;
 import com.sx.passenger.auth.otp.AtomicOtpService;
@@ -130,19 +132,25 @@ class AppCustomerSettingsServiceTest {
     @Test
     void phoneChangeConfirmationAcceptsInitialLifecycleVersion() {
         Customer current = customerWithLifecycleVersion(10001L, "13812345678", 0L);
+        current.setAuthEpoch(4L);
         when(customerMapper.selectOne(any())).thenReturn(current, null);
         when(otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
                 OtpSubject.phoneChange(10001L, "13912345678", 0L), "123456"))
                 .thenReturn(OtpConsumeResult.CONSUMED);
         when(customerMapper.changePhoneCas(10001L, "13912345678", 0L)).thenReturn(1);
+        when(customerMapper.selectAuthEpochById(10001L)).thenReturn(12L);
         AppPhoneChangeConfirmRequest request = new AppPhoneChangeConfirmRequest();
         request.setCustomerId(10001L);
         request.setNewPhone("13912345678");
         request.setCode("123456");
 
-        ResponseVo<?> response = service.confirmPhoneChange(request);
+        ResponseVo<AppPhoneChangeResult> response = service.confirmPhoneChange(request);
 
         assertThat(response.getCode()).isEqualTo(200);
+        assertThat(response.getData().getCustomerId()).isEqualTo(10001L);
+        assertThat(response.getData().getNewAuthEpoch()).isEqualTo(12L);
+        assertThat(response.getData().getRequireLogin()).isTrue();
+        assertThat(response.getData().getRevocationReason()).isEqualTo("phone_changed");
         verify(customerMapper).changePhoneCas(10001L, "13912345678", 0L);
         verify(customerMapper, never()).update(any(), any());
         verify(metrics).observeEpochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE);
@@ -221,6 +229,29 @@ class AppCustomerSettingsServiceTest {
         verify(customerMapper, never()).update(any(), any());
         verify(metrics).epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
                 PassengerAuthMetrics.OperationResult.CONFLICT);
+    }
+
+    @Test
+    void successfulAccountCancellationReturnsExplicitRevocationFacts() {
+        Customer current = customer(10001L, "13812345678");
+        current.setAuthEpoch(7L);
+        when(customerMapper.selectOne(any())).thenReturn(current);
+        when(otpService.consume(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(10001L, 9L), "123456"))
+                .thenReturn(OtpConsumeResult.CONSUMED);
+        when(customerMapper.cancelAccountCas(eq(10001L), eq(9L), any(LocalDateTime.class))).thenReturn(1);
+        when(customerMapper.selectAuthEpochById(10001L)).thenReturn(8L);
+        AppAccountCancelConfirmRequest request = new AppAccountCancelConfirmRequest();
+        request.setCustomerId(10001L);
+        request.setCode("123456");
+        request.setConfirm(true);
+
+        ResponseVo<AppAccountCancelResult> response = service.confirmAccountCancel(request);
+
+        assertThat(response.getCode()).isEqualTo(200);
+        assertThat(response.getData().getCustomerId()).isEqualTo(10001L);
+        assertThat(response.getData().getNewAuthEpoch()).isEqualTo(8L);
+        assertThat(response.getData().getRequireLogin()).isTrue();
+        assertThat(response.getData().getRevocationReason()).isEqualTo("account_cancelled");
     }
 
     private static Customer customer(Long id, String phone) {
