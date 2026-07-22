@@ -225,7 +225,7 @@ public class AppCustomerSettingsService {
     }
 
     private static long lifecycleVersion(Customer customer) {
-        if (customer.getLifecycleVersion() == null || customer.getLifecycleVersion() <= 0) {
+        if (customer.getLifecycleVersion() == null || customer.getLifecycleVersion() < 0) {
             throw new IllegalStateException("Customer lifecycleVersion is required for OTP");
         }
         return customer.getLifecycleVersion();

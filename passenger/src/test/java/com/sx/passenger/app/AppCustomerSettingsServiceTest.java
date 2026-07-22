@@ -107,6 +107,41 @@ class AppCustomerSettingsServiceTest {
     }
 
     @Test
+    void phoneChangeSmsAcceptsInitialLifecycleVersion() {
+        Customer current = customerWithLifecycleVersion(10001L, "13812345678", 0L);
+        when(customerMapper.selectOne(any())).thenReturn(current, null);
+        when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class))).thenReturn(true);
+        when(valueOperations.increment(anyString())).thenReturn(1L);
+        AppPhoneChangeSmsSendRequest request = new AppPhoneChangeSmsSendRequest();
+        request.setCustomerId(10001L);
+        request.setNewPhone("13912345678");
+
+        ResponseVo<?> response = service.sendPhoneChangeSms(request);
+
+        assertThat(response.getCode()).isEqualTo(200);
+        verify(otpService).store(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE),
+                eq(OtpSubject.phoneChange(10001L, "13912345678", 0L)), anyString(), eq(Duration.ofSeconds(300)));
+    }
+
+    @Test
+    void phoneChangeConfirmationAcceptsInitialLifecycleVersion() {
+        Customer current = customerWithLifecycleVersion(10001L, "13812345678", 0L);
+        when(customerMapper.selectOne(any())).thenReturn(current, null);
+        when(otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
+                OtpSubject.phoneChange(10001L, "13912345678", 0L), "123456"))
+                .thenReturn(OtpConsumeResult.CONSUMED);
+        when(customerMapper.update(any(), any())).thenReturn(1);
+        AppPhoneChangeConfirmRequest request = new AppPhoneChangeConfirmRequest();
+        request.setCustomerId(10001L);
+        request.setNewPhone("13912345678");
+        request.setCode("123456");
+
+        ResponseVo<?> response = service.confirmPhoneChange(request);
+
+        assertThat(response.getCode()).isEqualTo(200);
+    }
+
+    @Test
     void accountCancelSmsStoresOtpUnderPurposeAndLifecycleVersion() {
         Customer current = customer(10001L, "13812345678");
         when(customerMapper.selectOne(any())).thenReturn(current);
@@ -140,11 +175,15 @@ class AppCustomerSettingsServiceTest {
     }
 
     private static Customer customer(Long id, String phone) {
+        return customerWithLifecycleVersion(id, phone, 9L);
+    }
+
+    private static Customer customerWithLifecycleVersion(Long id, String phone, Long lifecycleVersion) {
         return new Customer()
                 .setId(id)
                 .setPhone(phone)
                 .setStatus(0)
-                .setLifecycleVersion(9L)
+                .setLifecycleVersion(lifecycleVersion)
                 .setIsDeleted(0);
     }
 }

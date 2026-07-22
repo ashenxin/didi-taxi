@@ -48,8 +48,8 @@ public final class OtpKeyFactory {
     }
 
     private static Long requiredVersion(OtpSubject subject) {
-        if (subject.lifecycleVersion() == null || subject.lifecycleVersion() <= 0) {
-            throw new IllegalArgumentException("OTP subject requires positive lifecycleVersion");
+        if (subject.lifecycleVersion() == null || subject.lifecycleVersion() < 0) {
+            throw new IllegalArgumentException("OTP subject requires non-negative lifecycleVersion");
         }
         return subject.lifecycleVersion();
     }
