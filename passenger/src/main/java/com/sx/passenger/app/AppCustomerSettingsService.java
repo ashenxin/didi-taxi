@@ -8,6 +8,10 @@ import com.sx.passenger.app.dto.AppPhoneChangeConfirmRequest;
 import com.sx.passenger.app.dto.AppPhoneChangeResult;
 import com.sx.passenger.app.dto.AppPhoneChangeSmsSendRequest;
 import com.sx.passenger.app.dto.AppSettingsProfileResponse;
+import com.sx.passenger.auth.otp.AtomicOtpService;
+import com.sx.passenger.auth.otp.OtpConsumeResult;
+import com.sx.passenger.auth.otp.OtpPurpose;
+import com.sx.passenger.auth.otp.OtpSubject;
 import com.sx.passenger.common.util.ResultUtil;
 import com.sx.passenger.common.vo.ResponseVo;
 import com.sx.passenger.dao.CustomerEntityMapper;
@@ -31,24 +35,25 @@ public class AppCustomerSettingsService {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final ZoneId CN_ZONE = ZoneId.of("Asia/Shanghai");
 
-    private static final String KEY_PHONE_CHANGE_OTP_PREFIX = "app:settings:phone-change:new:otp:"; // 新手机号验证码（customerId:newPhone）
     private static final String KEY_PHONE_CHANGE_GAP_PREFIX = "app:settings:phone-change:sms:gap:"; // 更换手机号发送间隔锁
     private static final String KEY_PHONE_CHANGE_DAILY_PREFIX = "app:settings:phone-change:sms:daily:"; // 更换手机号自然日发送次数
-    private static final String KEY_ACCOUNT_CANCEL_OTP_PREFIX = "app:settings:account-cancel:otp:"; // 注销验证码（customerId）
     private static final String KEY_ACCOUNT_CANCEL_GAP_PREFIX = "app:settings:account-cancel:sms:gap:"; // 注销验证码发送间隔锁
     private static final String KEY_ACCOUNT_CANCEL_DAILY_PREFIX = "app:settings:account-cancel:sms:daily:"; // 注销验证码自然日发送次数
 
     private final CustomerEntityMapper customerMapper;
     private final StringRedisTemplate redis;
     private final AppCustomerAuthProperties smsProps;
+    private final AtomicOtpService otpService;
 
     public AppCustomerSettingsService(
             CustomerEntityMapper customerMapper,
             StringRedisTemplate redis,
-            AppCustomerAuthProperties smsProps) {
+            AppCustomerAuthProperties smsProps,
+            AtomicOtpService otpService) {
         this.customerMapper = customerMapper;
         this.redis = redis;
         this.smsProps = smsProps;
+        this.otpService = otpService;
     }
 
     public ResponseVo<AppSettingsProfileResponse> profile(Long customerId) {
@@ -79,16 +84,18 @@ public class AppCustomerSettingsService {
         if (findActiveByPhone(newPhone) != null) {
             return ResultUtil.error(409, "该手机号已被使用");
         }
+        OtpSubject subject = OtpSubject.phoneChange(current.getId(), newPhone, lifecycleVersion(current));
         String code = createAndSaveCode(
                 KEY_PHONE_CHANGE_GAP_PREFIX + req.getCustomerId() + ":" + newPhone,
                 KEY_PHONE_CHANGE_DAILY_PREFIX + req.getCustomerId() + ":" + newPhone + ":" + LocalDate.now(CN_ZONE),
-                KEY_PHONE_CHANGE_OTP_PREFIX + req.getCustomerId() + ":" + newPhone,
+                OtpPurpose.PHONE_CHANGE_NEW_PHONE,
+                subject,
                 newPhone);
         if (code == null) {
             return ResultUtil.error(429, "发送过于频繁，请稍后再试");
         }
-        log.info("[乘客设置] 更换手机号验证码 customerId={} newPhone={} code={}",
-                req.getCustomerId(), maskPhone(newPhone), smsProps.isMockSendEnabled() ? code : "******");
+        log.info("[乘客设置] 已发送更换手机号验证码 customerId={} newPhone={}",
+                req.getCustomerId(), maskPhone(newPhone));
         return ResultUtil.success(new com.sx.passenger.app.dto.AppSmsSendResult(smsProps.isMockSendEnabled() ? code : null));
     }
 
@@ -102,8 +109,9 @@ public class AppCustomerSettingsService {
         if (newPhone.equals(current.getPhone())) {
             return ResultUtil.requestError("新手机号不能与当前手机号相同");
         }
-        String otpKey = KEY_PHONE_CHANGE_OTP_PREFIX + req.getCustomerId() + ":" + newPhone;
-        if (!verifyCode(otpKey, req.getCode())) {
+        OtpSubject subject = OtpSubject.phoneChange(current.getId(), newPhone, lifecycleVersion(current));
+        if (otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE, subject, req.getCode())
+                != OtpConsumeResult.CONSUMED) {
             return ResultUtil.unauthorized("验证码错误或已过期");
         }
         // 防止验证码发送后，新手机号被其他未注销账号抢先注册或绑定。
@@ -127,8 +135,6 @@ public class AppCustomerSettingsService {
         } catch (DuplicateKeyException e) {
             return ResultUtil.error(409, "该手机号已被使用");
         }
-        redis.delete(otpKey);
-
         AppPhoneChangeResult out = new AppPhoneChangeResult();
         out.setChanged(true);
         out.setRequireLogin(true);
@@ -147,10 +153,12 @@ public class AppCustomerSettingsService {
             return ResultUtil.error(404, "账号不存在或已注销");
         }
         String phone = current.getPhone();
+        OtpSubject subject = OtpSubject.accountCancel(current.getId(), lifecycleVersion(current));
         String code = createAndSaveCode(
                 KEY_ACCOUNT_CANCEL_GAP_PREFIX + customerId,
                 KEY_ACCOUNT_CANCEL_DAILY_PREFIX + customerId + ":" + LocalDate.now(CN_ZONE),
-                KEY_ACCOUNT_CANCEL_OTP_PREFIX + customerId,
+                OtpPurpose.ACCOUNT_CANCEL,
+                subject,
                 phone);
         if (code == null) {
             return ResultUtil.error(429, "发送过于频繁，请稍后再试");
@@ -158,8 +166,8 @@ public class AppCustomerSettingsService {
         AppAccountCancelSmsSendResult out = new AppAccountCancelSmsSendResult();
         out.setMockCode(smsProps.isMockSendEnabled() ? code : null);
         out.setMaskedPhone(maskPhone(phone));
-        log.info("[乘客设置] 注销账号验证码 customerId={} phone={} code={}",
-                customerId, maskPhone(phone), smsProps.isMockSendEnabled() ? code : "******");
+        log.info("[乘客设置] 已发送注销账号验证码 customerId={} phone={}",
+                customerId, maskPhone(phone));
         return ResultUtil.success(out);
     }
 
@@ -169,8 +177,9 @@ public class AppCustomerSettingsService {
         if (current == null) {
             return ResultUtil.error(404, "账号不存在或已注销");
         }
-        String otpKey = KEY_ACCOUNT_CANCEL_OTP_PREFIX + req.getCustomerId();
-        if (!verifyCode(otpKey, req.getCode())) {
+        OtpSubject subject = OtpSubject.accountCancel(current.getId(), lifecycleVersion(current));
+        if (otpService.consume(OtpPurpose.ACCOUNT_CANCEL, subject, req.getCode())
+                != OtpConsumeResult.CONSUMED) {
             return ResultUtil.unauthorized("验证码错误或已过期");
         }
 
@@ -185,8 +194,6 @@ public class AppCustomerSettingsService {
         if (updated <= 0) {
             return ResultUtil.error(404, "账号不存在或已注销");
         }
-        redis.delete(otpKey);
-
         AppAccountCancelResult out = new AppAccountCancelResult();
         out.setCancelled(true);
         out.setRequireLogin(true);
@@ -195,9 +202,10 @@ public class AppCustomerSettingsService {
     }
 
     /**
-     * 设置功能使用独立 Redis key，避免与登录验证码复用导致后续业务边界不清。
+     * 设置功能沿用独立发送频控 key，验证码本身由 AtomicOtpService 按用途保存。
      */
-    private String createAndSaveCode(String gapKey, String dailyKey, String otpKey, String phoneForLog) {
+    private String createAndSaveCode(String gapKey, String dailyKey, OtpPurpose purpose, OtpSubject subject,
+                                     String phoneForLog) {
         Boolean firstGap = redis.opsForValue().setIfAbsent(gapKey, "1", Duration.ofSeconds(smsProps.getMinIntervalSeconds()));
         if (Boolean.FALSE.equals(firstGap)) {
             return null;
@@ -212,16 +220,15 @@ public class AppCustomerSettingsService {
             return null;
         }
         String code = String.format("%06d", RANDOM.nextInt(1_000_000));
-        redis.opsForValue().set(otpKey, code, smsProps.getCodeTtlSeconds(), TimeUnit.SECONDS);
+        otpService.store(purpose, subject, code, Duration.ofSeconds(smsProps.getCodeTtlSeconds()));
         return code;
     }
 
-    private boolean verifyCode(String key, String code) {
-        if (code == null || code.isBlank()) {
-            return false;
+    private static long lifecycleVersion(Customer customer) {
+        if (customer.getLifecycleVersion() == null || customer.getLifecycleVersion() <= 0) {
+            throw new IllegalStateException("Customer lifecycleVersion is required for OTP");
         }
-        String expected = redis.opsForValue().get(key);
-        return expected != null && expected.equals(code.trim());
+        return customer.getLifecycleVersion();
     }
 
     private Customer findActiveById(Long id) {

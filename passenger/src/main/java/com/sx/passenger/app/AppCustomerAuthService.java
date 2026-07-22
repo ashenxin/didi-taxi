@@ -5,6 +5,10 @@ import com.sx.passenger.app.dto.AppAuthCustomerBrief;
 import com.sx.passenger.app.dto.AppLoginPasswordRequest;
 import com.sx.passenger.app.dto.AppSmsSendResult;
 import com.sx.passenger.app.dto.AppSmsLoginRequest;
+import com.sx.passenger.auth.otp.AtomicOtpService;
+import com.sx.passenger.auth.otp.OtpConsumeResult;
+import com.sx.passenger.auth.otp.OtpPurpose;
+import com.sx.passenger.auth.otp.OtpSubject;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.model.Customer;
 import org.slf4j.Logger;
@@ -40,27 +44,29 @@ public class AppCustomerAuthService {
      * 命名空间说明：
      * <ul>
      *   <li><b>{@code app:sms:*}</b>：短信发送频控与日计数</li>
-     *   <li><b>{@code app:otp:*}</b>：短信验证码（一次性口令）</li>
+     *   <li><b>{@code app:otp:v2:*}</b>：短信验证码（一次性口令）</li>
      *   <li><b>{@code app:login:*}</b>：登录失败次数统计与当日禁用标记（密码+验证码合并）</li>
      * </ul>
      */
     private static final String KEY_SMS_GAP_PREFIX = "app:sms:gap:"; // 同手机号发送间隔锁（phone）
     private static final String KEY_SMS_DAILY_PREFIX = "app:sms:daily:"; // 同手机号自然日发送次数（phone:yyyy-MM-dd）
-    private static final String KEY_OTP_PREFIX = "app:otp:"; // OTP 验证码（phone）
     private static final String KEY_LOGIN_FAIL_PREFIX = "app:login:fail:"; // 登录失败次数（phone:yyyy-MM-dd）
     private static final String KEY_LOGIN_BAN_PREFIX = "app:login:ban:"; // 当日禁用标记（phone:yyyy-MM-dd）
 
     private final CustomerEntityMapper customerMapper;
     private final StringRedisTemplate redis;
     private final AppCustomerAuthProperties smsProps;
+    private final AtomicOtpService otpService;
 
     public AppCustomerAuthService(
             CustomerEntityMapper customerMapper,
             StringRedisTemplate redis,
-            AppCustomerAuthProperties smsProps) {
+            AppCustomerAuthProperties smsProps,
+            AtomicOtpService otpService) {
         this.customerMapper = customerMapper;
         this.redis = redis;
         this.smsProps = smsProps;
+        this.otpService = otpService;
     }
 
     public ResponseVo<AppAuthCustomerBrief> loginPassword(AppLoginPasswordRequest req) {
@@ -106,15 +112,15 @@ public class AppCustomerAuthService {
         }
 
         String code = String.format("%06d", RANDOM.nextInt(1_000_000));
-        String otpKey = KEY_OTP_PREFIX + phone;
-        redis.opsForValue().set(otpKey, code, smsProps.getCodeTtlSeconds(), TimeUnit.SECONDS);
+        otpService.store(OtpPurpose.LOGIN, OtpSubject.login(phone), code,
+                Duration.ofSeconds(smsProps.getCodeTtlSeconds()));
 
         if (smsProps.isMockSendEnabled()) {
-            log.info("[乘客端认证] 模拟短信验证码 phone={} code={}（mockSendEnabled=true）", phone, code);
+            log.info("[乘客端认证] 已发送模拟短信验证码 phone={}（mockSendEnabled=true）", maskPhone(phone));
             return ResultUtil.success(new AppSmsSendResult(code));
         } else {
             // 生产：在此调用短信网关；失败时应 delete gapKey、回滚 daily 计数（简化可接受少量误差）
-            log.warn("[乘客端认证] mockSendEnabled=false 且未接入短信通道 phone={}", phone);
+            log.warn("[乘客端认证] mockSendEnabled=false 且未接入短信通道 phone={}", maskPhone(phone));
         }
         return ResultUtil.success(new AppSmsSendResult(null));
     }
@@ -124,13 +130,11 @@ public class AppCustomerAuthService {
         if (isLoginBannedToday(req.getPhone())) {
             return bannedToday();
         }
-        String otpKey = KEY_OTP_PREFIX + req.getPhone();
-        String expected = redis.opsForValue().get(otpKey);
-        if (expected == null || !expected.equals(req.getCode().trim())) {
+        if (otpService.consume(OtpPurpose.LOGIN, OtpSubject.login(req.getPhone()), req.getCode())
+                != OtpConsumeResult.CONSUMED) {
             recordLoginFail(req.getPhone());
             return unauthorizedSms();
         }
-        redis.delete(otpKey);
 
         Customer c = findActiveByPhone(req.getPhone());
         if (c == null) {
