@@ -19,6 +19,7 @@ import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
 import com.sx.passenger.model.Customer;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -77,6 +78,7 @@ class CustomerPhoneChangeServiceIntegrationTest {
     @SpyBean LifecycleOutboxMapper outboxes;
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate outerTransactions;
+    @Autowired MeterRegistry meterRegistry;
     @MockBean AtomicOtpService otp;
 
     @BeforeEach
@@ -96,6 +98,8 @@ class CustomerPhoneChangeServiceIntegrationTest {
 
     @Test
     void changesPhoneWithoutChangingCustomerIdentity() {
+        double successBefore = epochCount("success");
+        double failureBefore = epochCount("failure");
         ChangeCustomerPhoneResult out = service.change(command("idem-success", NEW_PHONE, "{}"));
 
         Customer current = customers.selectById(CUSTOMER_ID);
@@ -106,6 +110,8 @@ class CustomerPhoneChangeServiceIntegrationTest {
         assertThat(out.customerId()).isEqualTo(CUSTOMER_ID);
         assertThat(out.newAuthEpoch()).isEqualTo(6L);
         assertThat(out.requireLogin()).isTrue();
+        assertThat(epochCount("success") - successBefore).isEqualTo(1);
+        assertThat(epochCount("failure") - failureBefore).isZero();
     }
 
     @Test
@@ -298,6 +304,8 @@ class CustomerPhoneChangeServiceIntegrationTest {
 
     @Test
     void historyEventAndOutboxFailuresEachRollbackAllMysqlButNeverRestoreOtp() {
+        double successBefore = epochCount("success");
+        double failureBefore = epochCount("failure");
         assertRollbackOn("idem-history-fail", () -> doThrow(new IllegalStateException("history unavailable"))
                 .when(histories).replaceActive(anyLong(), any(), any()));
         assertRollbackOn("idem-event-fail", () -> doThrow(new IllegalStateException("event unavailable"))
@@ -306,6 +314,8 @@ class CustomerPhoneChangeServiceIntegrationTest {
                 .when(outboxes).insert(any(LifecycleOutboxEntity.class)));
         verify(otp, times(3)).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
         verify(otp, never()).store(any(), any(), any(), any());
+        assertThat(epochCount("success") - successBefore).isZero();
+        assertThat(epochCount("failure") - failureBefore).isEqualTo(3);
     }
 
     @Test
@@ -404,6 +414,12 @@ class CustomerPhoneChangeServiceIntegrationTest {
 
     private long count(String sql, Object argument) {
         return jdbc.queryForObject(sql, Long.class, argument);
+    }
+
+    private double epochCount(String result) {
+        var counter = meterRegistry.find("passenger.auth.epoch.bump")
+                .tags("cause", "phone_change", "result", result).counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private void cleanRows() {

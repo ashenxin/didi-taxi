@@ -147,8 +147,7 @@ public class AppCustomerSettingsService {
                     PassengerAuthMetrics.OperationResult.CONFLICT);
             return ResultUtil.error(409, "该手机号已被使用");
         }
-        metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
-                PassengerAuthMetrics.OperationResult.SUCCESS);
+        metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE);
         AppPhoneChangeResult out = new AppPhoneChangeResult();
         out.setChanged(true);
         out.setRequireLogin(true);
@@ -206,8 +205,7 @@ public class AppCustomerSettingsService {
                     PassengerAuthMetrics.OperationResult.CONFLICT);
             return ResultUtil.error(409, "账号状态已变化，请重试");
         }
-        metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
-                PassengerAuthMetrics.OperationResult.SUCCESS);
+        metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL);
         AppAccountCancelResult out = new AppAccountCancelResult();
         out.setCancelled(true);
         out.setRequireLogin(true);

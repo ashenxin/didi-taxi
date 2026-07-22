@@ -16,6 +16,7 @@ import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
 import com.sx.passenger.model.Customer;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,7 @@ class AccountCancellationFenceServiceIntegrationTest {
     @SpyBean LifecycleOutboxMapper outboxes;
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate outerTransactions;
+    @Autowired MeterRegistry meterRegistry;
     @MockBean AtomicOtpService otp;
 
     @BeforeEach
@@ -188,6 +190,8 @@ class AccountCancellationFenceServiceIntegrationTest {
 
     @Test
     void createsCompleteFenceSnapshotAtomically() {
+        double successBefore = epochCount("success");
+        double failureBefore = epochCount("failure");
         AccountCancellationFenceResult result = service.fence(command("idem-success", "111111", "{}"));
 
         Customer customer = customers.selectById(CUSTOMER_ID);
@@ -207,10 +211,14 @@ class AccountCancellationFenceServiceIntegrationTest {
                 .isEqualTo(2L);
         assertThat(count("SELECT COUNT(*) FROM account_lifecycle_outbox WHERE operation_id = ?", result.operationId()))
                 .isEqualTo(1L);
+        assertThat(epochCount("success") - successBefore).isEqualTo(1);
+        assertThat(epochCount("failure") - failureBefore).isZero();
     }
 
     @Test
     void eventInsertFailureRollsBackMysqlButOtpRemainsConsumed() {
+        double successBefore = epochCount("success");
+        double failureBefore = epochCount("failure");
         doThrow(new IllegalStateException("event unavailable")).when(events).insert(any(LifecycleEventEntity.class));
 
         assertThatThrownBy(() -> service.fence(command("idem-event-fail", "111111", "{}")))
@@ -218,6 +226,8 @@ class AccountCancellationFenceServiceIntegrationTest {
 
         assertEverythingRolledBack();
         verify(otp, times(1)).consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any());
+        assertThat(epochCount("success") - successBefore).isZero();
+        assertThat(epochCount("failure") - failureBefore).isEqualTo(1);
     }
 
     @Test
@@ -349,6 +359,12 @@ class AccountCancellationFenceServiceIntegrationTest {
 
     private long count(String sql, Object argument) {
         return jdbc.queryForObject(sql, Long.class, argument);
+    }
+
+    private double epochCount(String result) {
+        var counter = meterRegistry.find("passenger.auth.epoch.bump")
+                .tags("cause", "account_cancel", "result", result).counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private void cleanRows() {

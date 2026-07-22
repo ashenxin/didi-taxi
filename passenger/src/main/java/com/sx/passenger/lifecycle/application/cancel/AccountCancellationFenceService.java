@@ -113,6 +113,7 @@ public class AccountCancellationFenceService {
                     PassengerAuthMetrics.OperationResult.CONFLICT);
             throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
         }
+        metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL);
         Customer fencedCustomer = customers.selectById(command.customerId());
         if (fencedCustomer == null) {
             throw new LifecycleOperationConflictException("Customer disappeared while creating cancellation fence");
@@ -136,8 +137,6 @@ public class AccountCancellationFenceService {
         if (events.insert(fencedEvent) != 1) {
             throw new IllegalStateException("Failed to insert lifecycle fence event");
         }
-        metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
-                PassengerAuthMetrics.OperationResult.SUCCESS);
         return new AccountCancellationFenceResult(operation.getId(), operationNo, command.customerId(),
                 fencedCustomer.getLifecycleVersion(), fencedCustomer.getAuthEpoch(), "FENCED");
     }

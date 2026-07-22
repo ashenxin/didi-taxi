@@ -37,22 +37,18 @@ public class PassengerAuthEpochService {
     public AppAuthCustomerBrief completeAuthentication(long customerId) {
         requirePositiveCustomerId(customerId);
         if (customers.bumpAuthEpochForAuthentication(customerId) != 1) {
-            metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGIN,
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.AUTHENTICATION,
                     PassengerAuthMetrics.OperationResult.REJECTED);
             throw new AuthStateRejectedException();
         }
+        metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.AUTHENTICATION);
         Customer current = customers.selectById(customerId);
         AuthSessionScope scope = scopeOf(current);
         if (scope == AuthSessionScope.LIFECYCLE_RESTRICTED
                 && operations.updateRestrictedAuthEpoch(customerId, current.getCurrentLifecycleOperationNo(),
                 current.getAuthEpoch(), LocalDateTime.now(ZoneOffset.UTC)) != 1) {
-            metrics.epochBump(PassengerAuthMetrics.EpochCause.REAUTHENTICATION,
-                    PassengerAuthMetrics.OperationResult.REJECTED);
             throw new AuthStateRejectedException();
         }
-        metrics.epochBump(scope == AuthSessionScope.NORMAL
-                        ? PassengerAuthMetrics.EpochCause.LOGIN : PassengerAuthMetrics.EpochCause.REAUTHENTICATION,
-                PassengerAuthMetrics.OperationResult.SUCCESS);
         return AppAuthCustomerBrief.from(current, scope.name());
     }
 
@@ -64,14 +60,11 @@ public class PassengerAuthEpochService {
                     PassengerAuthMetrics.OperationResult.CONFLICT);
             throw new AuthEpochConflictException();
         }
+        metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.LOGOUT);
         Customer current = customers.selectById(customerId);
         if (current == null || current.getAuthEpoch() == null) {
-            metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
-                    PassengerAuthMetrics.OperationResult.CONFLICT);
             throw new AuthEpochConflictException();
         }
-        metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
-                PassengerAuthMetrics.OperationResult.SUCCESS);
         return current.getAuthEpoch();
     }
 

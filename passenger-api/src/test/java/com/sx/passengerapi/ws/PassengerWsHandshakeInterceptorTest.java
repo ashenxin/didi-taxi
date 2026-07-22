@@ -2,6 +2,7 @@ package com.sx.passengerapi.ws;
 
 import com.sx.passengerapi.auth.AppJwtService;
 import com.sx.passengerapi.auth.PassengerAuthDecisionService;
+import com.sx.passengerapi.auth.PassengerAuthMetrics;
 import com.sx.passengerapi.auth.ParsedPassengerJwt;
 import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
@@ -30,12 +31,14 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.clearInvocations;
 
 class PassengerWsHandshakeInterceptorTest {
 
     private final AppJwtService jwtService = mock(AppJwtService.class);
     private final PassengerCoreAuthStateClient authStateClient = mock(PassengerCoreAuthStateClient.class);
     private final PassengerWsSessionRegistry registry = mock(PassengerWsSessionRegistry.class);
+    private final PassengerAuthMetrics metrics = mock(PassengerAuthMetrics.class);
     private PassengerWsProperties properties;
     private PassengerWsHandshakeInterceptor interceptor;
 
@@ -44,7 +47,7 @@ class PassengerWsHandshakeInterceptorTest {
         properties = new PassengerWsProperties();
         properties.setEnabled(true);
         interceptor = new PassengerWsHandshakeInterceptor(
-                properties, jwtService, authStateClient, new PassengerAuthDecisionService(), registry);
+                properties, jwtService, authStateClient, new PassengerAuthDecisionService(), registry, metrics);
     }
 
     @Test
@@ -98,6 +101,8 @@ class PassengerWsHandshakeInterceptorTest {
 
         assertThat(epochAllowed).isFalse();
         assertThat(epochResponse.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
+        verify(metrics).jwtRejected(PassengerAuthMetrics.JwtRejectReason.EPOCH_MISMATCH);
+        clearInvocations(metrics);
 
         when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 1, null));
         when(authStateClient.get(7L)).thenReturn(ok(state(
@@ -109,6 +114,7 @@ class PassengerWsHandshakeInterceptorTest {
 
         assertThat(auditAllowed).isFalse();
         assertThat(auditResponse.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
+        verify(metrics).jwtRejected(PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
         verify(authStateClient, times(2)).get(7L);
     }
 
@@ -137,6 +143,20 @@ class PassengerWsHandshakeInterceptorTest {
         assertThat(allowed).isFalse();
         assertThat(response.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE.value());
         verify(authStateClient, times(1)).get(7L);
+    }
+
+    @Test
+    void passengerFiveHundredReturnsServiceUnavailable() {
+        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 2, null));
+        when(authStateClient.get(7L)).thenThrow(retryable(500));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        boolean allowed = interceptor.beforeHandshake(
+                request(), serverResponse(response), mock(WebSocketHandler.class), new HashMap<>());
+
+        assertThat(allowed).isFalse();
+        assertThat(response.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE.value());
+        verify(authStateClient).get(7L);
     }
 
     private static ServletServerHttpRequest request() {
@@ -171,13 +191,17 @@ class PassengerWsHandshakeInterceptorTest {
     }
 
     private static RetryableException retryable() {
+        return retryable(-1);
+    }
+
+    private static RetryableException retryable(int status) {
         Request request = Request.create(
                 Request.HttpMethod.GET,
                 "http://passenger/api/v1/internal/auth-state/7",
                 Map.of(),
                 new byte[0],
                 StandardCharsets.UTF_8);
-        return new RetryableException(-1, "passenger unavailable", Request.HttpMethod.GET,
+        return new RetryableException(status, "passenger unavailable", Request.HttpMethod.GET,
                 new ConnectException("connection refused"), (Long) null, request);
     }
 }

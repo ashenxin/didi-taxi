@@ -2,18 +2,19 @@ package com.sx.passengerapi.config;
 
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.core.env.Environment;
-import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.Arrays;
 
 @Component
 public class PassengerSecurityStartupValidator implements InitializingBean {
 
-    private static final Profiles RELAXED_PROFILES = Profiles.of("local", "dev", "test");
+    private static final Set<String> RELAXED_PROFILES = Set.of("local", "dev", "test");
 
     private final AppJwtProperties jwtProperties;
     private final CouponClaimIdentityProperties claimIdentityProperties;
@@ -32,7 +33,7 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
 
     @Override
     public void afterPropertiesSet() {
-        if (!environment.acceptsProfiles(RELAXED_PROFILES)) {
+        if (!hasOnlyExplicitRelaxedProfiles(environment)) {
             validateStrict(jwtProperties, claimIdentityProperties, internalClientProperties);
         }
     }
@@ -57,6 +58,9 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
             errors.add(name + " must be configured");
             return;
         }
+        if (!value.equals(value.strip())) {
+            errors.add(name + " must not contain leading or trailing whitespace");
+        }
         if (value.getBytes(StandardCharsets.UTF_8).length < 32) {
             errors.add(name + " must contain at least 32 bytes");
         }
@@ -64,5 +68,10 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
         if (normalized.startsWith(developmentPrefix) || normalized.contains("change-me")) {
             errors.add(name + " must not use a development default");
         }
+    }
+
+    private static boolean hasOnlyExplicitRelaxedProfiles(Environment environment) {
+        String[] active = environment.getActiveProfiles();
+        return active.length > 0 && Arrays.stream(active).allMatch(RELAXED_PROFILES::contains);
     }
 }

@@ -193,8 +193,9 @@ public class PassengerWsSessionRegistry {
                 return;
             }
             customerIdBySessionId.remove(current.getSession().getId(), customerId);
-            safeClose(current.getSession(), new CloseStatus(4001, sanitizeReason(reason)));
-            metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.from(reason));
+            if (safeClose(current.getSession(), new CloseStatus(4001, sanitizeReason(reason)))) {
+                metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.from(reason));
+            }
         }
     }
 
@@ -228,17 +229,19 @@ public class PassengerWsSessionRegistry {
         return ALLOWED_CLOSE_REASONS.contains(reason) ? reason : "auth_epoch_changed";
     }
 
-    public void safeClose(WebSocketSession session, CloseStatus status) {
+    public boolean safeClose(WebSocketSession session, CloseStatus status) {
         if (session == null) {
-            return;
+            return false;
         }
         try {
             if (session.isOpen()) {
                 session.close(status == null ? CloseStatus.NORMAL : status);
+                return true;
             }
         } catch (IOException e) {
             log.debug("WS close ignored sessionId={} err={}", session.getId(), e.toString());
         }
+        return false;
     }
 
     public void safeSendText(WebSocketSession session, String text) {

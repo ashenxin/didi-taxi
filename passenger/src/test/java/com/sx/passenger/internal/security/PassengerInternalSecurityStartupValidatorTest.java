@@ -48,6 +48,22 @@ class PassengerInternalSecurityStartupValidatorTest {
                 properties("dev-passenger-internal-change-me"), environment).afterPropertiesSet());
     }
 
+    @Test
+    void mixedOrMissingRelaxedProfileStillUsesStrictValidation() {
+        for (String[] active : new String[][]{{"prod", "dev"}, {"test", "prod"}, {}}) {
+            MockEnvironment environment = new MockEnvironment();
+            environment.setActiveProfiles(active);
+            assertThrows(IllegalStateException.class, () -> new PassengerInternalSecurityStartupValidator(
+                    properties("dev-passenger-internal-change-me"), environment).afterPropertiesSet());
+        }
+    }
+
+    @Test
+    void strictValidationRejectsLeadingOrTrailingWhitespace() {
+        assertStrictValidationFails(" passenger-4Km8Qp2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG");
+        assertStrictValidationFails("passenger-4Km8Qp2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG ");
+    }
+
     private static void assertStrictValidationFails(String token) {
         assertThrows(IllegalStateException.class, () -> new PassengerInternalSecurityStartupValidator(
                 properties(token), new MockEnvironment()).afterPropertiesSet());

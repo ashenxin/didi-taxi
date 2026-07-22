@@ -222,7 +222,8 @@ closeCustomerSessions(long customerId, String reason)
 
 - passenger-api 使用独立内部服务 Token 调 passenger。
 - 密钥仅从环境变量读取，不进入 Git。
-- 非 local/dev/test 缺失或使用开发默认值时启动失败。
+- 仅当激活 profile 非空且全部属于 local/dev/test 时放宽启动校验；无 profile 或与其他 profile
+  混用均按严格环境处理。严格环境下，密钥或内部 Token 缺失、使用开发默认值或带有首尾空白时启动失败。
 - 浏览器不得访问 internal 路径。
 - 记录 requestId、服务身份和结果码，不记录 Token、OTP 或手机号原文。
 
@@ -306,7 +307,8 @@ P2 不引入 mTLS 基础设施，内部 Token 是当前最小可落地方案。
 
 配置口径如下：
 
-- 两端内部身份统一读取 `PASSENGER_INTERNAL_TOKEN`；非 local/dev/test 环境必须至少 32 bytes，且不得包含
+- 两端内部身份统一读取 `PASSENGER_INTERNAL_TOKEN`；只有“非空且所有激活 profile 都属于
+  local/dev/test”才允许开发默认值。其他情况必须至少 32 bytes，不得带首尾空白，且不得包含
   `change-me` 或以 `dev-passenger-` 开头。
 - passenger-api JWT audience 固定为 `app-bff`，密钥读取 `JWT_SECRET_APP`；普通与受限 TTL 分别读取
   `JWT_EXPIRATION_SECONDS_APP`（默认 86400 秒）和 `JWT_RESTRICTED_EXPIRATION_SECONDS_APP`（默认 1800 秒）。
@@ -320,9 +322,10 @@ P2 不引入 mTLS 基础设施，内部 Token 是当前最小可落地方案。
 - `passenger.auth.state.query{result}`：passenger 权威状态查询时延和结果。
 - `passenger.auth.jwt.rejected{reason}`：JWT/认证状态拒绝原因。
 - `passenger.auth.otp.consume{purpose,result}`：按用途聚合的 OTP 消费结果。
-- `passenger.auth.epoch.bump{cause,result}`：认证代次变更结果。
+- `passenger.auth.epoch.bump{cause,result}`：认证代次变更结果。CAS 未命中记录 `conflict/rejected`；
+  CAS 命中后只在整个事务提交后记录 `success`，后续写入导致回滚则记录 `failure`，不得同时记录成功。
 - `passenger.auth.restricted.issued`：受限会话签发次数。
-- `passenger.auth.ws.closed{reason}`：本节点 WS 关闭次数。
+- `passenger.auth.ws.closed{reason}`：本节点已打开 WS 连接实际关闭成功的次数；连接已关闭或关闭抛出 I/O 异常时不计数。
 - `passenger.lifecycle.cas.conflict{operationType}`：换号/注销生命周期 CAS 冲突。
 
 ### 18.3 上线检查单

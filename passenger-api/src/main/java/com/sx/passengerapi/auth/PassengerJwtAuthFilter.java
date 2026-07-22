@@ -106,6 +106,7 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
         }
 
         final PassengerAuthContext authContext;
+        InternalAuthStateResponse authoritativeState = null;
         long queryStartedAt = System.nanoTime();
         try {
             ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
@@ -118,9 +119,12 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             }
             metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
                     PassengerAuthMetrics.AuthStateResult.SUCCESS);
-            authContext = decisionService.verify(parsed, result.getData(), 1);
+            authoritativeState = result.getData();
+            authContext = decisionService.verify(parsed, authoritativeState, 1);
         } catch (InvalidPassengerSessionException e) {
-            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
+            metrics.jwtRejected(parsed.authEpoch() != (authoritativeState == null ? parsed.authEpoch() : authoritativeState.getAuthEpoch())
+                    ? PassengerAuthMetrics.JwtRejectReason.EPOCH_MISMATCH
+                    : PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "登录已失效，请重新登录");
             return;
         } catch (FeignException e) {

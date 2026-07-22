@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.assertj.core.api.Assertions.assertThat;
+import org.springframework.mock.env.MockEnvironment;
 
 class PassengerSecurityStartupValidatorTest {
 
@@ -52,6 +53,33 @@ class PassengerSecurityStartupValidatorTest {
                 () -> PassengerSecurityStartupValidator.validateStrict(
                         jwt, strongCouponIdentity(), internal("prod-passenger-internal-token-32bytes"))))
                 .hasMessageContaining("app.jwt.audience must be app-bff");
+    }
+
+    @Test
+    void mixedOrMissingRelaxedProfileStillUsesStrictValidation() {
+        for (String[] active : new String[][]{{"prod", "dev"}, {"test", "prod"}, {}}) {
+            MockEnvironment environment = new MockEnvironment();
+            environment.setActiveProfiles(active);
+            assertThrows(IllegalStateException.class, () -> new PassengerSecurityStartupValidator(
+                    new AppJwtProperties(), new CouponClaimIdentityProperties(),
+                    internal("dev-passenger-internal-change-me"), environment).afterPropertiesSet());
+        }
+    }
+
+    @Test
+    void localOnlyProfileRemainsRelaxedButStrictTokenRejectsWhitespacePadding() {
+        MockEnvironment local = new MockEnvironment();
+        local.setActiveProfiles("local");
+        assertDoesNotThrow(() -> new PassengerSecurityStartupValidator(
+                new AppJwtProperties(), new CouponClaimIdentityProperties(),
+                internal("dev-passenger-internal-change-me"), local).afterPropertiesSet());
+
+        for (String token : new String[]{" prod-passenger-internal-token-32bytes",
+                "prod-passenger-internal-token-32bytes "}) {
+            assertThat(assertThrows(IllegalStateException.class, () -> PassengerSecurityStartupValidator.validateStrict(
+                    strongJwt(), strongCouponIdentity(), internal(token))))
+                    .hasMessageContaining("PASSENGER_INTERNAL_TOKEN");
+        }
     }
 
     private static AppJwtProperties strongJwt() {

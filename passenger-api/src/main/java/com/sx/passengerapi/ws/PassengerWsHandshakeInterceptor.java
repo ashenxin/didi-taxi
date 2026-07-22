@@ -4,6 +4,7 @@ import com.sx.passengerapi.auth.AppJwtService;
 import com.sx.passengerapi.auth.InvalidPassengerSessionException;
 import com.sx.passengerapi.auth.PassengerAuthDecisionService;
 import com.sx.passengerapi.auth.PassengerAuthMetrics;
+import com.sx.passengerapi.auth.ParsedPassengerJwt;
 import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
 import com.sx.passengerapi.common.vo.ResponseVo;
@@ -72,9 +73,11 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
             return false;
         }
+        ParsedPassengerJwt parsed = null;
+        InternalAuthStateResponse authoritativeState = null;
         try {
             String token = extractToken(request);
-            var parsed = jwtService.parseAndVerify(token);
+            parsed = jwtService.parseAndVerify(token);
             PassengerWsSessionRegistry.RegistrationPermit permit =
                     registry.captureRegistration(parsed.customerId());
             long queryStartedAt = System.nanoTime();
@@ -95,20 +98,21 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
             }
             metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
                     PassengerAuthMetrics.AuthStateResult.SUCCESS);
+            authoritativeState = result.getData();
 
             if (parsed.scope() == LIFECYCLE_RESTRICTED) {
-                decisionService.verify(parsed, result.getData(), 1);
+                decisionService.verify(parsed, authoritativeState, 1);
                 metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.RESTRICTED);
                 response.setStatusCode(HttpStatus.FORBIDDEN);
                 return false;
             }
 
-            decisionService.verify(parsed, result.getData(), 2);
+            decisionService.verify(parsed, authoritativeState, 2);
             attributes.put(ATTR_CUSTOMER_ID, parsed.customerId());
             attributes.put(ATTR_REGISTRATION_PERMIT, permit);
             return true;
         } catch (InvalidPassengerSessionException e) {
-            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
+            metrics.jwtRejected(rejectReason(parsed, authoritativeState));
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         } catch (JwtException | IllegalArgumentException e) {
@@ -124,6 +128,14 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
             return false;
         }
+    }
+
+    private static PassengerAuthMetrics.JwtRejectReason rejectReason(
+            ParsedPassengerJwt token,
+            InternalAuthStateResponse state) {
+        return token != null && state != null && token.authEpoch() != state.getAuthEpoch()
+                ? PassengerAuthMetrics.JwtRejectReason.EPOCH_MISMATCH
+                : PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH;
     }
 
     @Override

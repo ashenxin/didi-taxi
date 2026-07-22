@@ -162,6 +162,7 @@ public class CustomerPhoneChangeService {
                     PassengerAuthMetrics.OperationResult.CONFLICT);
             throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
         }
+        metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE);
         Customer changed = customers.selectById(command.customerId());
         if (changed == null) throw new LifecycleOperationConflictException("Customer disappeared during phone change");
 
@@ -219,9 +220,6 @@ public class CustomerPhoneChangeService {
         String completedEventId = insertTransitionEvent(operation, "EXECUTING", "COMPLETED",
                 "PHONE_CHANGE_COMPLETED", command, now);
         insertCompletedOutbox(operation, changed, completedEventId, command, now);
-
-        metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
-                PassengerAuthMetrics.OperationResult.SUCCESS);
 
         return new ChangeCustomerPhoneResult(operation.getId(), operation.getOperationNo(), command.customerId(),
                 changed.getLifecycleVersion(), changed.getAuthEpoch(), true);

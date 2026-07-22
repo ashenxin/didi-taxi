@@ -8,6 +8,7 @@ import com.sx.passenger.auth.otp.AtomicOtpService;
 import com.sx.passenger.auth.otp.OtpConsumeResult;
 import com.sx.passenger.auth.otp.OtpPurpose;
 import com.sx.passenger.auth.otp.OtpSubject;
+import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
 import com.sx.passenger.common.vo.ResponseVo;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.model.Customer;
@@ -35,12 +36,14 @@ class AppCustomerSettingsServiceTest {
     private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
     private final ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
     private final AtomicOtpService otpService = mock(AtomicOtpService.class);
+    private final PassengerAuthMetrics metrics = mock(PassengerAuthMetrics.class);
     private AppCustomerSettingsService service;
 
     @BeforeEach
     void setUp() {
         when(redis.opsForValue()).thenReturn(valueOperations);
-        service = new AppCustomerSettingsService(customerMapper, redis, new AppCustomerAuthProperties(), otpService);
+        service = new AppCustomerSettingsService(
+                customerMapper, redis, new AppCustomerAuthProperties(), otpService, metrics);
     }
 
     @Test
@@ -142,6 +145,7 @@ class AppCustomerSettingsServiceTest {
         assertThat(response.getCode()).isEqualTo(200);
         verify(customerMapper).changePhoneCas(10001L, "13912345678", 0L);
         verify(customerMapper, never()).update(any(), any());
+        verify(metrics).observeEpochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE);
     }
 
     @Test
@@ -160,6 +164,8 @@ class AppCustomerSettingsServiceTest {
         ResponseVo<?> response = service.confirmPhoneChange(request);
 
         assertThat(response.getCode()).isEqualTo(409);
+        verify(metrics).epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
+                PassengerAuthMetrics.OperationResult.CONFLICT);
     }
 
     @Test
@@ -194,6 +200,7 @@ class AppCustomerSettingsServiceTest {
                 .hasMessage("database unavailable");
 
         verify(otpService, never()).store(any(), any(), anyString(), any());
+        verify(metrics, never()).observeEpochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL);
     }
 
     @Test
@@ -212,6 +219,8 @@ class AppCustomerSettingsServiceTest {
 
         assertThat(response.getCode()).isEqualTo(409);
         verify(customerMapper, never()).update(any(), any());
+        verify(metrics).epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
+                PassengerAuthMetrics.OperationResult.CONFLICT);
     }
 
     private static Customer customer(Long id, String phone) {

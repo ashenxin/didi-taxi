@@ -34,12 +34,13 @@ class PassengerJwtAuthFilterTest {
 
     private final AppJwtService jwtService = mock(AppJwtService.class);
     private final PassengerCoreAuthStateClient authStateClient = mock(PassengerCoreAuthStateClient.class);
+    private final PassengerAuthMetrics metrics = mock(PassengerAuthMetrics.class);
     private final PassengerAuthDecisionService decisionService = new PassengerAuthDecisionService();
     private PassengerJwtAuthFilter filter;
 
     @BeforeEach
     void setUp() {
-        filter = new PassengerJwtAuthFilter(jwtService, authStateClient, decisionService, new ObjectMapper());
+        filter = new PassengerJwtAuthFilter(jwtService, authStateClient, decisionService, new ObjectMapper(), metrics);
     }
 
     @Test
@@ -129,7 +130,7 @@ class PassengerJwtAuthFilterTest {
     }
 
     private void assertUnauthorized(ParsedPassengerJwt token, InternalAuthStateResponse state) throws Exception {
-        clearInvocations(authStateClient);
+        clearInvocations(authStateClient, metrics);
         when(jwtService.parseAndVerify("jwt-value")).thenReturn(token);
         when(authStateClient.get(7L)).thenReturn(ok(state));
         FilterChain chain = mock(FilterChain.class);
@@ -139,6 +140,9 @@ class PassengerJwtAuthFilterTest {
         assertThat(response.getStatus()).isEqualTo(401);
         verify(chain, never()).doFilter(any(), any());
         verify(authStateClient, times(1)).get(7L);
+        verify(metrics).jwtRejected(token.authEpoch() != state.getAuthEpoch()
+                ? PassengerAuthMetrics.JwtRejectReason.EPOCH_MISMATCH
+                : PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
     }
 
     private MockHttpServletResponse execute(String method, String path, FilterChain chain) throws Exception {

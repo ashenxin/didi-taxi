@@ -8,6 +8,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Locale;
 import java.util.Objects;
@@ -16,14 +18,14 @@ import java.util.Objects;
 public class PassengerAuthMetrics {
 
     public enum EpochCause {
-        LOGIN("login"), REAUTHENTICATION("reauthentication"), LOGOUT("logout"),
+        AUTHENTICATION("authentication"), LOGOUT("logout"),
         PHONE_CHANGE("phone_change"), ACCOUNT_CANCEL("account_cancel");
         private final String tag;
         EpochCause(String tag) { this.tag = tag; }
     }
 
     public enum OperationResult {
-        SUCCESS("success"), CONFLICT("conflict"), REJECTED("rejected");
+        SUCCESS("success"), CONFLICT("conflict"), REJECTED("rejected"), FAILURE("failure");
         private final String tag;
         OperationResult(String tag) { this.tag = tag; }
     }
@@ -48,6 +50,28 @@ public class PassengerAuthMetrics {
     public void epochBump(EpochCause cause, OperationResult result) {
         Counter.builder("passenger.auth.epoch.bump")
                 .tag("cause", cause.tag).tag("result", result.tag).register(registry).increment();
+    }
+
+    /** 在 customer CAS 成功后调用；提交后记 success，事务回滚只记 failure。 */
+    public void observeEpochBump(EpochCause cause) {
+        Objects.requireNonNull(cause, "cause must not be null");
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            epochBump(cause, OperationResult.SUCCESS);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                epochBump(cause, OperationResult.SUCCESS);
+            }
+
+            @Override
+            public void afterCompletion(int status) {
+                if (status != STATUS_COMMITTED) {
+                    epochBump(cause, OperationResult.FAILURE);
+                }
+            }
+        });
     }
 
     public void lifecycleCasConflict(LifecycleOperationType operationType) {

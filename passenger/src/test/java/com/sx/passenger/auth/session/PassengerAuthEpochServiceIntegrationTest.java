@@ -2,6 +2,7 @@ package com.sx.passenger.auth.session;
 
 import com.sx.passenger.app.dto.AppAuthCustomerBrief;
 import com.sx.passenger.dao.CustomerEntityMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,9 @@ class PassengerAuthEpochServiceIntegrationTest {
 
     @Autowired
     private CustomerEntityMapper customerMapper;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
@@ -160,7 +164,21 @@ class PassengerAuthEpochServiceIntegrationTest {
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void committedAuthenticationRecordsSuccessOnlyAfterCommit() {
+        double successBefore = epochCount("authentication", "success");
+        double failureBefore = epochCount("authentication", "failure");
+
+        service.completeAuthentication(ACTIVE_CUSTOMER_ID);
+
+        assertThat(epochCount("authentication", "success") - successBefore).isEqualTo(1);
+        assertThat(epochCount("authentication", "failure") - failureBefore).isZero();
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void cancellingAuthenticationRollsBackEpochWhenOperationUpdateConflicts() {
+        double successBefore = epochCount("authentication", "success");
+        double failureBefore = epochCount("authentication", "failure");
         jdbcTemplate.update("""
                 UPDATE account_lifecycle_operation
                 SET status = 'COMPLETED'
@@ -172,6 +190,8 @@ class PassengerAuthEpochServiceIntegrationTest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT auth_epoch FROM customer WHERE id = ?", Long.class, CANCELLING_CUSTOMER_ID))
                 .isEqualTo(5L);
+        assertThat(epochCount("authentication", "success") - successBefore).isZero();
+        assertThat(epochCount("authentication", "failure") - failureBefore).isEqualTo(1);
     }
 
     @Test
@@ -182,11 +202,16 @@ class PassengerAuthEpochServiceIntegrationTest {
     }
 
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void matchingLogoutBumpsEpochOnce() {
+        double successBefore = epochCount("logout", "success");
+        double failureBefore = epochCount("logout", "failure");
         long loggedOutEpoch = service.logout(ACTIVE_CUSTOMER_ID, 1L);
 
         assertThat(loggedOutEpoch).isEqualTo(2L);
         assertThat(service.loadState(ACTIVE_CUSTOMER_ID).authEpoch()).isEqualTo(2L);
+        assertThat(epochCount("logout", "success") - successBefore).isEqualTo(1);
+        assertThat(epochCount("logout", "failure") - failureBefore).isZero();
     }
 
     private Map<String, Object> customerRow(long customerId) {
@@ -195,6 +220,12 @@ class PassengerAuthEpochServiceIntegrationTest {
                 FROM customer
                 WHERE id = ?
                 """, customerId);
+    }
+
+    private double epochCount(String cause, String result) {
+        var counter = meterRegistry.find("passenger.auth.epoch.bump")
+                .tags("cause", cause, "result", result).counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private void insertCustomer(long id, String phone, String lifecycleStatus, long authEpoch,
