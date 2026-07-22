@@ -5,6 +5,8 @@ import com.sx.passenger.auth.session.AuthEpochConflictException;
 import com.sx.passenger.auth.session.AuthSessionScope;
 import com.sx.passenger.auth.session.AuthoritativeAuthState;
 import com.sx.passenger.auth.session.PassengerAuthEpochService;
+import com.sx.passenger.app.AppCustomerAuthController;
+import com.sx.passenger.app.AppCustomerAuthService;
 import com.sx.passenger.common.exception.GlobalExceptionHandler;
 import com.sx.passenger.internal.security.PassengerInternalAuthFilter;
 import com.sx.passenger.internal.security.PassengerInternalAuthProperties;
@@ -17,6 +19,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -29,6 +32,7 @@ class PassengerInternalAuthControllerTest {
     private static final String TOKEN = "test-passenger-internal-secret-32bytes";
 
     private final PassengerAuthEpochService service = mock(PassengerAuthEpochService.class);
+    private final AppCustomerAuthService appCustomerAuthService = mock(AppCustomerAuthService.class);
     private MockMvc mvc;
 
     @BeforeEach
@@ -36,10 +40,49 @@ class PassengerInternalAuthControllerTest {
         PassengerInternalAuthProperties properties = new PassengerInternalAuthProperties();
         properties.setToken(TOKEN);
         PassengerInternalAuthFilter filter = new PassengerInternalAuthFilter(properties, new ObjectMapper());
-        mvc = MockMvcBuilders.standaloneSetup(new PassengerInternalAuthController(service))
+        mvc = MockMvcBuilders.standaloneSetup(
+                        new PassengerInternalAuthController(service),
+                        new AppCustomerAuthController(appCustomerAuthService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .addFilters(filter)
                 .build();
+    }
+
+    @Test
+    void matrixParameterCannotBypassInternalAuthentication() throws Exception {
+        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
+                7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
+
+        mvc.perform(get("/api/v1/internal;probe/auth-state/7"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
+
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void matrixParameterCannotBypassAppAuthentication() throws Exception {
+        mvc.perform(post("/api/v1/app;probe/auth/login-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"phone\":\"13800138000\",\"password\":\"secret\"}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
+
+        verifyNoInteractions(appCustomerAuthService);
+    }
+
+    @Test
+    void exactTokenAllowsMatrixInternalPathToReachController() throws Exception {
+        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
+                7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
+
+        mvc.perform(get("/api/v1/internal;probe/auth-state/7").header(INTERNAL_HEADER, TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.customerId").value(7))
+                .andExpect(jsonPath("$.data.authEpoch").value(9))
+                .andExpect(jsonPath("$.data.allowedScope").value("NORMAL"));
+
+        verify(service).loadState(7L);
     }
 
     @Test

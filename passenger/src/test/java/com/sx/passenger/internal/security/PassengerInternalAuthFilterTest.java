@@ -72,8 +72,35 @@ class PassengerInternalAuthFilterTest {
         assertThat(invoked).isTrue();
     }
 
+    @Test
+    void protectsMatrixInternalPathBehindContextPath() throws Exception {
+        AtomicBoolean invoked = new AtomicBoolean();
+
+        MockHttpServletResponse response = execute(
+                "/passenger/api/v1/internal;probe/auth-state/7", "/passenger", null, invoked);
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(invoked).isFalse();
+    }
+
+    @Test
+    void ignoresUnrelatedPathContainingSimilarMatrixSegment() throws Exception {
+        AtomicBoolean invoked = new AtomicBoolean();
+
+        MockHttpServletResponse response = execute("/api/v1/internally;probe/auth-state/7", null, invoked);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(invoked).isTrue();
+    }
+
     private MockHttpServletResponse execute(String path, String token, AtomicBoolean invoked) throws Exception {
+        return execute(path, "", token, invoked);
+    }
+
+    private MockHttpServletResponse execute(String path, String contextPath, String token, AtomicBoolean invoked)
+            throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+        request.setContextPath(contextPath);
         if (token != null) {
             request.addHeader(HEADER, token);
         }

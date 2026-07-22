@@ -11,6 +11,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ServletRequestPathUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -36,11 +37,8 @@ public class PassengerInternalAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI();
-        String contextPath = request.getContextPath();
-        if (!contextPath.isEmpty() && path.startsWith(contextPath)) {
-            path = path.substring(contextPath.length());
-        }
+        ServletRequestPathUtils.parseAndCache(request);
+        String path = ServletRequestPathUtils.getCachedPathValue(request);
         return !matchesPrefix(path, APP_PREFIX) && !matchesPrefix(path, INTERNAL_PREFIX);
     }
 
