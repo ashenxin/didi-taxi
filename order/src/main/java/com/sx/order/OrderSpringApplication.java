@@ -5,7 +5,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication(scanBasePackages = "com.sx.order")
-@MapperScan("com.sx.order.dao")
+@MapperScan({"com.sx.order.dao", "com.sx.order.lifecycle.dao"})
 public class OrderSpringApplication {
 
     public static void main(String[] args) {

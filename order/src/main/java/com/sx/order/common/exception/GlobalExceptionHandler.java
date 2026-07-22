@@ -3,6 +3,8 @@ package com.sx.order.common.exception;
 import com.sx.order.common.enums.ExceptionCode;
 import com.sx.order.common.util.ResultUtil;
 import com.sx.order.common.vo.ResponseVo;
+import com.sx.order.lifecycle.exception.AccountLifecycleBlockedException;
+import com.sx.order.lifecycle.exception.AccountLifecycleUnknownException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.validation.BindException;
@@ -63,6 +65,19 @@ public class GlobalExceptionHandler {
         log.warn("未结清订单阻止下单：{}", e.getMessage());
         return ResultUtil.error(ExceptionCode.CONFLICT.getValue(), "UNSETTLED_ORDER",
                 e.getMessage(), e.getResult());
+    }
+
+    @ExceptionHandler(AccountLifecycleBlockedException.class)
+    public ResponseVo<?> accountLifecycleBlockedExceptionHandler(AccountLifecycleBlockedException e) {
+        log.warn("账户生命周期阻止订单写入：{}", e.getMessage());
+        return ResultUtil.error(ExceptionCode.CONFLICT.getValue(), "ACCOUNT_LIFECYCLE_BLOCKED",
+                e.getMessage(), null);
+    }
+
+    @ExceptionHandler(AccountLifecycleUnknownException.class)
+    public ResponseVo<?> accountLifecycleUnknownExceptionHandler(AccountLifecycleUnknownException e) {
+        log.error("账户生命周期投影未知：{}", e.getMessage());
+        return ResultUtil.error(503, "ACCOUNT_LIFECYCLE_UNKNOWN", e.getMessage(), null);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

@@ -11,6 +11,10 @@ import com.sx.order.model.TripOrder;
 import com.sx.order.model.TripOrderSettlement;
 import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.Place;
+import com.sx.order.lifecycle.dao.OrderAccountLifecycleProjectionMapper;
+import com.sx.order.lifecycle.model.ApplyOrderLifecycleProjectionCommand;
+import com.sx.order.lifecycle.model.OrderLifecycleStatus;
+import com.sx.order.lifecycle.service.OrderLifecycleProjectionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,6 +40,8 @@ class UnsettledOrderGateTest {
     @Autowired private OrderEventEntityMapper eventMapper;
     @Autowired private OrderOutboxEventMapper outboxMapper;
     @Autowired private OrderIdempotentRecordMapper idempotentMapper;
+    @Autowired private OrderLifecycleProjectionService lifecycleProjectionService;
+    @Autowired private OrderAccountLifecycleProjectionMapper lifecycleProjectionMapper;
 
     @BeforeEach
     void clean() {
@@ -44,6 +50,10 @@ class UnsettledOrderGateTest {
         eventMapper.delete(null);
         orderMapper.delete(null);
         idempotentMapper.delete(null);
+        lifecycleProjectionMapper.delete(null);
+        for (long customerId = 91001L; customerId <= 91012L; customerId++) {
+            seedActive(customerId);
+        }
     }
 
     @Test
@@ -220,5 +230,11 @@ class UnsettledOrderGateTest {
         place.setLat(new BigDecimal(lat));
         place.setLng(new BigDecimal(lng));
         return place;
+    }
+
+    private void seedActive(long customerId) {
+        lifecycleProjectionService.apply(new ApplyOrderLifecycleProjectionCommand(
+                customerId, 0, OrderLifecycleStatus.ACTIVE.name(), 0,
+                null, "test-seed-" + customerId, LocalDateTime.now()));
     }
 }

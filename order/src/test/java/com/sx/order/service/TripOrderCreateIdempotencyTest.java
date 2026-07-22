@@ -11,6 +11,10 @@ import com.sx.order.model.TripOrder;
 import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.CreateOrderPreflightRequest;
 import com.sx.order.model.dto.Place;
+import com.sx.order.lifecycle.dao.OrderAccountLifecycleProjectionMapper;
+import com.sx.order.lifecycle.model.ApplyOrderLifecycleProjectionCommand;
+import com.sx.order.lifecycle.model.OrderLifecycleStatus;
+import com.sx.order.lifecycle.service.OrderLifecycleProjectionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +50,10 @@ class TripOrderCreateIdempotencyTest {
     private OrderIdempotentRecordMapper idempotentMapper;
     @Autowired
     private MockMvc mockMvc;
+    @Autowired
+    private OrderLifecycleProjectionService lifecycleProjectionService;
+    @Autowired
+    private OrderAccountLifecycleProjectionMapper lifecycleProjectionMapper;
 
     @BeforeEach
     void clean() {
@@ -53,6 +61,10 @@ class TripOrderCreateIdempotencyTest {
         eventMapper.delete(null);
         tripOrderMapper.delete(null);
         idempotentMapper.delete(null);
+        lifecycleProjectionMapper.delete(null);
+        for (long customerId = 90001L; customerId <= 90009L; customerId++) {
+            seedActive(customerId);
+        }
     }
 
     @Test
@@ -240,5 +252,11 @@ class TripOrderCreateIdempotencyTest {
         p.setLat(new BigDecimal(lat));
         p.setLng(new BigDecimal(lng));
         return p;
+    }
+
+    private void seedActive(long customerId) {
+        lifecycleProjectionService.apply(new ApplyOrderLifecycleProjectionCommand(
+                customerId, 0, OrderLifecycleStatus.ACTIVE.name(), 0,
+                null, "test-seed-" + customerId, LocalDateTime.now()));
     }
 }

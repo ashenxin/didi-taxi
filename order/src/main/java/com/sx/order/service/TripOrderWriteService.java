@@ -25,6 +25,8 @@ import com.sx.order.model.dto.OpenDriverOfferBody;
 import com.sx.order.model.dto.AssignedAwaitingRescheduleDto;
 import com.sx.order.model.dto.PendingDispatchOrderDto;
 import com.sx.order.model.dto.BlockingOrderResult;
+import com.sx.order.lifecycle.model.OrderWriteAction;
+import com.sx.order.lifecycle.service.AccountWriteFence;
 import com.sx.order.notify.PassengerOrderChangedNotifier;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Propagation;
@@ -92,6 +94,7 @@ public class TripOrderWriteService {
     private final ObjectMapper objectMapper;
     private final DriverPassengerMatchBlockService matchBlockService;
     private final PassengerOrderChangedNotifier passengerOrderChangedNotifier;
+    private final AccountWriteFence accountWriteFence;
 
     public TripOrderWriteService(TripOrderEntityMapper tripOrderEntityMapper,
                                  OrderEventEntityMapper orderEventEntityMapper,
@@ -100,7 +103,8 @@ public class TripOrderWriteService {
                                  TripOrderSettlementMapper tripOrderSettlementMapper,
                                  ObjectMapper objectMapper,
                                  DriverPassengerMatchBlockService matchBlockService,
-                                 PassengerOrderChangedNotifier passengerOrderChangedNotifier) {
+                                 PassengerOrderChangedNotifier passengerOrderChangedNotifier,
+                                 AccountWriteFence accountWriteFence) {
         this.tripOrderEntityMapper = tripOrderEntityMapper;
         this.orderEventEntityMapper = orderEventEntityMapper;
         this.orderOutboxEventMapper = orderOutboxEventMapper;
@@ -109,6 +113,7 @@ public class TripOrderWriteService {
         this.objectMapper = objectMapper;
         this.matchBlockService = matchBlockService;
         this.passengerOrderChangedNotifier = passengerOrderChangedNotifier;
+        this.accountWriteFence = accountWriteFence;
     }
 
     /**
@@ -117,6 +122,7 @@ public class TripOrderWriteService {
      */
     @Transactional
     public String create(CreateOrderBody body) {
+        accountWriteFence.lockAndRequireAllowed(body.getPassengerId(), OrderWriteAction.RIDE_CREATE);
         return createInternal(body);
     }
 
@@ -128,6 +134,8 @@ public class TripOrderWriteService {
         if (existing != null) {
             return resolveExistingCreateRequest(existing, requestHash);
         }
+
+        accountWriteFence.lockAndRequireAllowed(body.getPassengerId(), OrderWriteAction.RIDE_CREATE);
 
         LocalDateTime now = LocalDateTime.now();
         OrderIdempotentRecord record = new OrderIdempotentRecord()
@@ -288,6 +296,7 @@ public class TripOrderWriteService {
         String requestId = normalizeIdempotencyKey(idempotencyKey);
         OrderIdempotentRecord record = selectIdempotentRecord(requestId);
         if (record == null) {
+            accountWriteFence.lockAndRequireAllowed(request.passengerId(), OrderWriteAction.RIDE_CREATE);
             BlockingOrderResult blocking = findBlockingOrder(request.passengerId());
             return blocking == null
                     ? CreateOrderPreflightResult.allowCreate()
