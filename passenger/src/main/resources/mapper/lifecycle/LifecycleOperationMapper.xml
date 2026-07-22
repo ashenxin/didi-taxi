@@ -20,4 +20,17 @@
           AND status = #{expectedStatus}
           AND row_version = #{expectedRowVersion}
     </update>
+
+    <update id="fenceRequestedCas">
+        UPDATE account_lifecycle_operation
+        SET status = 'FENCED',
+            restricted_auth_epoch = #{restrictedAuthEpoch},
+            applied_lifecycle_version = #{appliedLifecycleVersion},
+            fenced_at = #{fencedAt},
+            row_version = row_version + 1,
+            updated_at = #{fencedAt}
+        WHERE id = #{id}
+          AND status = 'REQUESTED'
+          AND row_version = #{expectedRowVersion}
+    </update>
 </mapper>

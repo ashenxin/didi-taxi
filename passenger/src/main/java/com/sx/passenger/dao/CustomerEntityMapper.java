@@ -14,6 +14,11 @@ public interface CustomerEntityMapper extends BaseMapper<Customer> {
     int bumpAuthEpochForLogout(@Param("customerId") long customerId,
                                @Param("expectedAuthEpoch") long expectedAuthEpoch);
 
+    int fenceAccountCancellation(@Param("customerId") long customerId,
+                                 @Param("expectedLifecycleVersion") long expectedLifecycleVersion,
+                                 @Param("operationNo") String operationNo,
+                                 @Param("updatedAt") LocalDateTime updatedAt);
+
     int changePhoneCas(@Param("customerId") long customerId,
                        @Param("newPhone") String newPhone,
                        @Param("expectedLifecycleVersion") long expectedLifecycleVersion);

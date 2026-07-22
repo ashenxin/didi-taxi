@@ -21,6 +21,20 @@
           AND lifecycle_status IN ('ACTIVE', 'CANCELLING')
     </update>
 
+    <update id="fenceAccountCancellation">
+        UPDATE customer
+        SET lifecycle_status = 'CANCELLING',
+            lifecycle_version = lifecycle_version + 1,
+            auth_epoch = auth_epoch + 1,
+            current_lifecycle_operation_no = #{operationNo},
+            updated_at = #{updatedAt}
+        WHERE id = #{customerId}
+          AND is_deleted = 0
+          AND lifecycle_status = 'ACTIVE'
+          AND lifecycle_version = #{expectedLifecycleVersion}
+          AND current_lifecycle_operation_no IS NULL
+    </update>
+
     <update id="changePhoneCas">
         UPDATE customer
         SET phone = #{newPhone},

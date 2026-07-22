@@ -17,4 +17,10 @@ public interface LifecycleOperationMapper extends BaseMapper<LifecycleOperationE
                         @Param("expectedRowVersion") long expectedRowVersion,
                         @Param("targetStatus") String targetStatus,
                         @Param("updatedAt") LocalDateTime updatedAt);
+
+    int fenceRequestedCas(@Param("id") long id,
+                          @Param("expectedRowVersion") long expectedRowVersion,
+                          @Param("restrictedAuthEpoch") long restrictedAuthEpoch,
+                          @Param("appliedLifecycleVersion") long appliedLifecycleVersion,
+                          @Param("fencedAt") LocalDateTime fencedAt);
 }

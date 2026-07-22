@@ -1,0 +1,134 @@
+package com.sx.passenger.lifecycle.application.cancel;
+
+import com.sx.passenger.auth.otp.AtomicOtpService;
+import com.sx.passenger.auth.otp.OtpConsumeResult;
+import com.sx.passenger.auth.otp.OtpPurpose;
+import com.sx.passenger.auth.otp.OtpSubject;
+import com.sx.passenger.dao.CustomerEntityMapper;
+import com.sx.passenger.lifecycle.application.CreateLifecycleSnapshotCommand;
+import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
+import com.sx.passenger.lifecycle.application.LifecycleJson;
+import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
+import com.sx.passenger.lifecycle.application.LifecycleRequestHasher;
+import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshot;
+import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshotFactory;
+import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
+import com.sx.passenger.lifecycle.application.UuidLifecycleIdentifierGenerator;
+import com.sx.passenger.lifecycle.domain.LifecycleActorType;
+import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
+import com.sx.passenger.lifecycle.persistence.entity.LifecycleEventEntity;
+import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
+import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
+import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
+import com.sx.passenger.lifecycle.plan.LifecyclePlanRegistry;
+import com.sx.passenger.model.Customer;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.Objects;
+
+@Service
+public class AccountCancellationFenceService {
+    private final AtomicOtpService otp;
+    private final LifecycleSnapshotStore snapshots;
+    private final CustomerEntityMapper customers;
+    private final LifecycleOperationMapper operations;
+    private final LifecycleEventMapper events;
+    private final TransactionTemplate transactions;
+    private final LifecycleRequestHasher hasher;
+    private final LifecycleRuntimeSnapshotFactory snapshotFactory;
+    private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
+
+    public AccountCancellationFenceService(AtomicOtpService otp,
+                                            LifecycleSnapshotStore snapshots,
+                                            CustomerEntityMapper customers,
+                                            LifecycleOperationMapper operations,
+                                            LifecycleEventMapper events,
+                                            TransactionTemplate transactions,
+                                            LifecycleRequestHasher hasher,
+                                            LifecyclePlanRegistry plans) {
+        this.otp = otp;
+        this.snapshots = snapshots;
+        this.customers = customers;
+        this.operations = operations;
+        this.events = events;
+        this.transactions = transactions;
+        this.hasher = hasher;
+        this.snapshotFactory = new LifecycleRuntimeSnapshotFactory(
+                plans, new UuidLifecycleIdentifierGenerator(), new LifecycleJson());
+    }
+
+    public AccountCancellationFenceResult fence(FenceAccountCancellationCommand command) {
+        Objects.requireNonNull(command, "command must not be null");
+        String requestHash = hasher.hash(command);
+        var prior = snapshots.findByIdempotency(
+                command.customerId(), LifecycleOperationType.ACCOUNT_CANCEL, command.idempotencyKey());
+        if (prior.isPresent()) {
+            return replay(prior.get(), requestHash);
+        }
+
+        OtpConsumeResult consumed = otp.consume(OtpPurpose.ACCOUNT_CANCEL,
+                OtpSubject.accountCancel(command.customerId(), command.expectedLifecycleVersion()),
+                command.otpCode());
+        if (consumed != OtpConsumeResult.CONSUMED) {
+            throw new IllegalArgumentException("OTP is invalid or expired");
+        }
+
+        AccountCancellationFenceResult result = transactions.execute(
+                status -> createFence(command, requestHash));
+        return Objects.requireNonNull(result, "cancellation fence transaction returned no result");
+    }
+
+    private AccountCancellationFenceResult createFence(FenceAccountCancellationCommand command,
+                                                        String requestHash) {
+        LifecycleRuntimeSnapshot snapshot = snapshotFactory.create(new CreateLifecycleSnapshotCommand(
+                command.customerId(), LifecycleOperationType.ACCOUNT_CANCEL, command.idempotencyKey(), requestHash,
+                command.expectedLifecycleVersion(), LifecycleActorType.CUSTOMER, command.actorId(), command.traceId(),
+                command.sanitizedRequestContextJson(), command.requestedAt()));
+        LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
+        String operationNo = snapshot.operation().getOperationNo();
+        int customerUpdated = customers.fenceAccountCancellation(
+                command.customerId(), command.expectedLifecycleVersion(), operationNo, now);
+        if (customerUpdated != 1) {
+            throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
+        }
+        Customer fencedCustomer = customers.selectById(command.customerId());
+        if (fencedCustomer == null) {
+            throw new LifecycleOperationConflictException("Customer disappeared while creating cancellation fence");
+        }
+
+        snapshots.persistNew(snapshot);
+        LifecycleOperationEntity operation = snapshot.operation();
+        int operationUpdated = operations.fenceRequestedCas(operation.getId(), 0L,
+                fencedCustomer.getAuthEpoch(), fencedCustomer.getLifecycleVersion(), now);
+        if (operationUpdated != 1) {
+            throw new LifecycleOperationConflictException("Lifecycle operation changed while creating fence");
+        }
+        LifecycleEventEntity fencedEvent = new LifecycleEventEntity()
+                .setEventId(identifiers.nextEventId()).setOperationId(operation.getId())
+                .setCustomerId(command.customerId()).setEventType("LIFECYCLE_OPERATION_STATUS_CHANGED")
+                .setFromStatus("REQUESTED").setToStatus("FENCED")
+                .setActorType(LifecycleActorType.CUSTOMER.name()).setActorId(command.actorId())
+                .setReasonCode("ACCOUNT_CANCEL_FENCED").setTraceId(command.traceId())
+                .setPayloadSnapshot("{}").setCreatedAt(now);
+        if (events.insert(fencedEvent) != 1) {
+            throw new IllegalStateException("Failed to insert lifecycle fence event");
+        }
+        return new AccountCancellationFenceResult(operation.getId(), operationNo, command.customerId(),
+                fencedCustomer.getLifecycleVersion(), fencedCustomer.getAuthEpoch(), "FENCED");
+    }
+
+    private static AccountCancellationFenceResult replay(LifecycleOperationEntity operation, String requestHash) {
+        if (!requestHash.equals(operation.getRequestHash())) {
+            throw new LifecycleOperationConflictException("Idempotency key was used for another request");
+        }
+        if (operation.getAppliedLifecycleVersion() == null || operation.getRestrictedAuthEpoch() == null) {
+            throw new LifecycleOperationConflictException("Existing lifecycle operation is not fenced");
+        }
+        return new AccountCancellationFenceResult(operation.getId(), operation.getOperationNo(),
+                operation.getCustomerId(), operation.getAppliedLifecycleVersion(),
+                operation.getRestrictedAuthEpoch(), operation.getStatus());
+    }
+}
