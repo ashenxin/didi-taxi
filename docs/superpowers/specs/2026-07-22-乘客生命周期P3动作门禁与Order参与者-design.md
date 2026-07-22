@@ -79,8 +79,14 @@ passenger-api 只负责快速拒绝和用户体验；Order 本地投影与写栅
 - `AUTO_PAY_SIGN`
 - `REFUND_READ`
 - `PROFILE_READ`
+- `SESSION_LOGOUT`
+- `WS_CONNECT`
+- `WALLET_READ`
+- `COUPON_READ`
+- `BENEFIT_READ`
 - `PHONE_CHANGE`
 - `ACCOUNT_CANCEL`
+- `AUTO_PAY_MANAGE`
 
 P3 的最小矩阵如下：
 
