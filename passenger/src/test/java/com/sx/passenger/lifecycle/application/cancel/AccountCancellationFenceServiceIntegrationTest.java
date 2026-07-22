@@ -7,6 +7,7 @@ import com.sx.passenger.auth.otp.OtpSubject;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
 import com.sx.passenger.lifecycle.application.LifecycleRequestHasher;
+import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleEventEntity;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleOutboxEntity;
@@ -24,6 +25,8 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -33,6 +36,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -43,6 +47,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest
@@ -56,15 +61,17 @@ class AccountCancellationFenceServiceIntegrationTest {
     @Autowired LifecycleRequestHasher hasher;
     @Autowired CustomerEntityMapper customers;
     @SpyBean LifecycleOperationMapper operations;
+    @SpyBean LifecycleSnapshotStore snapshots;
     @Autowired LifecycleStepMapper steps;
     @SpyBean LifecycleEventMapper events;
     @SpyBean LifecycleOutboxMapper outboxes;
     @Autowired JdbcTemplate jdbc;
+    @Autowired TransactionTemplate outerTransactions;
     @MockBean AtomicOtpService otp;
 
     @BeforeEach
     void setUp() {
-        reset(otp, operations, events, outboxes);
+        reset(otp, operations, snapshots, events, outboxes);
         cleanRows();
         baselineStepCount = steps.selectCount(null);
         baselineOutboxCount = outboxes.selectCount(null);
@@ -75,7 +82,7 @@ class AccountCancellationFenceServiceIntegrationTest {
 
     @AfterEach
     void tearDown() {
-        reset(operations, events, outboxes);
+        reset(operations, snapshots, events, outboxes);
         cleanRows();
     }
 
@@ -88,6 +95,70 @@ class AccountCancellationFenceServiceIntegrationTest {
                 Instant.parse("2030-01-01T00:00:00Z"));
 
         assertThat(hasher.hash(first)).isEqualTo(hasher.hash(replay)).hasSize(64);
+    }
+
+    @Test
+    void rejectsTrailingJsonTokensBeforeOtp() {
+        assertThatThrownBy(() -> service.fence(command("idem-invalid-json", "111111", "{} {}")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("valid JSON");
+
+        verifyNoInteractions(otp);
+    }
+
+    @Test
+    void commandAcceptsSchemaLengthBoundariesAndRejectsOverflowBeforeOtp() {
+        FenceAccountCancellationCommand boundary = new FenceAccountCancellationCommand(
+                CUSTOMER_ID, 0L, "111111", "i".repeat(128), "a".repeat(64), "t".repeat(64),
+                "{}", Instant.parse("2026-07-22T08:00:00Z"));
+        assertThat(boundary.idempotencyKey()).hasSize(128);
+
+        assertThatThrownBy(() -> new FenceAccountCancellationCommand(
+                CUSTOMER_ID, 0L, "111111", "i".repeat(129), "actor", "trace", "{}", boundary.requestedAt()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("idempotencyKey");
+        assertThatThrownBy(() -> new FenceAccountCancellationCommand(
+                CUSTOMER_ID, 0L, "111111", "idem", "a".repeat(65), "trace", "{}", boundary.requestedAt()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("actorId");
+        assertThatThrownBy(() -> new FenceAccountCancellationCommand(
+                CUSTOMER_ID, 0L, "111111", "idem", "actor", "t".repeat(65), "{}", boundary.requestedAt()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("traceId");
+        verifyNoInteractions(otp);
+    }
+
+    @Test
+    void suspendsCallingTransactionForIdempotencyAndOtpThenStartsTransactionForDatabaseWrites() {
+        AtomicBoolean idempotencyOutsideTransaction = new AtomicBoolean();
+        AtomicBoolean otpOutsideTransaction = new AtomicBoolean();
+        AtomicBoolean casInsideTransaction = new AtomicBoolean();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            idempotencyOutsideTransaction.set(!TransactionSynchronizationManager.isActualTransactionActive());
+            return java.util.Optional.empty();
+        }).when(snapshots).findByIdempotency(anyLong(), any(), any());
+        when(otp.consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any()))
+                .thenAnswer(invocation -> {
+                    otpOutsideTransaction.set(!TransactionSynchronizationManager.isActualTransactionActive());
+                    return OtpConsumeResult.CONSUMED;
+                });
+        org.mockito.Mockito.doAnswer(invocation -> {
+            casInsideTransaction.set(TransactionSynchronizationManager.isActualTransactionActive());
+            return jdbc.update("""
+                    UPDATE account_lifecycle_operation
+                    SET status = 'FENCED', restricted_auth_epoch = ?, applied_lifecycle_version = ?,
+                        fenced_at = ?, row_version = row_version + 1, updated_at = ?
+                    WHERE id = ? AND status = 'REQUESTED' AND row_version = ?
+                    """, invocation.getArgument(2), invocation.getArgument(3), invocation.getArgument(4),
+                    invocation.getArgument(4), invocation.getArgument(0), invocation.getArgument(1));
+        }).when(operations).fenceRequestedCas(anyLong(), anyLong(), anyLong(), anyLong(), any());
+
+        outerTransactions.executeWithoutResult(status -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+            service.fence(command("idem-ambient-tx", "111111", "{}"));
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+        });
+
+        assertThat(idempotencyOutsideTransaction).isTrue();
+        assertThat(otpOutsideTransaction).isTrue();
+        assertThat(casInsideTransaction).isTrue();
     }
 
     @Test

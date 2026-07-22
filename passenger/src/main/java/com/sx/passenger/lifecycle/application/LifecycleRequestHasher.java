@@ -1,6 +1,7 @@
 package com.sx.passenger.lifecycle.application;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -18,7 +19,8 @@ import java.util.TreeMap;
 
 @Component
 public final class LifecycleRequestHasher {
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json = new ObjectMapper()
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     public String hash(FenceAccountCancellationCommand command) {
         return hash(LifecycleOperationType.ACCOUNT_CANCEL, command.customerId(),

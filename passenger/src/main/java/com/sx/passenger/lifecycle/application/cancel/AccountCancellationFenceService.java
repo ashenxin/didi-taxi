@@ -23,6 +23,8 @@ import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.plan.LifecyclePlanRegistry;
 import com.sx.passenger.model.Customer;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
@@ -36,7 +38,8 @@ public class AccountCancellationFenceService {
     private final CustomerEntityMapper customers;
     private final LifecycleOperationMapper operations;
     private final LifecycleEventMapper events;
-    private final TransactionTemplate transactions;
+    private final TransactionTemplate withoutTransaction;
+    private final TransactionTemplate databaseTransaction;
     private final LifecycleRequestHasher hasher;
     private final LifecycleRuntimeSnapshotFactory snapshotFactory;
     private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
@@ -46,7 +49,7 @@ public class AccountCancellationFenceService {
                                             CustomerEntityMapper customers,
                                             LifecycleOperationMapper operations,
                                             LifecycleEventMapper events,
-                                            TransactionTemplate transactions,
+                                            PlatformTransactionManager transactionManager,
                                             LifecycleRequestHasher hasher,
                                             LifecyclePlanRegistry plans) {
         this.otp = otp;
@@ -54,7 +57,10 @@ public class AccountCancellationFenceService {
         this.customers = customers;
         this.operations = operations;
         this.events = events;
-        this.transactions = transactions;
+        this.withoutTransaction = new TransactionTemplate(transactionManager);
+        this.withoutTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
+        this.databaseTransaction = new TransactionTemplate(transactionManager);
+        this.databaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
         this.hasher = hasher;
         this.snapshotFactory = new LifecycleRuntimeSnapshotFactory(
                 plans, new UuidLifecycleIdentifierGenerator(), new LifecycleJson());
@@ -62,6 +68,12 @@ public class AccountCancellationFenceService {
 
     public AccountCancellationFenceResult fence(FenceAccountCancellationCommand command) {
         Objects.requireNonNull(command, "command must not be null");
+        AccountCancellationFenceResult result = withoutTransaction.execute(
+                status -> fenceOutsideTransaction(command));
+        return Objects.requireNonNull(result, "cancellation fence execution returned no result");
+    }
+
+    private AccountCancellationFenceResult fenceOutsideTransaction(FenceAccountCancellationCommand command) {
         String requestHash = hasher.hash(command);
         var prior = snapshots.findByIdempotency(
                 command.customerId(), LifecycleOperationType.ACCOUNT_CANCEL, command.idempotencyKey());
@@ -76,7 +88,7 @@ public class AccountCancellationFenceService {
             throw new IllegalArgumentException("OTP is invalid or expired");
         }
 
-        AccountCancellationFenceResult result = transactions.execute(
+        AccountCancellationFenceResult result = databaseTransaction.execute(
                 status -> createFence(command, requestHash));
         return Objects.requireNonNull(result, "cancellation fence transaction returned no result");
     }
