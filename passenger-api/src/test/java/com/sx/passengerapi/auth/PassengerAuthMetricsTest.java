@@ -1,13 +1,29 @@
 package com.sx.passengerapi.auth;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.mock;
 
 class PassengerAuthMetricsTest {
+
+    @Test
+    void metricRegistryFailuresNeverEscapePublicRecordMethods() {
+        PassengerAuthMetrics metrics = new PassengerAuthMetrics(mock(MeterRegistry.class));
+
+        assertThatCode(() -> metrics.authStateQuery(Duration.ofMillis(1),
+                PassengerAuthMetrics.AuthStateResult.UNAVAILABLE)).doesNotThrowAnyException();
+        assertThatCode(() -> metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MALFORMED))
+                .doesNotThrowAnyException();
+        assertThatCode(metrics::restrictedIssued).doesNotThrowAnyException();
+        assertThatCode(() -> metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.LOGOUT))
+                .doesNotThrowAnyException();
+    }
 
     @Test
     void recordsDatabaseDecisionAndRejectReasonWithFixedLowCardinalityTags() {

@@ -42,41 +42,55 @@ public class PassengerAuthMetrics {
     }
 
     public void otpConsume(OtpPurpose purpose, OtpConsumeResult result) {
-        Counter.builder("passenger.auth.otp.consume")
+        bestEffort(() -> Counter.builder("passenger.auth.otp.consume")
                 .tag("purpose", purposeTag(purpose)).tag("result", result.name().toLowerCase(Locale.ROOT))
-                .register(registry).increment();
+                .register(registry).increment());
     }
 
     public void epochBump(EpochCause cause, OperationResult result) {
-        Counter.builder("passenger.auth.epoch.bump")
-                .tag("cause", cause.tag).tag("result", result.tag).register(registry).increment();
+        bestEffort(() -> Counter.builder("passenger.auth.epoch.bump")
+                .tag("cause", cause.tag).tag("result", result.tag).register(registry).increment());
     }
 
     /** 在 customer CAS 成功后调用；提交后记 success，事务回滚只记 failure。 */
     public void observeEpochBump(EpochCause cause) {
-        Objects.requireNonNull(cause, "cause must not be null");
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            epochBump(cause, OperationResult.SUCCESS);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                epochBump(cause, OperationResult.SUCCESS);
+        bestEffort(() -> {
+            Objects.requireNonNull(cause, "cause must not be null");
+            if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+                bestEffort(() -> epochBump(cause, OperationResult.SUCCESS));
+                return;
             }
-
-            @Override
-            public void afterCompletion(int status) {
-                if (status != STATUS_COMMITTED) {
-                    epochBump(cause, OperationResult.FAILURE);
+            registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    bestEffort(() -> epochBump(cause, OperationResult.SUCCESS));
                 }
-            }
+
+                @Override
+                public void afterCompletion(int status) {
+                    if (status != STATUS_COMMITTED) {
+                        bestEffort(() -> epochBump(cause, OperationResult.FAILURE));
+                    }
+                }
+            });
         });
     }
 
+    void registerSynchronization(TransactionSynchronization synchronization) {
+        TransactionSynchronizationManager.registerSynchronization(synchronization);
+    }
+
     public void lifecycleCasConflict(LifecycleOperationType operationType) {
-        Counter.builder("passenger.lifecycle.cas.conflict")
-                .tag("operationType", operationTypeTag(operationType)).register(registry).increment();
+        bestEffort(() -> Counter.builder("passenger.lifecycle.cas.conflict")
+                .tag("operationType", operationTypeTag(operationType)).register(registry).increment());
+    }
+
+    private static void bestEffort(Runnable recorder) {
+        try {
+            recorder.run();
+        } catch (RuntimeException ignored) {
+            // 指标不得改变认证、换号或注销的业务结果。
+        }
     }
 
     private static String purposeTag(OtpPurpose purpose) {

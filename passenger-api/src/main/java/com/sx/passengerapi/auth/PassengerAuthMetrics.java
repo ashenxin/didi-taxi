@@ -55,19 +55,29 @@ public class PassengerAuthMetrics {
     }
 
     public void authStateQuery(Duration duration, AuthStateResult result) {
-        Timer.builder("passenger.auth.state.query").tag("result", result.tag)
-                .register(registry).record(duration == null ? Duration.ZERO : duration);
+        bestEffort(() -> Timer.builder("passenger.auth.state.query").tag("result", result.tag)
+                .register(registry).record(duration == null ? Duration.ZERO : duration));
     }
 
     public void jwtRejected(JwtRejectReason reason) {
-        Counter.builder("passenger.auth.jwt.rejected").tag("reason", reason.tag).register(registry).increment();
+        bestEffort(() -> Counter.builder("passenger.auth.jwt.rejected")
+                .tag("reason", reason.tag).register(registry).increment());
     }
 
     public void restrictedIssued() {
-        registry.counter("passenger.auth.restricted.issued").increment();
+        bestEffort(() -> registry.counter("passenger.auth.restricted.issued").increment());
     }
 
     public void wsClosed(WsCloseReason reason) {
-        Counter.builder("passenger.auth.ws.closed").tag("reason", reason.tag).register(registry).increment();
+        bestEffort(() -> Counter.builder("passenger.auth.ws.closed")
+                .tag("reason", reason.tag).register(registry).increment());
+    }
+
+    private static void bestEffort(Runnable recorder) {
+        try {
+            recorder.run();
+        } catch (RuntimeException ignored) {
+            // 可观测性失败不得改变 HTTP/WS 认证裁决。
+        }
     }
 }

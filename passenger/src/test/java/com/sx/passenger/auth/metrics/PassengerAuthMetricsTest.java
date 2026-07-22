@@ -4,13 +4,83 @@ import com.sx.passenger.auth.otp.OtpConsumeResult;
 import com.sx.passenger.auth.otp.OtpPurpose;
 import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.mock;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class PassengerAuthMetricsTest {
+
+    @Test
+    void metricRegistryFailuresNeverEscapePublicRecordMethods() {
+        PassengerAuthMetrics metrics = new PassengerAuthMetrics(mock(MeterRegistry.class));
+
+        assertThatCode(() -> metrics.otpConsume(OtpPurpose.LOGIN, OtpConsumeResult.CONSUMED))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
+                PassengerAuthMetrics.OperationResult.CONFLICT)).doesNotThrowAnyException();
+        assertThatCode(() -> metrics.lifecycleCasConflict(LifecycleOperationType.ACCOUNT_CANCEL))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.LOGOUT))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void transactionCallbacksNeverPropagateEpochMetricFailures() {
+        PassengerAuthMetrics metrics = new PassengerAuthMetrics(new SimpleMeterRegistry()) {
+            @Override
+            public void epochBump(EpochCause cause, OperationResult result) {
+                throw new IllegalStateException("registry unavailable");
+            }
+        };
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            assertThatCode(() -> metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.AUTHENTICATION))
+                    .doesNotThrowAnyException();
+            TransactionSynchronization synchronization =
+                    TransactionSynchronizationManager.getSynchronizations().getFirst();
+            assertThatCode(synchronization::afterCommit).doesNotThrowAnyException();
+            assertThatCode(() -> synchronization.afterCompletion(TransactionSynchronization.STATUS_COMMITTED))
+                    .doesNotThrowAnyException();
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.AUTHENTICATION);
+            TransactionSynchronization synchronization =
+                    TransactionSynchronizationManager.getSynchronizations().getFirst();
+            assertThatCode(() -> synchronization.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK))
+                    .doesNotThrowAnyException();
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void synchronizationRegistrationFailureNeverEscapesBusinessCall() {
+        PassengerAuthMetrics metrics = new PassengerAuthMetrics(new SimpleMeterRegistry()) {
+            @Override
+            void registerSynchronization(TransactionSynchronization synchronization) {
+                throw new IllegalStateException("synchronization unavailable");
+            }
+        };
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            assertThatCode(() -> metrics.observeEpochBump(PassengerAuthMetrics.EpochCause.LOGOUT))
+                    .doesNotThrowAnyException();
+            assertThat(TransactionSynchronizationManager.getSynchronizations()).isEmpty();
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
 
     @Test
     void recordsOnlyEnumBackedOtpEpochAndLifecycleTags() {

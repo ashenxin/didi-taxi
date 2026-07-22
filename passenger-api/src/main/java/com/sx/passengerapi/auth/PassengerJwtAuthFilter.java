@@ -122,9 +122,7 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             authoritativeState = result.getData();
             authContext = decisionService.verify(parsed, authoritativeState, 1);
         } catch (InvalidPassengerSessionException e) {
-            metrics.jwtRejected(parsed.authEpoch() != (authoritativeState == null ? parsed.authEpoch() : authoritativeState.getAuthEpoch())
-                    ? PassengerAuthMetrics.JwtRejectReason.EPOCH_MISMATCH
-                    : PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
+            metrics.jwtRejected(PassengerSessionRejectionClassifier.classify(parsed, authoritativeState));
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "登录已失效，请重新登录");
             return;
         } catch (FeignException e) {

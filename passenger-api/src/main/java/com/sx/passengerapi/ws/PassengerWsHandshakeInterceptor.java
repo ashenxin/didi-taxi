@@ -5,6 +5,7 @@ import com.sx.passengerapi.auth.InvalidPassengerSessionException;
 import com.sx.passengerapi.auth.PassengerAuthDecisionService;
 import com.sx.passengerapi.auth.PassengerAuthMetrics;
 import com.sx.passengerapi.auth.ParsedPassengerJwt;
+import com.sx.passengerapi.auth.PassengerSessionRejectionClassifier;
 import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
 import com.sx.passengerapi.common.vo.ResponseVo;
@@ -112,7 +113,7 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
             attributes.put(ATTR_REGISTRATION_PERMIT, permit);
             return true;
         } catch (InvalidPassengerSessionException e) {
-            metrics.jwtRejected(rejectReason(parsed, authoritativeState));
+            metrics.jwtRejected(PassengerSessionRejectionClassifier.classify(parsed, authoritativeState));
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         } catch (JwtException | IllegalArgumentException e) {
@@ -128,14 +129,6 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
             return false;
         }
-    }
-
-    private static PassengerAuthMetrics.JwtRejectReason rejectReason(
-            ParsedPassengerJwt token,
-            InternalAuthStateResponse state) {
-        return token != null && state != null && token.authEpoch() != state.getAuthEpoch()
-                ? PassengerAuthMetrics.JwtRejectReason.EPOCH_MISMATCH
-                : PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH;
     }
 
     @Override

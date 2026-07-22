@@ -303,6 +303,8 @@ P2 不引入 mTLS 基础设施，内部 Token 是当前最小可落地方案。
 - passenger-api 的 `AppJwtService` 只签发、解析 `ae/scope/audit` 契约；`PassengerJwtAuthFilter` 与
   `PassengerWsHandshakeInterceptor` 每次均回查 passenger 权威状态，认证裁决不依赖 Redis。
 - passenger-api 的 `PassengerWsSessionRegistry` 负责本节点 generation 栅栏、单会话替换和 epoch 变化后的连接关闭。
+- HTTP 过滤器与 WS 握手统一使用 `PassengerSessionRejectionClassifier`：只有 Token 与权威状态的
+  `auth_epoch` 不一致才记录 `epoch_mismatch`，其他会话状态不一致记录 `state_mismatch`。
 - 两模块使用 `docs/superpowers/contracts/passenger-auth-state-v1.json` 作为同一份认证状态契约测试源。
 
 配置口径如下：
@@ -327,6 +329,13 @@ P2 不引入 mTLS 基础设施，内部 Token 是当前最小可落地方案。
 - `passenger.auth.restricted.issued`：受限会话签发次数。
 - `passenger.auth.ws.closed{reason}`：本节点已打开 WS 连接实际关闭成功的次数；连接已关闭或关闭抛出 I/O 异常时不计数。
 - `passenger.lifecycle.cas.conflict{operationType}`：换号/注销生命周期 CAS 冲突。
+
+所有指标都是 best-effort 旁路：MeterRegistry、指标注册、计时或事务同步回调异常必须在指标组件内吸收，
+不得改变认证、登出、换号、注销或 HTTP/WS 裁决。特别是业务事务已提交后，`afterCommit` 指标失败不得导致接口返回失败。
+
+passenger 主代码硬性禁止 `Propagation.NESTED`/`PROPAGATION_NESTED`。原因是当前提交后指标只能观察整个事务的最终状态，
+不能把 savepoint 层级回滚可靠区分为该次 epoch 变更失败。这是由架构测试持续扫描 `passenger/src/main/java` 的代码约束，
+不表示当前指标工具支持 nested/savepoint 回滚观察。
 
 ### 18.3 上线检查单
 

@@ -8,7 +8,9 @@ import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import feign.Request;
+import feign.Response;
 import feign.RetryableException;
+import feign.FeignException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -148,7 +150,7 @@ class PassengerWsHandshakeInterceptorTest {
     @Test
     void passengerFiveHundredReturnsServiceUnavailable() {
         when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 2, null));
-        when(authStateClient.get(7L)).thenThrow(retryable(500));
+        when(authStateClient.get(7L)).thenThrow(serverError());
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         boolean allowed = interceptor.beforeHandshake(
@@ -191,17 +193,29 @@ class PassengerWsHandshakeInterceptorTest {
     }
 
     private static RetryableException retryable() {
-        return retryable(-1);
-    }
-
-    private static RetryableException retryable(int status) {
         Request request = Request.create(
                 Request.HttpMethod.GET,
                 "http://passenger/api/v1/internal/auth-state/7",
                 Map.of(),
                 new byte[0],
                 StandardCharsets.UTF_8);
-        return new RetryableException(status, "passenger unavailable", Request.HttpMethod.GET,
+        return new RetryableException(-1, "passenger unavailable", Request.HttpMethod.GET,
                 new ConnectException("connection refused"), (Long) null, request);
+    }
+
+    private static FeignException serverError() {
+        Request request = Request.create(
+                Request.HttpMethod.GET,
+                "http://passenger/api/v1/internal/auth-state/7",
+                Map.of(),
+                new byte[0],
+                StandardCharsets.UTF_8);
+        Response response = Response.builder()
+                .request(request)
+                .status(500)
+                .reason("Internal Server Error")
+                .headers(Map.of())
+                .build();
+        return FeignException.errorStatus("PassengerCoreAuthStateClient#get", response);
     }
 }
