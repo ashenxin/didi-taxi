@@ -36,6 +36,8 @@ management:
       endpoint: http://127.0.0.1:9411/api/v2/spans
 
 passenger:
+  internal-auth:
+    token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
   admin:
     # 须与 admin-api 的 admin.security-context-cache.key-prefix 一致
     security-context-cache:

@@ -1,11 +1,14 @@
 package com.sx.passenger.common.exception;
 
+import com.sx.passenger.auth.session.AuthEpochConflictException;
 import com.sx.passenger.common.enums.ExceptionCode;
 import com.sx.passenger.common.util.ResultUtil;
 import com.sx.passenger.common.vo.ResponseVo;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.annotation.Validated;
@@ -21,6 +24,26 @@ import static java.util.stream.Collectors.joining;
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
+
+    private static final String REQUEST_ID_HEADER = "X-Request-Id";
+
+    @ExceptionHandler(AuthEpochConflictException.class)
+    public ResponseEntity<ResponseVo<?>> authEpochConflictException(
+            AuthEpochConflictException ignored, HttpServletRequest request) {
+        log.warn("internal auth request rejected uri={} requestId={} status={}",
+                request.getRequestURI(), request.getHeader(REQUEST_ID_HEADER), 409);
+        return ResponseEntity.status(409)
+                .body(ResultUtil.error(ExceptionCode.CONFLICT.getValue(), "认证状态已变化，请刷新后重试"));
+    }
+
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<ResponseVo<?>> dataAccessException(
+            DataAccessException ignored, HttpServletRequest request) {
+        log.error("infrastructure unavailable uri={} requestId={} status={}",
+                request.getRequestURI(), request.getHeader(REQUEST_ID_HEADER), 503);
+        return ResponseEntity.status(503)
+                .body(ResultUtil.error(ExceptionCode.SERVICE_UNAVAILABLE.getValue(), "服务暂不可用，请稍后重试"));
+    }
 
     @ExceptionHandler(AdminPermissionException.class)
     public ResponseEntity<ResponseVo<?>> adminPermissionException(AdminPermissionException e) {

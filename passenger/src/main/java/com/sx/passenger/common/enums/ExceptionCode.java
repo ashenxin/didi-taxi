@@ -6,6 +6,8 @@ public enum ExceptionCode implements NameValueEnum<Integer> {
     UNAUTHORIZED(401, "unauthorized"),
     FORBIDDEN(403, "forbidden"),
     NOT_FOUND(404, "Not Found"),
+    CONFLICT(409, "conflict"),
+    SERVICE_UNAVAILABLE(503, "服务暂不可用"),
     SERVER_ERROR(500, "服务异常");
 
     private final Integer code;

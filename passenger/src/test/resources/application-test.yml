@@ -9,6 +9,10 @@ spring:
       mode: always
       schema-locations: classpath:schema-test.sql
 
+passenger:
+  internal-auth:
+    token: test-passenger-internal-secret-32bytes
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
