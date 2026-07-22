@@ -33,4 +33,21 @@
           AND status = 'REQUESTED'
           AND row_version = #{expectedRowVersion}
     </update>
+
+    <update id="startPhoneChangeCas">
+        UPDATE account_lifecycle_operation
+        SET status = 'EXECUTING', execution_started_at = #{startedAt},
+            row_version = row_version + 1, updated_at = #{startedAt}
+        WHERE id = #{id} AND operation_type = 'PHONE_CHANGE'
+          AND status = 'REQUESTED' AND row_version = #{expectedRowVersion}
+    </update>
+
+    <update id="completePhoneChangeCas">
+        UPDATE account_lifecycle_operation
+        SET status = 'COMPLETED', applied_lifecycle_version = #{appliedLifecycleVersion},
+            restricted_auth_epoch = #{newAuthEpoch},
+            completed_at = #{completedAt}, row_version = row_version + 1, updated_at = #{completedAt}
+        WHERE id = #{id} AND operation_type = 'PHONE_CHANGE'
+          AND status = 'EXECUTING' AND row_version = #{expectedRowVersion}
+    </update>
 </mapper>

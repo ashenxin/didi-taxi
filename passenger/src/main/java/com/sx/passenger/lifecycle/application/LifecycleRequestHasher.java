@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sx.passenger.lifecycle.application.cancel.FenceAccountCancellationCommand;
+import com.sx.passenger.lifecycle.application.phone.ChangeCustomerPhoneCommand;
 import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
 import org.springframework.stereotype.Component;
 
@@ -27,6 +28,12 @@ public final class LifecycleRequestHasher {
                 command.expectedLifecycleVersion(), command.sanitizedRequestContextJson());
     }
 
+    public String hash(ChangeCustomerPhoneCommand command) {
+        return digest(LifecycleOperationType.PHONE_CHANGE.name() + "\n" + command.customerId() + "\n"
+                + command.expectedLifecycleVersion() + "\n" + command.newPhone() + "\n"
+                + canonicalJson(command.sanitizedRequestContextJson()));
+    }
+
     public String hash(LifecycleOperationType operationType, long customerId,
                        long expectedLifecycleVersion, String sanitizedRequestContextJson) {
         if (operationType == null) {
@@ -34,6 +41,10 @@ public final class LifecycleRequestHasher {
         }
         String canonical = operationType.name() + "\n" + customerId + "\n" + expectedLifecycleVersion
                 + "\n" + canonicalJson(sanitizedRequestContextJson);
+        return digest(canonical);
+    }
+
+    private static String digest(String canonical) {
         try {
             MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(sha256.digest(canonical.getBytes(StandardCharsets.UTF_8)));

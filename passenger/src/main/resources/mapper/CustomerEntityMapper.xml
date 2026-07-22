@@ -45,6 +45,7 @@
           AND is_deleted = 0
           AND lifecycle_status = 'ACTIVE'
           AND lifecycle_version = #{expectedLifecycleVersion}
+          AND current_lifecycle_operation_no IS NULL
     </update>
 
     <update id="cancelAccountCas">

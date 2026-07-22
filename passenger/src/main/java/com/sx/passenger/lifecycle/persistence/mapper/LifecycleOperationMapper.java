@@ -23,4 +23,14 @@ public interface LifecycleOperationMapper extends BaseMapper<LifecycleOperationE
                           @Param("restrictedAuthEpoch") long restrictedAuthEpoch,
                           @Param("appliedLifecycleVersion") long appliedLifecycleVersion,
                           @Param("fencedAt") LocalDateTime fencedAt);
+
+    int startPhoneChangeCas(@Param("id") long id,
+                            @Param("expectedRowVersion") long expectedRowVersion,
+                            @Param("startedAt") LocalDateTime startedAt);
+
+    int completePhoneChangeCas(@Param("id") long id,
+                               @Param("expectedRowVersion") long expectedRowVersion,
+                               @Param("appliedLifecycleVersion") long appliedLifecycleVersion,
+                               @Param("newAuthEpoch") long newAuthEpoch,
+                               @Param("completedAt") LocalDateTime completedAt);
 }
