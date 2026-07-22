@@ -9,6 +9,7 @@ import com.sx.passenger.auth.otp.AtomicOtpService;
 import com.sx.passenger.auth.otp.OtpConsumeResult;
 import com.sx.passenger.auth.otp.OtpPurpose;
 import com.sx.passenger.auth.otp.OtpSubject;
+import com.sx.passenger.auth.session.PassengerAuthEpochService;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.model.Customer;
 import org.slf4j.Logger;
@@ -57,16 +58,19 @@ public class AppCustomerAuthService {
     private final StringRedisTemplate redis;
     private final AppCustomerAuthProperties smsProps;
     private final AtomicOtpService otpService;
+    private final PassengerAuthEpochService authEpochService;
 
     public AppCustomerAuthService(
             CustomerEntityMapper customerMapper,
             StringRedisTemplate redis,
             AppCustomerAuthProperties smsProps,
-            AtomicOtpService otpService) {
+            AtomicOtpService otpService,
+            PassengerAuthEpochService authEpochService) {
         this.customerMapper = customerMapper;
         this.redis = redis;
         this.smsProps = smsProps;
         this.otpService = otpService;
+        this.authEpochService = authEpochService;
     }
 
     public ResponseVo<AppAuthCustomerBrief> loginPassword(AppLoginPasswordRequest req) {
@@ -89,8 +93,9 @@ public class AppCustomerAuthService {
             recordLoginFail(req.getPhone());
             return unauthorized();
         }
+        AppAuthCustomerBrief authenticated = authEpochService.completeAuthentication(c.getId());
         log.info("乘客核心服务密码登录成功 customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
-        return ResultUtil.success(toBrief(c));
+        return ResultUtil.success(authenticated);
     }
 
     public ResponseVo<AppSmsSendResult> sendSmsCode(String phone) {
@@ -143,6 +148,9 @@ public class AppCustomerAuthService {
             c.setPasswordHash(null);
             c.setNickname(null);
             c.setStatus(0);
+            c.setLifecycleStatus("ACTIVE");
+            c.setLifecycleVersion(0L);
+            c.setAuthEpoch(0L);
             c.setIsDeleted(0);
             try {
                 customerMapper.insert(c);
@@ -156,8 +164,9 @@ public class AppCustomerAuthService {
         if (c.getStatus() != null && c.getStatus() != 0) {
             return ResultUtil.forbidden("账号已冻结，请联系客服");
         }
+        AppAuthCustomerBrief authenticated = authEpochService.completeAuthentication(c.getId());
         log.info("乘客核心服务短信登录成功 customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
-        return ResultUtil.success(toBrief(c));
+        return ResultUtil.success(authenticated);
     }
 
     private static String maskPhone(String phone) {
@@ -173,14 +182,6 @@ public class AppCustomerAuthService {
                         .eq(Customer::getPhone, phone)
                         .eq(Customer::getIsDeleted, 0)
                         .last("LIMIT 1"));
-    }
-
-    private static AppAuthCustomerBrief toBrief(Customer c) {
-        AppAuthCustomerBrief b = new AppAuthCustomerBrief();
-        b.setId(c.getId());
-        b.setPhone(c.getPhone());
-        b.setNickname(c.getNickname());
-        return b;
     }
 
     private static ResponseVo<AppAuthCustomerBrief> unauthorized() {

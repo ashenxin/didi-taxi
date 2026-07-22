@@ -7,6 +7,11 @@ import org.apache.ibatis.annotations.Param;
 import java.time.LocalDateTime;
 
 public interface LifecycleOperationMapper extends BaseMapper<LifecycleOperationEntity> {
+    int updateRestrictedAuthEpoch(@Param("customerId") long customerId,
+                                  @Param("operationNo") String operationNo,
+                                  @Param("restrictedAuthEpoch") long restrictedAuthEpoch,
+                                  @Param("updatedAt") LocalDateTime updatedAt);
+
     int updateStatusCas(@Param("id") long id,
                         @Param("expectedStatus") String expectedStatus,
                         @Param("expectedRowVersion") long expectedRowVersion,

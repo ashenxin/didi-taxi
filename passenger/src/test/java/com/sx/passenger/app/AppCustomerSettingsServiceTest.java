@@ -17,6 +17,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -130,7 +131,7 @@ class AppCustomerSettingsServiceTest {
         when(otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
                 OtpSubject.phoneChange(10001L, "13912345678", 0L), "123456"))
                 .thenReturn(OtpConsumeResult.CONSUMED);
-        when(customerMapper.update(any(), any())).thenReturn(1);
+        when(customerMapper.changePhoneCas(10001L, "13912345678", 0L)).thenReturn(1);
         AppPhoneChangeConfirmRequest request = new AppPhoneChangeConfirmRequest();
         request.setCustomerId(10001L);
         request.setNewPhone("13912345678");
@@ -139,6 +140,26 @@ class AppCustomerSettingsServiceTest {
         ResponseVo<?> response = service.confirmPhoneChange(request);
 
         assertThat(response.getCode()).isEqualTo(200);
+        verify(customerMapper).changePhoneCas(10001L, "13912345678", 0L);
+        verify(customerMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void phoneChangeReturnsConflictWhenLifecycleCasLoses() {
+        Customer current = customer(10001L, "13812345678");
+        when(customerMapper.selectOne(any())).thenReturn(current, null);
+        when(otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
+                OtpSubject.phoneChange(10001L, "13912345678", 9L), "123456"))
+                .thenReturn(OtpConsumeResult.CONSUMED);
+        when(customerMapper.changePhoneCas(10001L, "13912345678", 9L)).thenReturn(0);
+        AppPhoneChangeConfirmRequest request = new AppPhoneChangeConfirmRequest();
+        request.setCustomerId(10001L);
+        request.setNewPhone("13912345678");
+        request.setCode("123456");
+
+        ResponseVo<?> response = service.confirmPhoneChange(request);
+
+        assertThat(response.getCode()).isEqualTo(409);
     }
 
     @Test
@@ -161,7 +182,8 @@ class AppCustomerSettingsServiceTest {
         when(customerMapper.selectOne(any())).thenReturn(current);
         when(otpService.consume(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(10001L, 9L), "123456"))
                 .thenReturn(OtpConsumeResult.CONSUMED);
-        when(customerMapper.update(any(), any())).thenThrow(new RuntimeException("database unavailable"));
+        when(customerMapper.cancelAccountCas(eq(10001L), eq(9L), any(LocalDateTime.class)))
+                .thenThrow(new RuntimeException("database unavailable"));
         AppAccountCancelConfirmRequest request = new AppAccountCancelConfirmRequest();
         request.setCustomerId(10001L);
         request.setCode("123456");
@@ -172,6 +194,24 @@ class AppCustomerSettingsServiceTest {
                 .hasMessage("database unavailable");
 
         verify(otpService, never()).store(any(), any(), anyString(), any());
+    }
+
+    @Test
+    void accountCancellationUsesLifecycleCasAndReturnsConflictWhenItLoses() {
+        Customer current = customer(10001L, "13812345678");
+        when(customerMapper.selectOne(any())).thenReturn(current);
+        when(otpService.consume(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(10001L, 9L), "123456"))
+                .thenReturn(OtpConsumeResult.CONSUMED);
+        when(customerMapper.cancelAccountCas(eq(10001L), eq(9L), any(LocalDateTime.class))).thenReturn(0);
+        AppAccountCancelConfirmRequest request = new AppAccountCancelConfirmRequest();
+        request.setCustomerId(10001L);
+        request.setCode("123456");
+        request.setConfirm(true);
+
+        ResponseVo<?> response = service.confirmAccountCancel(request);
+
+        assertThat(response.getCode()).isEqualTo(409);
+        verify(customerMapper, never()).update(any(), any());
     }
 
     private static Customer customer(Long id, String phone) {

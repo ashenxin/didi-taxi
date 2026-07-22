@@ -26,7 +26,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -120,17 +122,12 @@ public class AppCustomerSettingsService {
             return ResultUtil.error(409, "该手机号已被使用");
         }
 
-        Customer update = new Customer();
-        update.setPhone(newPhone);
         try {
             // 只更新同一个 customer.id，历史订单仍通过 passenger_id 关联到原用户。
-            int updated = customerMapper.update(
-                    update,
-                    Wrappers.<Customer>lambdaUpdate()
-                            .eq(Customer::getId, req.getCustomerId())
-                            .eq(Customer::getIsDeleted, 0));
-            if (updated <= 0) {
-                return ResultUtil.error(404, "账号不存在或已注销");
+            int updated = customerMapper.changePhoneCas(
+                    req.getCustomerId(), newPhone, lifecycleVersion(current));
+            if (updated != 1) {
+                return ResultUtil.error(409, "账号状态已变化，请重试");
             }
         } catch (DuplicateKeyException e) {
             return ResultUtil.error(409, "该手机号已被使用");
@@ -183,16 +180,12 @@ public class AppCustomerSettingsService {
             return ResultUtil.unauthorized("验证码错误或已过期");
         }
 
-        Customer update = new Customer();
-        update.setIsDeleted(1);
         // 逻辑删除后 phone_active 生成列应变为 NULL，旧手机号允许重新注册成新的 customer.id。
-        int updated = customerMapper.update(
-                update,
-                Wrappers.<Customer>lambdaUpdate()
-                        .eq(Customer::getId, req.getCustomerId())
-                        .eq(Customer::getIsDeleted, 0));
-        if (updated <= 0) {
-            return ResultUtil.error(404, "账号不存在或已注销");
+        LocalDateTime cancelledAt = LocalDateTime.now(ZoneOffset.UTC);
+        int updated = customerMapper.cancelAccountCas(
+                req.getCustomerId(), lifecycleVersion(current), cancelledAt);
+        if (updated != 1) {
+            return ResultUtil.error(409, "账号状态已变化，请重试");
         }
         AppAccountCancelResult out = new AppAccountCancelResult();
         out.setCancelled(true);

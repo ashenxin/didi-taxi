@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper">
+    <update id="updateRestrictedAuthEpoch">
+        UPDATE account_lifecycle_operation
+        SET restricted_auth_epoch = #{restrictedAuthEpoch},
+            updated_at = #{updatedAt}
+        WHERE operation_no = #{operationNo}
+          AND customer_id = #{customerId}
+          AND status IN ('REQUESTED', 'FENCED', 'VALIDATING', 'BLOCKED', 'EXECUTING',
+                         'RETRY_PENDING', 'MANUAL_REVIEW')
+    </update>
+
     <update id="updateStatusCas">
         UPDATE account_lifecycle_operation
         SET status = #{targetStatus},

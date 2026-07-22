@@ -1,5 +1,50 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.sx.passenger.dao.CustomerEntityMapper">
+    <update id="bumpAuthEpochForAuthentication">
+        UPDATE customer
+        SET auth_epoch = auth_epoch + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{customerId}
+          AND is_deleted = 0
+          AND status = 0
+          AND lifecycle_status IN ('ACTIVE', 'CANCELLING')
+    </update>
+
+    <update id="bumpAuthEpochForLogout">
+        UPDATE customer
+        SET auth_epoch = auth_epoch + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{customerId}
+          AND is_deleted = 0
+          AND auth_epoch = #{expectedAuthEpoch}
+          AND lifecycle_status IN ('ACTIVE', 'CANCELLING')
+    </update>
+
+    <update id="changePhoneCas">
+        UPDATE customer
+        SET phone = #{newPhone},
+            auth_epoch = auth_epoch + 1,
+            lifecycle_version = lifecycle_version + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{customerId}
+          AND is_deleted = 0
+          AND lifecycle_status = 'ACTIVE'
+          AND lifecycle_version = #{expectedLifecycleVersion}
+    </update>
+
+    <update id="cancelAccountCas">
+        UPDATE customer
+        SET is_deleted = 1,
+            auth_epoch = auth_epoch + 1,
+            lifecycle_status = 'CANCELLED',
+            lifecycle_version = lifecycle_version + 1,
+            cancelled_at = #{cancelledAt},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{customerId}
+          AND is_deleted = 0
+          AND lifecycle_status = 'ACTIVE'
+          AND lifecycle_version = #{expectedLifecycleVersion}
+    </update>
 
 </mapper>
