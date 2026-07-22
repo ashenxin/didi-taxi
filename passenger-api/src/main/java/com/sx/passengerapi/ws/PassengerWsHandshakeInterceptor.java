@@ -28,20 +28,24 @@ import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTE
 public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
 
     public static final String ATTR_CUSTOMER_ID = "customerId";
+    public static final String ATTR_REGISTRATION_PERMIT = "registrationPermit";
 
     private final PassengerWsProperties wsProperties;
     private final AppJwtService jwtService;
     private final PassengerCoreAuthStateClient authStateClient;
     private final PassengerAuthDecisionService decisionService;
+    private final PassengerWsSessionRegistry registry;
 
     public PassengerWsHandshakeInterceptor(PassengerWsProperties wsProperties,
                                            AppJwtService jwtService,
                                            PassengerCoreAuthStateClient authStateClient,
-                                           PassengerAuthDecisionService decisionService) {
+                                           PassengerAuthDecisionService decisionService,
+                                           PassengerWsSessionRegistry registry) {
         this.wsProperties = wsProperties;
         this.jwtService = jwtService;
         this.authStateClient = authStateClient;
         this.decisionService = decisionService;
+        this.registry = registry;
     }
 
     @Override
@@ -56,6 +60,8 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
         try {
             String token = extractToken(request);
             var parsed = jwtService.parseAndVerify(token);
+            PassengerWsSessionRegistry.RegistrationPermit permit =
+                    registry.captureRegistration(parsed.customerId());
             ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
             if (result == null || !Objects.equals(result.getCode(), HttpStatus.OK.value())
                     || result.getData() == null) {
@@ -71,6 +77,7 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
 
             decisionService.verify(parsed, result.getData(), 2);
             attributes.put(ATTR_CUSTOMER_ID, parsed.customerId());
+            attributes.put(ATTR_REGISTRATION_PERMIT, permit);
             return true;
         } catch (InvalidPassengerSessionException e) {
             response.setStatusCode(HttpStatus.UNAUTHORIZED);

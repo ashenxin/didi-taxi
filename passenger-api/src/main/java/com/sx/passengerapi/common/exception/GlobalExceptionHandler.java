@@ -51,6 +51,13 @@ public class GlobalExceptionHandler {
         return entity(ResultUtil.bizError(e));
     }
 
+    @ExceptionHandler(StalePassengerLogoutException.class)
+    public ResponseEntity<ResponseVo<?>> stalePassengerLogoutExceptionHandler(
+            StalePassengerLogoutException e, HttpServletRequest request) {
+        log.warn("过期登出请求被拒绝 path={} code=409", request.getRequestURI());
+        return entity(ResultUtil.error(ExceptionCode.CONFLICT.getValue(), e.getMessage()));
+    }
+
     @ExceptionHandler(HttpClientErrorException.NotFound.class)
     public ResponseEntity<ResponseVo<?>> notFoundExceptionHandler(HttpClientErrorException.NotFound e, HttpServletRequest request) {
         log.warn("下游返回404 path={} detail={}", request.getRequestURI(), e.getMessage());
@@ -96,9 +103,6 @@ public class GlobalExceptionHandler {
         }
         if (status == 404) {
             return entity(ResultUtil.error(ExceptionCode.NOT_FOUND.getValue(), "资源不存在"));
-        }
-        if (status == 409 && "/app/api/v1/auth/logout".equals(request.getRequestURI())) {
-            return entity(ResultUtil.error(ExceptionCode.CONFLICT.getValue(), "认证状态已变化，请刷新后重试"));
         }
         if (status == 504) {
             return entity(ResultUtil.error(ExceptionCode.GATEWAY_TIMEOUT.getValue(), "下游服务响应超时，请稍后重试"));

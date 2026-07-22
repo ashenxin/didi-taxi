@@ -52,8 +52,20 @@ public class PassengerNoticeWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         long customerId = ((Number) idObj).longValue();
-        registry.register(customerId, session);
-        registry.get(customerId).touch();
+        Object permitObj = session.getAttributes().get(
+                PassengerWsHandshakeInterceptor.ATTR_REGISTRATION_PERMIT);
+        if (!(permitObj instanceof PassengerWsSessionRegistry.RegistrationPermit permit)) {
+            registry.safeClose(session, new CloseStatus(4001, "auth_epoch_changed"));
+            return;
+        }
+        if (!registry.register(permit, session)) {
+            return;
+        }
+        PassengerWsSessionRegistry.PassengerSession registered = registry.get(customerId);
+        if (registered == null || !session.getId().equals(registered.getSession().getId())) {
+            return;
+        }
+        registered.touch();
         log.info("乘客 WebSocket 已连接 customerId={} sessionId={} remote={}",
                 customerId, session.getId(), session.getRemoteAddress());
     }
@@ -83,6 +95,7 @@ public class PassengerNoticeWebSocketHandler extends TextWebSocketHandler {
     }
 
     public void heartbeatSweep() {
+        registry.cleanupCollectedFences();
         if (!props.isEnabled()) {
             return;
         }

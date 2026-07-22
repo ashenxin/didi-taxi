@@ -11,14 +11,14 @@ import static org.mockito.Mockito.when;
 class GlobalExceptionHandlerTest {
 
     @Test
-    void staleCoreLogoutConflictRemainsConflict() {
+    void staleLogoutExceptionRemainsConflictWithContextPath() {
         GlobalExceptionHandler handler = new GlobalExceptionHandler();
-        FeignException exception = mock(FeignException.class);
         HttpServletRequest request = mock(HttpServletRequest.class);
-        when(exception.status()).thenReturn(409);
-        when(request.getRequestURI()).thenReturn("/app/api/v1/auth/logout");
+        when(request.getContextPath()).thenReturn("/passenger-api");
+        when(request.getRequestURI()).thenReturn("/passenger-api/app/api/v1/auth/logout");
 
-        var response = handler.feignExceptionHandler(exception, request);
+        var response = handler.stalePassengerLogoutExceptionHandler(
+                new StalePassengerLogoutException(), request);
 
         assertThat(response.getStatusCode().value()).isEqualTo(409);
         assertThat(response.getBody().getCode()).isEqualTo(409);
@@ -32,6 +32,20 @@ class GlobalExceptionHandlerTest {
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(exception.status()).thenReturn(409);
         when(request.getRequestURI()).thenReturn("/app/api/v1/orders");
+
+        var response = handler.feignExceptionHandler(exception, request);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(502);
+        assertThat(response.getBody().getCode()).isEqualTo(502);
+    }
+
+    @Test
+    void rawFeignConflictOnLogoutPathIsNotMistakenForCoreStaleLogout() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        FeignException exception = mock(FeignException.class);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(exception.status()).thenReturn(409);
+        when(request.getRequestURI()).thenReturn("/app/api/v1/auth/logout");
 
         var response = handler.feignExceptionHandler(exception, request);
 

@@ -505,7 +505,13 @@ public class PassengerOrderService {
         if (passengerId <= 0) {
             return out;
         }
-        List<TripOrderRow> rows = loadAllPassengerOrders(passengerId);
+        OrderRowsLoadResult loadResult = loadAllPassengerOrdersWithStatus(passengerId);
+        if (!loadResult.complete()) {
+            out.setOrderCleanupPending(true);
+            out.setHint("已经登出，订单处理需重试或查询");
+            return out;
+        }
+        List<TripOrderRow> rows = loadResult.rows();
         if (rows == null || rows.isEmpty()) {
             return out;
         }
@@ -542,17 +548,24 @@ public class PassengerOrderService {
                 req.setCancelReason("乘客退出登录");
                 cancelOrder(orderNo, req, "passenger-logout-cancel:" + UUID.randomUUID());
                 cancelledCount++;
-            } catch (BizErrorException e) {
+            } catch (RuntimeException e) {
+                out.setOrderCleanupPending(true);
                 log.warn("登出代取消失败 orderNo={} passengerId={} msg={}", orderNo, passengerId, e.getMessage());
             }
         }
-        if (cancelledCount > 0) {
+        if (out.isOrderCleanupPending()) {
+            out.setHint("已经登出，部分订单处理需重试或查询");
+        } else if (cancelledCount > 0) {
             out.setHint("已为您取消进行中的订单（退出登录）。");
         }
         return out;
     }
 
     private List<TripOrderRow> loadAllPassengerOrders(Long passengerId) {
+        return loadAllPassengerOrdersWithStatus(passengerId).rows();
+    }
+
+    private OrderRowsLoadResult loadAllPassengerOrdersWithStatus(Long passengerId) {
         List<TripOrderRow> rows = new ArrayList<>();
         final int corePageSize = 100;
         int corePageNo = 1;
@@ -561,7 +574,7 @@ public class PassengerOrderService {
             if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
                 log.warn("查询乘客订单失败 passengerId={} pageNo={} code={} msg={}",
                         passengerId, corePageNo, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-                return Collections.emptyList();
+                return new OrderRowsLoadResult(Collections.emptyList(), false);
             }
             OrderPageData data = resp.getData();
             if (data == null || data.getList() == null || data.getList().isEmpty()) {
@@ -574,7 +587,10 @@ public class PassengerOrderService {
             }
             corePageNo++;
         }
-        return rows;
+        return new OrderRowsLoadResult(rows, true);
+    }
+
+    private record OrderRowsLoadResult(List<TripOrderRow> rows, boolean complete) {
     }
 
     private PassengerOrderListItemVO toListItemVO(TripOrderRow row, SettlementSummaryRow summary) {

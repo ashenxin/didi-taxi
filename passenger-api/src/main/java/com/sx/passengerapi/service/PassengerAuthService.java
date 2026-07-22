@@ -13,6 +13,7 @@ import com.sx.passengerapi.client.dto.AppSmsSendResult;
 import com.sx.passengerapi.client.dto.InternalLogoutRequest;
 import com.sx.passengerapi.client.dto.InternalLogoutResponse;
 import com.sx.passengerapi.common.exception.BizErrorException;
+import com.sx.passengerapi.common.exception.StalePassengerLogoutException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
 import com.sx.passengerapi.model.auth.CustomerProfileVO;
@@ -20,6 +21,7 @@ import com.sx.passengerapi.model.auth.PassengerLogoutResult;
 import com.sx.passengerapi.model.auth.SmsSendResult;
 import com.sx.passengerapi.ws.PassengerWsProperties;
 import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
+import feign.FeignException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -80,7 +82,16 @@ public class PassengerAuthService {
         if (passengerId <= 0 || tokenAuthEpoch <= 0) {
             throw new BizErrorException(400, "乘客认证信息非法");
         }
-        unwrapLogout(authStateClient.logout(new InternalLogoutRequest(passengerId, tokenAuthEpoch)));
+        ResponseVo<InternalLogoutResponse> logoutResponse;
+        try {
+            logoutResponse = authStateClient.logout(new InternalLogoutRequest(passengerId, tokenAuthEpoch));
+        } catch (FeignException ex) {
+            if (ex.status() == 409) {
+                throw new StalePassengerLogoutException();
+            }
+            throw ex;
+        }
+        unwrapLogout(logoutResponse);
         sessions.closeCustomerSessions(passengerId, "logout");
         try {
             PassengerLogoutResult result = passengerOrderService.cancelInFlightOrdersOnPassengerLogout(passengerId);
@@ -88,7 +99,6 @@ public class PassengerAuthService {
                 result = new PassengerLogoutResult();
             }
             result.setLoggedOut(true);
-            result.setOrderCleanupPending(false);
             log.info("乘客已登出 customerId={}", passengerId);
             return result;
         } catch (RuntimeException ex) {

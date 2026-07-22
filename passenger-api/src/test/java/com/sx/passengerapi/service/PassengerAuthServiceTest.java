@@ -8,11 +8,13 @@ import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
 import com.sx.passengerapi.client.dto.InternalLogoutRequest;
 import com.sx.passengerapi.client.dto.InternalLogoutResponse;
 import com.sx.passengerapi.common.exception.BizErrorException;
+import com.sx.passengerapi.common.exception.StalePassengerLogoutException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
 import com.sx.passengerapi.model.auth.PassengerLogoutResult;
 import com.sx.passengerapi.ws.PassengerWsProperties;
 import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
+import feign.FeignException;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
@@ -146,11 +148,40 @@ class PassengerAuthServiceTest {
     }
 
     @Test
+    void coreFeignConflictBecomesDedicatedStaleLogoutExceptionBeforeSideEffects() {
+        FeignException conflict = mock(FeignException.class);
+        when(conflict.status()).thenReturn(409);
+        when(authStateClient.logout(new InternalLogoutRequest(7L, 9L))).thenThrow(conflict);
+
+        assertThrows(StalePassengerLogoutException.class, () -> service.logout(7L, 9L));
+
+        verify(sessions, never()).closeCustomerSessions(any(Long.class), any());
+        verify(passengerOrderService, never()).cancelInFlightOrdersOnPassengerLogout(any(Long.class));
+    }
+
+    @Test
     void orderFailureDoesNotAttemptToRestoreEpoch() {
         when(authStateClient.logout(new InternalLogoutRequest(7L, 9L)))
                 .thenReturn(ResponseVo.success(new InternalLogoutResponse(7L, 10L)));
         when(passengerOrderService.cancelInFlightOrdersOnPassengerLogout(7L))
                 .thenThrow(new BizErrorException(502, "order unavailable"));
+
+        PassengerLogoutResult result = service.logout(7L, 9L);
+
+        assertThat(result.isLoggedOut()).isTrue();
+        assertThat(result.isOrderCleanupPending()).isTrue();
+        verify(authStateClient, times(1)).logout(any());
+        verifyNoMoreInteractions(authStateClient);
+    }
+
+    @Test
+    void explicitOrderCleanupFailureRemainsPendingAfterEpochWasCommitted() {
+        when(authStateClient.logout(new InternalLogoutRequest(7L, 9L)))
+                .thenReturn(ResponseVo.success(new InternalLogoutResponse(7L, 10L)));
+        PassengerLogoutResult cleanup = new PassengerLogoutResult();
+        cleanup.setOrderCleanupPending(true);
+        cleanup.setHint("部分订单处理需重试");
+        when(passengerOrderService.cancelInFlightOrdersOnPassengerLogout(7L)).thenReturn(cleanup);
 
         PassengerLogoutResult result = service.logout(7L, 9L);
 

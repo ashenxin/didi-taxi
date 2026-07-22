@@ -64,4 +64,41 @@ class PassengerOrderServiceCancelIdempotencyTest {
         verify(orderClient).cancel(eq("O2"),
                 argThat(key -> key != null && key.startsWith("passenger-logout-cancel:")), any());
     }
+
+    @Test
+    void logoutOrderQueryFailureIsReportedAsPendingCleanup() {
+        when(orderClient.pageOrders(10001L, 1, 100))
+                .thenReturn(new ResponseVo<>(502, "order unavailable"));
+
+        var result = service.cancelInFlightOrdersOnPassengerLogout(10001L);
+
+        assertThat(result.isOrderCleanupPending()).isTrue();
+    }
+
+    @Test
+    void anyLogoutCancelFailureIsReportedAsPendingCleanup() {
+        TripOrderRow failed = order("O-FAILED");
+        TripOrderRow completed = order("O-COMPLETED");
+        OrderPageData page = new OrderPageData();
+        page.setList(List.of(failed, completed));
+        page.setTotal(2);
+        when(orderClient.pageOrders(10001L, 1, 100)).thenReturn(ResponseVo.success(page));
+        when(orderClient.cancel(eq("O-FAILED"), any(), any()))
+                .thenReturn(new ResponseVo<>(502, "order unavailable"));
+        when(orderClient.cancel(eq("O-COMPLETED"), any(), any()))
+                .thenReturn(ResponseVo.success(new OrderActionResult(false)));
+
+        var result = service.cancelInFlightOrdersOnPassengerLogout(10001L);
+
+        assertThat(result.isOrderCleanupPending()).isTrue();
+        verify(orderClient).cancel(eq("O-COMPLETED"), any(), any());
+    }
+
+    private static TripOrderRow order(String orderNo) {
+        TripOrderRow row = new TripOrderRow();
+        row.setOrderNo(orderNo);
+        row.setPassengerId(10001L);
+        row.setStatus(0);
+        return row;
+    }
 }

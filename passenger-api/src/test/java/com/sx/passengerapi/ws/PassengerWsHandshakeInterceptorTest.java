@@ -35,6 +35,7 @@ class PassengerWsHandshakeInterceptorTest {
 
     private final AppJwtService jwtService = mock(AppJwtService.class);
     private final PassengerCoreAuthStateClient authStateClient = mock(PassengerCoreAuthStateClient.class);
+    private final PassengerWsSessionRegistry registry = mock(PassengerWsSessionRegistry.class);
     private PassengerWsProperties properties;
     private PassengerWsHandshakeInterceptor interceptor;
 
@@ -43,12 +44,15 @@ class PassengerWsHandshakeInterceptorTest {
         properties = new PassengerWsProperties();
         properties.setEnabled(true);
         interceptor = new PassengerWsHandshakeInterceptor(
-                properties, jwtService, authStateClient, new PassengerAuthDecisionService());
+                properties, jwtService, authStateClient, new PassengerAuthDecisionService(), registry);
     }
 
     @Test
     void activeNormalWsTokenAllowsAfterExactlyOneAuthorityLookup() {
+        PassengerWsSessionRegistry.RegistrationPermit permit = mock(
+                PassengerWsSessionRegistry.RegistrationPermit.class);
         when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 2, null));
+        when(registry.captureRegistration(7L)).thenReturn(permit);
         when(authStateClient.get(7L)).thenReturn(ok(state(
                 7L, "ACTIVE", 9L, null, "NORMAL", true)));
         Map<String, Object> attributes = new HashMap<>();
@@ -59,6 +63,11 @@ class PassengerWsHandshakeInterceptorTest {
 
         assertThat(allowed).isTrue();
         assertThat(attributes).containsEntry(PassengerWsHandshakeInterceptor.ATTR_CUSTOMER_ID, 7L);
+        assertThat(attributes).containsEntry(
+                PassengerWsHandshakeInterceptor.ATTR_REGISTRATION_PERMIT, permit);
+        var order = org.mockito.Mockito.inOrder(registry, authStateClient);
+        order.verify(registry).captureRegistration(7L);
+        order.verify(authStateClient).get(7L);
         verify(authStateClient, times(1)).get(7L);
     }
 
