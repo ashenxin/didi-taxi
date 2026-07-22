@@ -1,6 +1,10 @@
 package com.sx.passengerapi.auth;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sx.passengerapi.auth.action.PassengerActionCode;
+import com.sx.passengerapi.auth.action.PassengerActionDecision;
+import com.sx.passengerapi.auth.action.PassengerActionPolicy;
+import com.sx.passengerapi.auth.action.PassengerActionResolver;
 import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
 import com.sx.passengerapi.common.vo.ResponseVo;
@@ -24,9 +28,8 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.List;
+import java.util.Optional;
 import java.time.Duration;
-
-import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
 
 /**
  * 校验乘客 JWT 签名、aud 及 passenger DB 权威认证状态；通过后注入可信身份头。
@@ -47,13 +50,13 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             pathPattern("/app/api/v1/auth/sms/send"),
             pathPattern("/app/api/v1/auth/login-sms"),
             pathPattern("/app/api/v1/auth/login-password"));
-    private static final List<PathPattern> RESTRICTED_LIFECYCLE_PATHS = List.of();
-
     private final AppJwtService jwtService;
     private final PassengerCoreAuthStateClient authStateClient;
     private final PassengerAuthDecisionService decisionService;
     private final ObjectMapper objectMapper;
     private final PassengerAuthMetrics metrics;
+    private final PassengerActionResolver actionResolver;
+    private final PassengerActionPolicy actionPolicy;
 
     @Autowired
     public PassengerJwtAuthFilter(
@@ -61,17 +64,16 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             PassengerCoreAuthStateClient authStateClient,
             PassengerAuthDecisionService decisionService,
             ObjectMapper objectMapper,
-            PassengerAuthMetrics metrics) {
+            PassengerAuthMetrics metrics,
+            PassengerActionResolver actionResolver,
+            PassengerActionPolicy actionPolicy) {
         this.jwtService = jwtService;
         this.authStateClient = authStateClient;
         this.decisionService = decisionService;
         this.objectMapper = objectMapper;
         this.metrics = metrics;
-    }
-
-    public PassengerJwtAuthFilter(AppJwtService jwtService, PassengerCoreAuthStateClient authStateClient,
-                                  PassengerAuthDecisionService decisionService, ObjectMapper objectMapper) {
-        this(jwtService, authStateClient, decisionService, objectMapper, new PassengerAuthMetrics());
+        this.actionResolver = actionResolver;
+        this.actionPolicy = actionPolicy;
     }
 
     @Override
@@ -148,7 +150,21 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        if (authContext.scope() == LIFECYCLE_RESTRICTED && !isRestrictedLifecyclePath(path)) {
+        Optional<PassengerActionCode> action = actionResolver.resolve(request.getMethod(), path);
+        if (action.isEmpty()) {
+            metrics.actionDecision(null, PassengerActionDecision.UNKNOWN);
+            writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "暂时无法确认该操作权限");
+            return;
+        }
+        PassengerActionDecision actionDecision = actionPolicy.decide(
+                authoritativeState.getBusinessStatus(), authoritativeState.getLifecycleStatus(),
+                authContext.scope(), action.get());
+        metrics.actionDecision(action.get(), actionDecision);
+        if (actionDecision == PassengerActionDecision.UNKNOWN) {
+            writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "暂时无法确认该操作权限");
+            return;
+        }
+        if (actionDecision == PassengerActionDecision.DENY) {
             metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.RESTRICTED);
             writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "受限会话不可访问该资源");
             return;
@@ -162,10 +178,6 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             return false;
         }
         return PUBLIC_AUTH_PATHS.stream().anyMatch(pattern -> pattern.matches(path));
-    }
-
-    private static boolean isRestrictedLifecyclePath(PathContainer path) {
-        return RESTRICTED_LIFECYCLE_PATHS.stream().anyMatch(pattern -> pattern.matches(path));
     }
 
     private static PathContainer pathWithinApplication(HttpServletRequest request) {

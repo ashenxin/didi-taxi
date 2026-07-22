@@ -3,6 +3,8 @@ package com.sx.passengerapi.auth;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
+import com.sx.passengerapi.auth.action.PassengerActionPolicy;
+import com.sx.passengerapi.auth.action.PassengerActionResolver;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import feign.Request;
 import feign.RetryableException;
@@ -40,7 +42,8 @@ class PassengerJwtAuthFilterTest {
 
     @BeforeEach
     void setUp() {
-        filter = new PassengerJwtAuthFilter(jwtService, authStateClient, decisionService, new ObjectMapper(), metrics);
+        filter = new PassengerJwtAuthFilter(jwtService, authStateClient, decisionService, new ObjectMapper(), metrics,
+                new PassengerActionResolver(), new PassengerActionPolicy());
     }
 
     @Test
@@ -76,6 +79,38 @@ class PassengerJwtAuthFilterTest {
         assertThat(response.getStatus()).isEqualTo(403);
         verify(chain, never()).doFilter(any(), any());
         verify(authStateClient, times(1)).get(7L);
+    }
+
+    @Test
+    void matchingRestrictedSessionCanReadCancelAndPayOutstandingOrders() throws Exception {
+        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(LIFECYCLE_RESTRICTED, 1, "op-1"));
+        when(authStateClient.get(7L)).thenReturn(ok(
+                state(7L, "CANCELLING", 9L, "op-1", "LIFECYCLE_RESTRICTED", true)));
+
+        for (String[] route : new String[][]{
+                {"GET", "/app/api/v1/orders"},
+                {"GET", "/app/api/v1/orders/O-1"},
+                {"POST", "/app/api/v1/orders/O-1/cancel"},
+                {"POST", "/app/api/v1/orders/O-1/payments"}}) {
+            FilterChain chain = mock(FilterChain.class);
+            MockHttpServletResponse response = execute(route[0], route[1], chain);
+            assertThat(response.getStatus()).isEqualTo(200);
+            verify(chain).doFilter(any(PassengerAuthRequestWrapper.class), any());
+        }
+        verify(authStateClient, times(4)).get(7L);
+    }
+
+    @Test
+    void activeSessionFailsClosedWhenProtectedRouteHasNoActionMapping() throws Exception {
+        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 1, null));
+        when(authStateClient.get(7L)).thenReturn(ok(state(7L, "ACTIVE", 9L, null, "NORMAL", true)));
+        FilterChain chain = mock(FilterChain.class);
+
+        MockHttpServletResponse response = execute("GET", "/app/api/v1/not-mapped", chain);
+
+        assertThat(response.getStatus()).isEqualTo(503);
+        verify(chain, never()).doFilter(any(), any());
+        verify(authStateClient).get(7L);
     }
 
     @Test
@@ -138,9 +173,9 @@ class PassengerJwtAuthFilterTest {
         MockHttpServletResponse response = execute(
                 request("POST", "/app/api/v1/auth/login-sms/extra", "", true), chain);
 
-        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getStatus()).isEqualTo(503);
         verify(authStateClient).get(7L);
-        verify(chain).doFilter(any(PassengerAuthRequestWrapper.class), any());
+        verify(chain, never()).doFilter(any(), any());
     }
 
     @Test
@@ -196,11 +231,11 @@ class PassengerJwtAuthFilterTest {
         MockHttpServletResponse doubleEncoded = execute(
                 request("GET", "/app%252Fapi%252Fv1/orders/current", "", true), doubleEncodedChain);
 
-        assertThat(encoded.getStatus()).isEqualTo(200);
-        assertThat(doubleEncoded.getStatus()).isEqualTo(200);
+        assertThat(encoded.getStatus()).isEqualTo(503);
+        assertThat(doubleEncoded.getStatus()).isEqualTo(503);
         verify(authStateClient, times(2)).get(7L);
-        verify(encodedChain).doFilter(any(PassengerAuthRequestWrapper.class), any());
-        verify(doubleEncodedChain).doFilter(any(PassengerAuthRequestWrapper.class), any());
+        verify(encodedChain, never()).doFilter(any(), any());
+        verify(doubleEncodedChain, never()).doFilter(any(), any());
     }
 
     private void assertUnauthorized(ParsedPassengerJwt token, InternalAuthStateResponse state) throws Exception {
@@ -257,7 +292,7 @@ class PassengerJwtAuthFilterTest {
                                                    String scope,
                                                    boolean allowed) {
         return new InternalAuthStateResponse(
-                customerId, 1, lifecycleStatus, epoch, operationNo, scope, allowed);
+                customerId, 0, lifecycleStatus, epoch, operationNo, scope, allowed);
     }
 
     private static ResponseVo<InternalAuthStateResponse> ok(InternalAuthStateResponse state) {

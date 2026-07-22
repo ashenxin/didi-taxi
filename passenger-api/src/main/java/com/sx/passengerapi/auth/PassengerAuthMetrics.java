@@ -1,5 +1,7 @@
 package com.sx.passengerapi.auth;
 
+import com.sx.passengerapi.auth.action.PassengerActionCode;
+import com.sx.passengerapi.auth.action.PassengerActionDecision;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
@@ -8,6 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Objects;
 
 @Component
@@ -71,6 +74,13 @@ public class PassengerAuthMetrics {
     public void wsClosed(WsCloseReason reason) {
         bestEffort(() -> Counter.builder("passenger.auth.ws.closed")
                 .tag("reason", reason.tag).register(registry).increment());
+    }
+
+    public void actionDecision(PassengerActionCode action, PassengerActionDecision decision) {
+        bestEffort(() -> Counter.builder("passenger.lifecycle.action.decision")
+                .tag("actionCode", action == null ? "unknown" : action.name().toLowerCase(Locale.ROOT))
+                .tag("decision", decision == null ? "unknown" : decision.name().toLowerCase(Locale.ROOT))
+                .register(registry).increment());
     }
 
     private static void bestEffort(Runnable recorder) {

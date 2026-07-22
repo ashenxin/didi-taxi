@@ -1,5 +1,7 @@
 package com.sx.passengerapi.auth;
 
+import com.sx.passengerapi.auth.action.PassengerActionCode;
+import com.sx.passengerapi.auth.action.PassengerActionDecision;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,8 @@ class PassengerAuthMetricsTest {
         assertThatCode(metrics::restrictedIssued).doesNotThrowAnyException();
         assertThatCode(() -> metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.LOGOUT))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> metrics.actionDecision(PassengerActionCode.RIDE_CREATE,
+                PassengerActionDecision.DENY)).doesNotThrowAnyException();
     }
 
     @Test
@@ -34,6 +38,7 @@ class PassengerAuthMetricsTest {
         metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.EPOCH_MISMATCH);
         metrics.restrictedIssued();
         metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.LOGOUT);
+        metrics.actionDecision(PassengerActionCode.ORDER_CANCEL, PassengerActionDecision.ALLOW);
 
         assertThat(registry.get("passenger.auth.state.query").tag("result", "success").timer().count())
                 .isEqualTo(1);
@@ -42,8 +47,11 @@ class PassengerAuthMetricsTest {
         assertThat(registry.get("passenger.auth.restricted.issued").counter().count()).isEqualTo(1);
         assertThat(registry.get("passenger.auth.ws.closed").tag("reason", "logout").counter().count())
                 .isEqualTo(1);
+        assertThat(registry.get("passenger.lifecycle.action.decision")
+                .tag("actionCode", "order_cancel").tag("decision", "allow").counter().count())
+                .isEqualTo(1);
         assertThat(registry.getMeters()).allSatisfy(meter -> meter.getId().getTags().forEach(tag -> {
-            assertThat(tag.getKey()).isIn("result", "reason");
+            assertThat(tag.getKey()).isIn("result", "reason", "actionCode", "decision");
             assertThat(tag.getValue()).doesNotContain("7", "13800138000", "op-", "token", "exception");
         }));
     }
