@@ -49,6 +49,9 @@ mybatis-plus:
 
 # 派单相关定时：XXL 与下方 Spring 任务勿重复跑同一逻辑（控制台周期可与这里对齐或二选一）
 order:
+  lifecycle:
+    internal-auth:
+      token: ${ORDER_LIFECYCLE_INTERNAL_TOKEN:dev-order-lifecycle-change-me}
   dispatch:
     wait-timeout-seconds: 180
     timeout-scan-interval-ms: 30000

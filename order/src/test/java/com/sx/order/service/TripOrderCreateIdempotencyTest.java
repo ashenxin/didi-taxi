@@ -12,8 +12,7 @@ import com.sx.order.model.dto.CreateOrderBody;
 import com.sx.order.model.dto.CreateOrderPreflightRequest;
 import com.sx.order.model.dto.Place;
 import com.sx.order.lifecycle.dao.OrderAccountLifecycleProjectionMapper;
-import com.sx.order.lifecycle.model.ApplyOrderLifecycleProjectionCommand;
-import com.sx.order.lifecycle.model.OrderLifecycleStatus;
+import com.sx.order.lifecycle.dao.OrderAccountLifecycleEventInboxMapper;
 import com.sx.order.lifecycle.service.OrderLifecycleProjectionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,6 +53,8 @@ class TripOrderCreateIdempotencyTest {
     private OrderLifecycleProjectionService lifecycleProjectionService;
     @Autowired
     private OrderAccountLifecycleProjectionMapper lifecycleProjectionMapper;
+    @Autowired
+    private OrderAccountLifecycleEventInboxMapper lifecycleEventInboxMapper;
 
     @BeforeEach
     void clean() {
@@ -62,6 +63,7 @@ class TripOrderCreateIdempotencyTest {
         tripOrderMapper.delete(null);
         idempotentMapper.delete(null);
         lifecycleProjectionMapper.delete(null);
+        lifecycleEventInboxMapper.delete(null);
         for (long customerId = 90001L; customerId <= 90009L; customerId++) {
             seedActive(customerId);
         }
@@ -255,8 +257,7 @@ class TripOrderCreateIdempotencyTest {
     }
 
     private void seedActive(long customerId) {
-        lifecycleProjectionService.apply(new ApplyOrderLifecycleProjectionCommand(
-                customerId, 0, OrderLifecycleStatus.ACTIVE.name(), 0,
-                null, "test-seed-" + customerId, LocalDateTime.now()));
+        lifecycleProjectionService.seedActive(customerId,
+                "test-seed-" + customerId, LocalDateTime.now());
     }
 }

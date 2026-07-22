@@ -481,18 +481,29 @@ public class TripOrderWriteService {
 
     /** 返回唯一的权威阻塞订单；PAID/CANCELLED 的陈旧标记会被就地清除。 */
     public BlockingOrderResult findBlockingOrder(Long passengerId) {
-        return findBlockingOrder(passengerId, null);
+        return findBlockingOrder(passengerId, null, true, true);
     }
 
     public BlockingOrderResult findBlockingOrder(Long passengerId, String idempotencyKey) {
+        return findBlockingOrder(passengerId, idempotencyKey, true, true);
+    }
+
+    /** 生命周期影子预检使用：不加写锁，也不清理陈旧阻塞标记。 */
+    public BlockingOrderResult inspectBlockingOrder(Long passengerId) {
+        return findBlockingOrder(passengerId, null, false, false);
+    }
+
+    private BlockingOrderResult findBlockingOrder(Long passengerId, String idempotencyKey,
+                                                   boolean lock, boolean clearResolvedBlock) {
         if (passengerId == null) {
             throw new IllegalArgumentException("passengerId不能为空");
         }
-        TripOrder order = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
+        var query = Wrappers.<TripOrder>lambdaQuery()
                 .eq(TripOrder::getPassengerId, passengerId)
                 .eq(TripOrder::getIsDeleted, 0)
                 .eq(TripOrder::getBlocksNewOrder, 1)
-                .last("LIMIT 1 FOR UPDATE"));
+                .last(lock ? "LIMIT 1 FOR UPDATE" : "LIMIT 1");
+        TripOrder order = tripOrderEntityMapper.selectOne(query);
         if (order == null) {
             return null;
         }
@@ -500,7 +511,9 @@ public class TripOrderWriteService {
             return null;
         }
         if (Objects.equals(order.getStatus(), STATUS_CANCELLED)) {
-            clearBlockingFlag(order);
+            if (clearResolvedBlock) {
+                clearBlockingFlag(order);
+            }
             return null;
         }
         if (!Objects.equals(order.getStatus(), STATUS_FINISHED)) {
@@ -515,7 +528,9 @@ public class TripOrderWriteService {
         }
         String status = settlement.getSettlementStatus();
         if ("PAID".equals(status)) {
-            clearBlockingFlag(order);
+            if (clearResolvedBlock) {
+                clearBlockingFlag(order);
+            }
             return null;
         }
         if (Integer.valueOf(1).equals(settlement.getManualActionRequired())) {

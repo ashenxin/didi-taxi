@@ -14,6 +14,9 @@ mybatis-plus:
     map-underscore-to-camel-case: true
 
 order:
+  lifecycle:
+    internal-auth:
+      token: dev-order-lifecycle-change-me
   settlement:
     listener-enabled: false
 

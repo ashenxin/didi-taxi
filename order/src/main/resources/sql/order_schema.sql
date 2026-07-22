@@ -145,6 +145,16 @@ CREATE TABLE IF NOT EXISTS `order_idempotent_record` (
 -- =============================================================================
 -- 乘客账户生命周期本地投影（Passenger 权威状态在 Order 的事务围栏）
 -- =============================================================================
+CREATE TABLE IF NOT EXISTS `order_account_lifecycle_event_inbox` (
+    `source_event_id` VARCHAR(64) NOT NULL COMMENT 'Passenger来源事件ID',
+    `customer_id` BIGINT NOT NULL COMMENT '乘客ID',
+    `lifecycle_version` BIGINT NOT NULL COMMENT '事件携带的生命周期版本',
+    `request_hash` CHAR(64) NOT NULL COMMENT '事件关键字段SHA-256，防事件ID异参复用',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`source_event_id`),
+    KEY `idx_order_lifecycle_event_customer` (`customer_id`, `lifecycle_version`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Order生命周期投影事件永久去重记录';
+
 CREATE TABLE IF NOT EXISTS `order_account_lifecycle_projection` (
     `customer_id` BIGINT NOT NULL COMMENT '乘客ID，对应 passenger.customer.id',
     `business_status` INT NOT NULL COMMENT '乘客业务状态快照，0正常',
@@ -158,6 +168,22 @@ CREATE TABLE IF NOT EXISTS `order_account_lifecycle_projection` (
     UNIQUE KEY `uk_order_lifecycle_source_event` (`source_event_id`),
     KEY `idx_order_lifecycle_status_version` (`lifecycle_status`, `lifecycle_version`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='乘客账户生命周期Order本地投影';
+
+CREATE TABLE IF NOT EXISTS `order_lifecycle_participant_inbox` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `operation_no` VARCHAR(64) NOT NULL COMMENT '生命周期操作号',
+    `step_code` VARCHAR(64) NOT NULL COMMENT '参与者步骤码',
+    `customer_id` BIGINT NOT NULL COMMENT '乘客ID',
+    `request_hash` CHAR(64) NOT NULL COMMENT '命令关键字段SHA-256',
+    `status` VARCHAR(24) NOT NULL COMMENT 'COMPLETED',
+    `decision` VARCHAR(16) NOT NULL COMMENT 'PASS/BLOCKED/UNKNOWN',
+    `blocker_snapshot` JSON NOT NULL COMMENT '结构化阻塞项快照',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_order_lifecycle_inbox_op_step` (`operation_no`, `step_code`),
+    KEY `idx_order_lifecycle_inbox_customer` (`customer_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Order生命周期参与者幂等结果';
 
 -- =============================================================================
 -- 订单结算快照（优惠券、实付、平台服务费、承运侧收入、支付状态）

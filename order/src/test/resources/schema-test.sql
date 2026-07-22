@@ -97,6 +97,17 @@ CREATE TABLE IF NOT EXISTS order_idempotent_record (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_order_idem_request_id ON order_idempotent_record (request_id);
 CREATE INDEX IF NOT EXISTS idx_order_idem_passenger ON order_idempotent_record (passenger_id, created_at);
 
+CREATE TABLE IF NOT EXISTS order_account_lifecycle_event_inbox (
+    source_event_id VARCHAR(64) PRIMARY KEY,
+    customer_id BIGINT NOT NULL,
+    lifecycle_version BIGINT NOT NULL,
+    request_hash CHAR(64) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_lifecycle_event_customer
+    ON order_account_lifecycle_event_inbox (customer_id, lifecycle_version);
+
 CREATE TABLE IF NOT EXISTS order_account_lifecycle_projection (
     customer_id BIGINT PRIMARY KEY,
     business_status INT NOT NULL,
@@ -112,6 +123,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_order_lifecycle_source_event
     ON order_account_lifecycle_projection (source_event_id);
 CREATE INDEX IF NOT EXISTS idx_order_lifecycle_status_version
     ON order_account_lifecycle_projection (lifecycle_status, lifecycle_version);
+
+CREATE TABLE IF NOT EXISTS order_lifecycle_participant_inbox (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    operation_no VARCHAR(64) NOT NULL,
+    step_code VARCHAR(64) NOT NULL,
+    customer_id BIGINT NOT NULL,
+    request_hash CHAR(64) NOT NULL,
+    status VARCHAR(24) NOT NULL,
+    decision VARCHAR(16) NOT NULL,
+    blocker_snapshot VARCHAR(8000) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_order_lifecycle_inbox_op_step
+    ON order_lifecycle_participant_inbox (operation_no, step_code);
+CREATE INDEX IF NOT EXISTS idx_order_lifecycle_inbox_customer
+    ON order_lifecycle_participant_inbox (customer_id, created_at);
 
 CREATE TABLE IF NOT EXISTS trip_order_settlement (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

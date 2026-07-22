@@ -5,6 +5,8 @@ import com.sx.order.common.util.ResultUtil;
 import com.sx.order.common.vo.ResponseVo;
 import com.sx.order.lifecycle.exception.AccountLifecycleBlockedException;
 import com.sx.order.lifecycle.exception.AccountLifecycleUnknownException;
+import com.sx.order.lifecycle.exception.OrderLifecycleCommandConflictException;
+import com.sx.order.lifecycle.exception.OrderLifecycleProjectionConflictException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.validation.BindException;
@@ -78,6 +80,20 @@ public class GlobalExceptionHandler {
     public ResponseVo<?> accountLifecycleUnknownExceptionHandler(AccountLifecycleUnknownException e) {
         log.error("账户生命周期投影未知：{}", e.getMessage());
         return ResultUtil.error(503, "ACCOUNT_LIFECYCLE_UNKNOWN", e.getMessage(), null);
+    }
+
+    @ExceptionHandler(OrderLifecycleCommandConflictException.class)
+    public ResponseVo<?> orderLifecycleCommandConflictExceptionHandler(
+            OrderLifecycleCommandConflictException e) {
+        log.warn("Order生命周期命令幂等冲突：{}", e.getMessage());
+        return ResultUtil.error(409, "LIFECYCLE_COMMAND_CONFLICT", e.getMessage(), null);
+    }
+
+    @ExceptionHandler(OrderLifecycleProjectionConflictException.class)
+    public ResponseVo<?> orderLifecycleProjectionConflictExceptionHandler(
+            OrderLifecycleProjectionConflictException e) {
+        log.warn("Order生命周期投影版本冲突：{}", e.getMessage());
+        return ResultUtil.error(409, "LIFECYCLE_PROJECTION_CONFLICT", e.getMessage(), null);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

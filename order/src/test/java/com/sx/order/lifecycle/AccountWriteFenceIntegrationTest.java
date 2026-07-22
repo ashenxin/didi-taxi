@@ -5,6 +5,7 @@ import com.sx.order.dao.OrderIdempotentRecordMapper;
 import com.sx.order.dao.OrderOutboxEventMapper;
 import com.sx.order.dao.TripOrderEntityMapper;
 import com.sx.order.lifecycle.dao.OrderAccountLifecycleProjectionMapper;
+import com.sx.order.lifecycle.dao.OrderAccountLifecycleEventInboxMapper;
 import com.sx.order.lifecycle.exception.AccountLifecycleBlockedException;
 import com.sx.order.lifecycle.exception.AccountLifecycleUnknownException;
 import com.sx.order.lifecycle.model.ApplyOrderLifecycleProjectionCommand;
@@ -33,6 +34,7 @@ class AccountWriteFenceIntegrationTest {
     @Autowired private TripOrderWriteService orders;
     @Autowired private OrderLifecycleProjectionService projections;
     @Autowired private OrderAccountLifecycleProjectionMapper projectionMapper;
+    @Autowired private OrderAccountLifecycleEventInboxMapper eventInboxMapper;
     @Autowired private TripOrderEntityMapper orderMapper;
     @Autowired private OrderEventEntityMapper eventMapper;
     @Autowired private OrderOutboxEventMapper outboxMapper;
@@ -45,6 +47,7 @@ class AccountWriteFenceIntegrationTest {
         orderMapper.delete(null);
         idempotentMapper.delete(null);
         projectionMapper.delete(null);
+        eventInboxMapper.delete(null);
     }
 
     @Test
@@ -91,6 +94,41 @@ class AccountWriteFenceIntegrationTest {
         assertThat(outboxMapper.selectCount(null)).isEqualTo(1);
     }
 
+    @Test
+    void cancelledDisabledAndCorruptProjectionStatesAllFailClosed() {
+        seedActive(11006L);
+        projections.apply(command(11006L, 1, OrderLifecycleStatus.CANCELLED, 1,
+                "op-11006", "event-11006-1"));
+        assertThatThrownBy(() -> orders.create(body(11006L), "cancelled"))
+                .isInstanceOf(AccountLifecycleBlockedException.class);
+
+        seedActive(11007L);
+        var disabled = projectionMapper.selectById(11007L).setBusinessStatus(1);
+        projectionMapper.updateById(disabled);
+        assertThatThrownBy(() -> orders.create(body(11007L), "disabled"))
+                .isInstanceOf(AccountLifecycleBlockedException.class);
+
+        seedActive(11008L);
+        var corrupt = projectionMapper.selectById(11008L).setLifecycleStatus("MYSTERY");
+        projectionMapper.updateById(corrupt);
+        assertThatThrownBy(() -> orders.create(body(11008L), "corrupt"))
+                .isInstanceOf(AccountLifecycleUnknownException.class);
+        assertNoCreateSideEffects();
+    }
+
+    @Test
+    void successfulPreflightReplayAlsoSurvivesLaterCancellation() {
+        seedActive(11009L);
+        CreateOrderBody body = body(11009L);
+        String orderNo = orders.create(body, "preflight-replay-after-cancelling");
+        projections.apply(command(11009L, 0, OrderLifecycleStatus.CANCELLING, 1,
+                "op-11009", "event-11009-1"));
+
+        var result = orders.preflightCreate(preflight(body), "preflight-replay-after-cancelling");
+        assertThat(result.decision()).isEqualTo("REPLAY_SUCCESS");
+        assertThat(result.orderNo()).isEqualTo(orderNo);
+    }
+
     private void assertNoCreateSideEffects() {
         assertThat(orderMapper.selectCount(null)).isZero();
         assertThat(eventMapper.selectCount(null)).isZero();
@@ -99,8 +137,7 @@ class AccountWriteFenceIntegrationTest {
     }
 
     private void seedActive(long customerId) {
-        projections.apply(command(customerId, 0, OrderLifecycleStatus.ACTIVE, 0,
-                null, "seed-" + customerId));
+        projections.seedActive(customerId, "seed-" + customerId, LocalDateTime.now());
     }
 
     private static ApplyOrderLifecycleProjectionCommand command(
