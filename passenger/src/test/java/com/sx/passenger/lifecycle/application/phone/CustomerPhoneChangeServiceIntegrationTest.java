@@ -68,7 +68,7 @@ class CustomerPhoneChangeServiceIntegrationTest {
 
     @Autowired CustomerPhoneChangeService service;
     @Autowired AccountCancellationFenceService cancellation;
-    @Autowired CustomerEntityMapper customers;
+    @SpyBean CustomerEntityMapper customers;
     @SpyBean LifecycleSnapshotStore snapshots;
     @SpyBean CustomerPhoneBindingHistoryMapper histories;
     @Autowired LifecycleOperationMapper operations;
@@ -81,7 +81,7 @@ class CustomerPhoneChangeServiceIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        reset(otp, snapshots, histories, events, outboxes);
+        reset(otp, customers, snapshots, histories, events, outboxes);
         cleanRows();
         insertCustomer(CUSTOMER_ID, OLD_PHONE, 3L, 5L);
         insertActiveBinding(CUSTOMER_ID, 1L, OLD_PHONE);
@@ -90,7 +90,7 @@ class CustomerPhoneChangeServiceIntegrationTest {
 
     @AfterEach
     void tearDown() {
-        reset(snapshots, histories, events, outboxes);
+        reset(customers, snapshots, histories, events, outboxes);
         cleanRows();
     }
 
@@ -246,14 +246,54 @@ class CustomerPhoneChangeServiceIntegrationTest {
     }
 
     @Test
-    void duplicatePhoneRaceMapsToDomainConflictAndRollsBackButOtpStaysConsumed() {
-        doThrow(new DuplicateKeyException("uk_customer_phone_active"))
-                .when(histories).replaceActive(anyLong(), any(), any());
+    void realPhoneUniqueRaceMapsToDomainConflictAndRollsBackButOtpStaysConsumed() {
+        when(otp.consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any())).thenAnswer(invocation -> {
+            insertCustomer(CUSTOMER_ID + 1, NEW_PHONE, 0L, 0L);
+            return OtpConsumeResult.CONSUMED;
+        });
 
         assertThatThrownBy(() -> service.change(command("idem-duplicate", NEW_PHONE, "{}")))
                 .isInstanceOf(LifecycleOperationConflictException.class).hasMessageContaining("phone");
         assertEverythingRolledBack();
         verify(otp).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
+    }
+
+    @Test
+    void unrelatedHistoryDuplicateAfterCustomerCasPropagatesOriginalExceptionAndRollsBack() {
+        DuplicateKeyException historyDuplicate = new DuplicateKeyException("uk_customer_phone_binding_version");
+        doThrow(historyDuplicate).when(histories).replaceActive(anyLong(), any(), any());
+
+        assertThatThrownBy(() -> service.change(command("idem-history-duplicate", NEW_PHONE, "{}")))
+                .isSameAs(historyDuplicate)
+                .isNotInstanceOf(LifecycleOperationConflictException.class);
+        assertEverythingRolledBack();
+        verify(otp).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
+    }
+
+    @Test
+    void unknownDuplicateFromCustomerCasIsNotMisclassifiedAsPhoneOccupation() {
+        DuplicateKeyException unknownDuplicate = new DuplicateKeyException("some_other_unique_constraint");
+        org.mockito.Mockito.doThrow(unknownDuplicate).when(customers)
+                .changePhoneCas(CUSTOMER_ID, NEW_PHONE, 3L);
+
+        assertThatThrownBy(() -> service.change(command("idem-customer-unknown-duplicate", NEW_PHONE, "{}")))
+                .isSameAs(unknownDuplicate)
+                .isNotInstanceOf(LifecycleOperationConflictException.class);
+        assertEverythingRolledBack();
+        verify(otp).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
+    }
+
+    @Test
+    void mysqlPhoneConstraintInNestedCauseMapsToPhoneOccupation() {
+        var mysqlCause = new java.sql.SQLIntegrityConstraintViolationException(
+                "Duplicate entry '13900270001' for key 'uk_customer_phone_active'", "23000", 1062);
+        DuplicateKeyException duplicate = new DuplicateKeyException("customer update failed", mysqlCause);
+        org.mockito.Mockito.doThrow(duplicate).when(customers)
+                .changePhoneCas(CUSTOMER_ID, NEW_PHONE, 3L);
+
+        assertThatThrownBy(() -> service.change(command("idem-mysql-phone-duplicate", NEW_PHONE, "{}")))
+                .isInstanceOf(LifecycleOperationConflictException.class).hasMessageContaining("phone");
+        assertEverythingRolledBack();
     }
 
     @Test

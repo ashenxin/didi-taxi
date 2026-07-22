@@ -38,11 +38,18 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.lang.reflect.Method;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 @Service
 public class CustomerPhoneChangeService {
@@ -121,13 +128,9 @@ public class CustomerPhoneChangeService {
             throw new IllegalArgumentException("OTP is invalid or expired");
         }
 
-        try {
-            ChangeCustomerPhoneResult result = databaseTransaction.execute(
-                    status -> applyChange(command, requestHash));
-            return Objects.requireNonNull(result, "phone change transaction returned no result");
-        } catch (DuplicateKeyException ex) {
-            throw new LifecycleOperationConflictException("New phone is already occupied");
-        }
+        ChangeCustomerPhoneResult result = databaseTransaction.execute(
+                status -> applyChange(command, requestHash));
+        return Objects.requireNonNull(result, "phone change transaction returned no result");
     }
 
     private ChangeCustomerPhoneResult applyChange(ChangeCustomerPhoneCommand command, String requestHash) {
@@ -138,8 +141,17 @@ public class CustomerPhoneChangeService {
         LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
         LifecycleOperationEntity operation = snapshot.operation();
 
-        if (customers.changePhoneCas(command.customerId(), command.newPhone(),
-                command.expectedLifecycleVersion()) != 1) {
+        int customerUpdated;
+        try {
+            customerUpdated = customers.changePhoneCas(command.customerId(), command.newPhone(),
+                    command.expectedLifecycleVersion());
+        } catch (DuplicateKeyException ex) {
+            if (hasConstraint(ex, "uk_customer_phone_active")) {
+                throw new LifecycleOperationConflictException("New phone is already occupied");
+            }
+            throw ex;
+        }
+        if (customerUpdated != 1) {
             throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
         }
         Customer changed = customers.selectById(command.customerId());
@@ -258,5 +270,42 @@ public class CustomerPhoneChangeService {
         }
         return new ChangeCustomerPhoneResult(operation.getId(), operation.getOperationNo(), operation.getCustomerId(),
                 operation.getAppliedLifecycleVersion(), operation.getRestrictedAuthEpoch(), true);
+    }
+
+    private static boolean hasConstraint(Throwable failure, String expectedConstraint) {
+        Pattern expectedToken = Pattern.compile("(?i)(?<![a-z0-9_])"
+                + Pattern.quote(expectedConstraint) + "(?![a-z0-9_])");
+        ArrayDeque<Throwable> pending = new ArrayDeque<>();
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        pending.add(failure);
+        while (!pending.isEmpty()) {
+            Throwable current = pending.removeFirst();
+            if (!visited.add(current)) continue;
+            if (containsConstraintToken(current.getMessage(), expectedToken)
+                    || containsConstraintToken(readConstraintName(current), expectedToken)) {
+                return true;
+            }
+            if (current.getCause() != null) pending.addLast(current.getCause());
+            if (current instanceof SQLException sql && sql.getNextException() != null) {
+                pending.addLast(sql.getNextException());
+            }
+        }
+        return false;
+    }
+
+    private static String readConstraintName(Throwable failure) {
+        try {
+            Method accessor = failure.getClass().getMethod("getConstraintName");
+            if (accessor.getParameterCount() == 0 && accessor.getReturnType() == String.class) {
+                return (String) accessor.invoke(failure);
+            }
+        } catch (ReflectiveOperationException | SecurityException ignored) {
+            // Most JDBC exceptions expose the constraint only in their message/cause.
+        }
+        return null;
+    }
+
+    private static boolean containsConstraintToken(String value, Pattern expectedToken) {
+        return value != null && expectedToken.matcher(value).find();
     }
 }
