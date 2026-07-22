@@ -39,16 +39,19 @@ public class PassengerSettingsService {
     private final OrderClient orderClient;
     private final CalculateClient calculateClient;
     private final PassengerLifecycleOrchestrator lifecycleOrchestrator;
+    private final OrderLifecycleShadowPrecheckService orderLifecycleShadow;
 
     public PassengerSettingsService(
             PassengerCoreSettingsClient passengerCoreSettingsClient,
             OrderClient orderClient,
             CalculateClient calculateClient,
-            PassengerLifecycleOrchestrator lifecycleOrchestrator) {
+            PassengerLifecycleOrchestrator lifecycleOrchestrator,
+            OrderLifecycleShadowPrecheckService orderLifecycleShadow) {
         this.passengerCoreSettingsClient = passengerCoreSettingsClient;
         this.orderClient = orderClient;
         this.calculateClient = calculateClient;
         this.lifecycleOrchestrator = lifecycleOrchestrator;
+        this.orderLifecycleShadow = orderLifecycleShadow;
     }
 
     public SettingsProfileVO profile(long customerId) {
@@ -91,10 +94,16 @@ public class PassengerSettingsService {
     }
 
     public AccountCancelResultVO confirmAccountCancel(long customerId, AccountCancelConfirmRequest req) {
-        if (hasActiveOrder(customerId)) {
+        LegacyOrderRiskDecision legacyOrderRisk = legacyOrderRisk(customerId);
+        try {
+            orderLifecycleShadow.compare(customerId, legacyOrderRisk);
+        } catch (RuntimeException ex) {
+            log.warn("Order生命周期影子预检异常，继续沿用旧注销裁决 customerId={}", customerId);
+        }
+        if (legacyOrderRisk == LegacyOrderRiskDecision.ACTIVE_ORDER) {
             throw new BizErrorException(409, "当前存在进行中订单，请先完成或取消订单后再注销");
         }
-        if (hasUnsettledOrder(customerId)) {
+        if (legacyOrderRisk == LegacyOrderRiskDecision.UNSETTLED_ORDER) {
             throw new BizErrorException(409, "当前存在未结清订单，请结清后再注销");
         }
         if (hasLockedCoupon(customerId)) {
@@ -110,6 +119,15 @@ public class PassengerSettingsService {
         out.setRequireLogin(data.getRequireLogin());
         log.info("乘客 BFF 注销账号完成 customerId={}", customerId);
         return out;
+    }
+
+    private LegacyOrderRiskDecision legacyOrderRisk(long customerId) {
+        if (hasActiveOrder(customerId)) {
+            return LegacyOrderRiskDecision.ACTIVE_ORDER;
+        }
+        return hasUnsettledOrder(customerId)
+                ? LegacyOrderRiskDecision.UNSETTLED_ORDER
+                : LegacyOrderRiskDecision.PASS;
     }
 
     private boolean hasActiveOrder(long customerId) {

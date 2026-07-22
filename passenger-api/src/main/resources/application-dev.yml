@@ -6,6 +6,11 @@ passenger:
   internal-auth:
     token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
 
+order:
+  lifecycle:
+    internal-auth:
+      token: ${ORDER_LIFECYCLE_INTERNAL_TOKEN:dev-order-lifecycle-change-me}
+
 coupon:
   claim-identity:
     phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET:dev-coupon-claim-secret-change-me}

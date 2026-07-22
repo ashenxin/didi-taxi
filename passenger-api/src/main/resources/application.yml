@@ -23,6 +23,13 @@ passenger:
     enabled: ${PASSENGER_WS_ENABLED:true}
     heartbeat-timeout-ms: 90000
 
+order:
+  lifecycle:
+    internal-auth:
+      token: ${ORDER_LIFECYCLE_INTERNAL_TOKEN:dev-order-lifecycle-change-me}
+      connect-timeout-ms: ${ORDER_LIFECYCLE_CONNECT_TIMEOUT_MS:300}
+      read-timeout-ms: ${ORDER_LIFECYCLE_READ_TIMEOUT_MS:800}
+
 coupon:
   claim-identity:
     phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET:}

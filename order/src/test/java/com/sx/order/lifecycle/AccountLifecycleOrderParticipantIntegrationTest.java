@@ -9,6 +9,7 @@ import com.sx.order.lifecycle.dao.OrderAccountLifecycleProjectionMapper;
 import com.sx.order.lifecycle.dao.OrderAccountLifecycleEventInboxMapper;
 import com.sx.order.lifecycle.dao.OrderLifecycleParticipantInboxMapper;
 import com.sx.order.lifecycle.exception.OrderLifecycleCommandConflictException;
+import com.sx.order.lifecycle.exception.OrderLifecycleParticipantUnavailableException;
 import com.sx.order.lifecycle.model.OrderLifecycleBlocker;
 import com.sx.order.lifecycle.model.OrderLifecycleCommand;
 import com.sx.order.lifecycle.model.OrderLifecycleDecision;
@@ -18,6 +19,7 @@ import com.sx.order.lifecycle.service.AccountLifecycleOrderParticipantService;
 import com.sx.order.lifecycle.service.OrderLifecycleProjectionService;
 import com.sx.order.model.TripOrder;
 import com.sx.order.model.TripOrderSettlement;
+import com.sx.order.service.TripOrderWriteService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +51,7 @@ class AccountLifecycleOrderParticipantIntegrationTest {
     @Autowired private AccountLifecycleOrderParticipantService participant;
     @Autowired private OrderLifecycleProjectionService projections;
     @SpyBean private OrderLifecycleParticipantInboxMapper inboxMapper;
+    @SpyBean private TripOrderWriteService orderWriteService;
     @Autowired private OrderAccountLifecycleProjectionMapper projectionMapper;
     @Autowired private OrderAccountLifecycleEventInboxMapper eventInboxMapper;
     @Autowired private TripOrderEntityMapper orderMapper;
@@ -61,6 +64,7 @@ class AccountLifecycleOrderParticipantIntegrationTest {
     @BeforeEach
     void clean() {
         reset(inboxMapper);
+        reset(orderWriteService);
         settlementMapper.delete(null);
         outboxMapper.delete(null);
         eventMapper.delete(null);
@@ -79,7 +83,7 @@ class AccountLifecycleOrderParticipantIntegrationTest {
 
         assertThatThrownBy(() -> participant.fence(
                 command("op-rollback", 12008L, 1L, "event-rollback")))
-                .isInstanceOf(IllegalStateException.class);
+                .isInstanceOf(OrderLifecycleParticipantUnavailableException.class);
 
         reset(inboxMapper);
         assertThat(projectionMapper.selectById(12008L).getLifecycleStatus()).isEqualTo("ACTIVE");
@@ -133,6 +137,34 @@ class AccountLifecycleOrderParticipantIntegrationTest {
         assertThat(participant.fence(command("op-unknown", 12005L, 1L, "event-unknown")).blockers())
                 .containsExactly(new OrderLifecycleBlocker(
                         "SETTLEMENT_UNKNOWN", "ORDER", "UNKNOWN-12005", "CONTACT_OPERATIONS"));
+    }
+
+    @Test
+    void manualPaymentReviewRequiresOperationsInsteadOfDirectPayment() {
+        seedActive(12009L);
+        TripOrder manual = order(12009L, "MANUAL-12009", 5);
+        orderMapper.insert(manual);
+        settlementMapper.insert(settlement(manual, "PAYMENT_REQUIRED", 1));
+
+        assertThat(participant.fence(command(
+                "op-manual", 12009L, 1L, "event-manual")).blockers())
+                .containsExactly(new OrderLifecycleBlocker(
+                        "SETTLEMENT_UNKNOWN", "ORDER", "MANUAL-12009", "CONTACT_OPERATIONS"));
+    }
+
+    @Test
+    void participantInfrastructureFailureUsesStableUnavailableContract() throws Exception {
+        doThrow(new IllegalStateException("sensitive database details"))
+                .when(orderWriteService).inspectBlockingOrder(12010L);
+
+        mockMvc.perform(post("/api/v1/internal/account-lifecycle/order/precheck")
+                        .header("X-Internal-Token", "dev-order-lifecycle-change-me")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"customerId\":12010}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(503))
+                .andExpect(jsonPath("$.error").value("ACCOUNT_LIFECYCLE_UNKNOWN"))
+                .andExpect(jsonPath("$.msg").value("Order生命周期参与者暂时不可用"));
     }
 
     @Test

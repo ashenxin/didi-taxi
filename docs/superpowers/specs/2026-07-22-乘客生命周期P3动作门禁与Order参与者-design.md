@@ -315,3 +315,19 @@ Tag 只能来自 enum/switch 白名单。customerId、operationNo、orderNo、�
 - Order 参与者提供幂等命令、结果查询和结构化 blocker。
 - 新旧注销检查具备影子差异证据但未提前切换旧 settings。
 - P4、P5、P6、P7 的接口边界保持清晰。
+
+## 15. P3 实现结果
+
+P3 按本设计完成了以下代码收束：
+
+- passenger-api 使用统一 `PassengerActionResolver + PassengerActionPolicy` 执行动作码门禁，Controller 不再各自理解注销状态。
+- Order 使用本地版本化投影和 `AccountWriteFence` 在创建订单事务内做最终裁决；投影缺失或未知时失败关闭。
+- Order 参与者以 `operationNo + stepCode` 唯一认领命令，并在同一事务内完成投影迁移、订单复检和稳定结果快照。
+- `sourceEventId` 由永久 Event Inbox 唯一认领；先认领事件、再锁账户投影，重复事件返回原语义，异参复用返回冲突。
+- 增量 DDL 会先把旧投影当前的 `source_event_id` 和精确请求摘要迁入永久 Inbox；生产回填 SQL 使用同一摘要算法。
+- 旧 settings 仍先计算并执行原有 Order 风险裁决，新 precheck 只生成 `MATCH/LEGACY_ONLY/NEW_ONLY/ERROR` 影子指标。
+- 影子 precheck 使用独立、可配置的短连接/读取超时（默认 300ms/800ms），超时只记 `ERROR`，不替代旧裁决。
+- Order 生命周期内部接口使用独立 Token；基础设施异常统一为 `503 / ACCOUNT_LIFECYCLE_UNKNOWN`，不向响应泄漏底层异常。
+- 成功类 Order 指标只在事务提交后记录；后续回滚改记 `UNKNOWN`，冲突与基础设施异常分别记 `CONFLICT/UNKNOWN`。
+
+上线仍必须严格执行：Order DDL → Passenger 权威数据回填 → 覆盖率与一致性查询全部通过 → 部署 Order → 部署 passenger-api。真实 MySQL 8 双连接行锁、死锁与隔离级别压测保持为上线前人工验证项，H2 并发测试不替代该项。

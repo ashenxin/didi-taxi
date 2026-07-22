@@ -7,6 +7,7 @@ import com.sx.order.lifecycle.exception.AccountLifecycleBlockedException;
 import com.sx.order.lifecycle.exception.AccountLifecycleUnknownException;
 import com.sx.order.lifecycle.exception.OrderLifecycleCommandConflictException;
 import com.sx.order.lifecycle.exception.OrderLifecycleProjectionConflictException;
+import com.sx.order.lifecycle.exception.OrderLifecycleParticipantUnavailableException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.validation.BindException;
@@ -94,6 +95,15 @@ public class GlobalExceptionHandler {
             OrderLifecycleProjectionConflictException e) {
         log.warn("Order生命周期投影版本冲突：{}", e.getMessage());
         return ResultUtil.error(409, "LIFECYCLE_PROJECTION_CONFLICT", e.getMessage(), null);
+    }
+
+    @ExceptionHandler(OrderLifecycleParticipantUnavailableException.class)
+    public ResponseVo<?> orderLifecycleParticipantUnavailableExceptionHandler(
+            OrderLifecycleParticipantUnavailableException e) {
+        log.error("Order生命周期参与者基础设施异常 type={}",
+                e.getCause() == null ? e.getClass().getName() : e.getCause().getClass().getName(), e);
+        return ResultUtil.error(503, "ACCOUNT_LIFECYCLE_UNKNOWN",
+                "Order生命周期参与者暂时不可用", null);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

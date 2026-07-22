@@ -5,12 +5,16 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.order.lifecycle.dao.OrderLifecycleParticipantInboxMapper;
 import com.sx.order.lifecycle.exception.OrderLifecycleCommandConflictException;
+import com.sx.order.lifecycle.exception.AccountLifecycleUnknownException;
+import com.sx.order.lifecycle.exception.OrderLifecycleParticipantUnavailableException;
+import com.sx.order.lifecycle.exception.OrderLifecycleProjectionConflictException;
 import com.sx.order.lifecycle.model.OrderLifecycleBlocker;
 import com.sx.order.lifecycle.model.OrderLifecycleCommand;
 import com.sx.order.lifecycle.model.OrderLifecycleDecision;
 import com.sx.order.lifecycle.model.OrderLifecycleParticipantInbox;
 import com.sx.order.lifecycle.model.OrderLifecycleParticipantResult;
 import com.sx.order.lifecycle.model.OrderLifecyclePrecheckRequest;
+import com.sx.order.lifecycle.metrics.OrderLifecycleMetrics;
 import com.sx.order.model.dto.BlockingOrderResult;
 import com.sx.order.service.TripOrderWriteService;
 import org.springframework.stereotype.Service;
@@ -31,34 +35,53 @@ public class AccountLifecycleOrderParticipantService {
     private final TripOrderWriteService orders;
     private final OrderLifecycleRequestHasher hasher;
     private final ObjectMapper objectMapper;
+    private final OrderLifecycleMetrics metrics;
 
     public AccountLifecycleOrderParticipantService(OrderLifecycleParticipantInboxMapper inboxes,
                                                    OrderLifecycleProjectionService projections,
                                                    TripOrderWriteService orders,
                                                    OrderLifecycleRequestHasher hasher,
-                                                   ObjectMapper objectMapper) {
+                                                   ObjectMapper objectMapper,
+                                                   OrderLifecycleMetrics metrics) {
         this.inboxes = inboxes;
         this.projections = projections;
         this.orders = orders;
         this.hasher = hasher;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
     }
 
     @Transactional(readOnly = true)
     public OrderLifecycleParticipantResult precheck(OrderLifecyclePrecheckRequest request) {
-        return mapBlocking(orders.inspectBlockingOrder(request.customerId()));
+        try {
+            return mapBlocking(orders.inspectBlockingOrder(request.customerId()));
+        } catch (RuntimeException ex) {
+            throw unavailable(ex);
+        }
     }
 
     @Transactional
     public OrderLifecycleParticipantResult fence(OrderLifecycleCommand command) {
         validateCommand(command);
+        try {
+            return executeFence(command);
+        } catch (RuntimeException ex) {
+            RuntimeException translated = unavailable(ex);
+            recordFailure(command.stepCode().trim(), translated);
+            throw translated;
+        }
+    }
+
+    private OrderLifecycleParticipantResult executeFence(OrderLifecycleCommand command) {
         String operationNo = command.operationNo().trim();
         String stepCode = command.stepCode().trim();
         String requestHash = hasher.hash(command);
 
         OrderLifecycleParticipantInbox prior = inboxes.find(operationNo, stepCode);
         if (prior != null) {
-            return replayOrConflict(prior, requestHash);
+            OrderLifecycleParticipantResult replay = replayOrConflict(prior, requestHash);
+            recordDecision(stepCode, replay);
+            return replay;
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -81,7 +104,9 @@ public class AccountLifecycleOrderParticipantService {
             if (raced == null) {
                 throw new IllegalStateException("Order生命周期参与者并发命令状态未知", ex);
             }
-            return replayOrConflict(raced, requestHash);
+            OrderLifecycleParticipantResult replay = replayOrConflict(raced, requestHash);
+            recordDecision(stepCode, replay);
+            return replay;
         }
 
         projections.applyUnderLock(command.toProjectionCommand());
@@ -93,6 +118,7 @@ public class AccountLifecycleOrderParticipantService {
         if (inboxes.updateById(inbox) != 1) {
             throw new IllegalStateException("Order生命周期参与者结果写入失败");
         }
+        recordDecision(stepCode, result);
         return result;
     }
 
@@ -102,8 +128,12 @@ public class AccountLifecycleOrderParticipantService {
         if (operationNo == null || operationNo.isBlank()) {
             throw new IllegalArgumentException("operationNo不能为空");
         }
-        OrderLifecycleParticipantInbox inbox = inboxes.find(operationNo.trim(), stepCode.trim());
-        return inbox == null ? null : fromInbox(inbox);
+        try {
+            OrderLifecycleParticipantInbox inbox = inboxes.find(operationNo.trim(), stepCode.trim());
+            return inbox == null ? null : fromInbox(inbox);
+        } catch (RuntimeException ex) {
+            throw unavailable(ex);
+        }
     }
 
     private OrderLifecycleParticipantResult replayOrConflict(
@@ -142,10 +172,14 @@ public class AccountLifecycleOrderParticipantService {
             return new OrderLifecycleParticipantResult(OrderLifecycleDecision.PASS, List.of());
         }
         OrderLifecycleBlocker blocker;
-        if ("IN_PROGRESS".equals(blocking.settlementStatus())) {
+        if ("CONTACT_OPERATIONS".equals(blocking.action())) {
+            blocker = new OrderLifecycleBlocker("SETTLEMENT_UNKNOWN", "ORDER",
+                    blocking.blockingOrderNo(), "CONTACT_OPERATIONS");
+        } else if ("IN_PROGRESS".equals(blocking.settlementStatus())) {
             blocker = new OrderLifecycleBlocker("ACTIVE_ORDER", "ORDER",
                     blocking.blockingOrderNo(), "CANCEL_ORDER");
-        } else if ("PAYMENT_REQUIRED".equals(blocking.settlementStatus())) {
+        } else if ("PAYMENT_REQUIRED".equals(blocking.settlementStatus())
+                && "GO_TO_PAYMENT".equals(blocking.action())) {
             blocker = new OrderLifecycleBlocker("UNPAID_ORDER", "ORDER",
                     blocking.blockingOrderNo(), "PAY_OUTSTANDING");
         } else {
@@ -166,5 +200,35 @@ public class AccountLifecycleOrderParticipantService {
         if (stepCode == null || !ORDER_FINAL_CHECK.equals(stepCode.trim())) {
             throw new IllegalArgumentException("未知的Order生命周期stepCode");
         }
+    }
+
+    private void recordDecision(String stepCode, OrderLifecycleParticipantResult result) {
+        OrderLifecycleMetrics.ParticipantDecision decision = switch (result.decision()) {
+            case PASS -> OrderLifecycleMetrics.ParticipantDecision.PASS;
+            case BLOCKED -> OrderLifecycleMetrics.ParticipantDecision.BLOCKED;
+            case UNKNOWN -> OrderLifecycleMetrics.ParticipantDecision.UNKNOWN;
+        };
+        metrics.participantCommand(stepCode, decision);
+    }
+
+    private void recordFailure(String stepCode, RuntimeException failure) {
+        OrderLifecycleMetrics.ParticipantDecision decision =
+                failure instanceof OrderLifecycleCommandConflictException
+                        || failure instanceof OrderLifecycleProjectionConflictException
+                        ? OrderLifecycleMetrics.ParticipantDecision.CONFLICT
+                        : OrderLifecycleMetrics.ParticipantDecision.UNKNOWN;
+        metrics.participantCommand(stepCode, decision);
+    }
+
+    private static RuntimeException unavailable(RuntimeException ex) {
+        if (ex instanceof IllegalArgumentException
+                || ex instanceof OrderLifecycleCommandConflictException
+                || ex instanceof OrderLifecycleProjectionConflictException
+                || ex instanceof AccountLifecycleUnknownException
+                || ex instanceof OrderLifecycleParticipantUnavailableException) {
+            return ex;
+        }
+        return new OrderLifecycleParticipantUnavailableException(
+                "Order生命周期参与者暂时不可用", ex);
     }
 }

@@ -9,6 +9,11 @@ passenger:
   internal-auth:
     token: test-passenger-internal-secret-32bytes
 
+order:
+  lifecycle:
+    internal-auth:
+      token: test-order-lifecycle-internal-secret-32bytes
+
 coupon:
   claim-identity:
     phone-hash-secret: test-coupon-phone-hash-secret-at-least-32-bytes

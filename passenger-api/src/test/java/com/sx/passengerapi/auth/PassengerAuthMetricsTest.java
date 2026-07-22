@@ -27,6 +27,8 @@ class PassengerAuthMetricsTest {
                 .doesNotThrowAnyException();
         assertThatCode(() -> metrics.actionDecision(PassengerActionCode.RIDE_CREATE,
                 PassengerActionDecision.DENY)).doesNotThrowAnyException();
+        assertThatCode(() -> metrics.orderShadow(PassengerAuthMetrics.OrderShadowResult.ERROR))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -39,6 +41,7 @@ class PassengerAuthMetricsTest {
         metrics.restrictedIssued();
         metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.LOGOUT);
         metrics.actionDecision(PassengerActionCode.ORDER_CANCEL, PassengerActionDecision.ALLOW);
+        metrics.orderShadow(PassengerAuthMetrics.OrderShadowResult.NEW_ONLY);
 
         assertThat(registry.get("passenger.auth.state.query").tag("result", "success").timer().count())
                 .isEqualTo(1);
@@ -50,6 +53,8 @@ class PassengerAuthMetricsTest {
         assertThat(registry.get("passenger.lifecycle.action.decision")
                 .tag("actionCode", "order_cancel").tag("decision", "allow").counter().count())
                 .isEqualTo(1);
+        assertThat(registry.get("passenger.lifecycle.order_shadow")
+                .tag("result", "new_only").counter().count()).isEqualTo(1);
         assertThat(registry.getMeters()).allSatisfy(meter -> meter.getId().getTags().forEach(tag -> {
             assertThat(tag.getKey()).isIn("result", "reason", "actionCode", "decision");
             assertThat(tag.getValue()).doesNotContain("7", "13800138000", "op-", "token", "exception");

@@ -9,6 +9,8 @@ import com.sx.passengerapi.client.dto.AppPhoneChangeResult;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
 import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
+import com.sx.passengerapi.model.ordercore.TripOrderRow;
+import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.model.settings.AccountCancelConfirmRequest;
 import com.sx.passengerapi.model.settings.AccountCancelResultVO;
 import com.sx.passengerapi.model.settings.PhoneChangeConfirmRequest;
@@ -23,14 +25,17 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PassengerSettingsServiceTest {
     private final OrderClient orderClient = mock(OrderClient.class);
     private final CalculateClient calculateClient = mock(CalculateClient.class);
     private final PassengerLifecycleOrchestrator lifecycleOrchestrator = mock(PassengerLifecycleOrchestrator.class);
+    private final OrderLifecycleShadowPrecheckService orderLifecycleShadow =
+            mock(OrderLifecycleShadowPrecheckService.class);
     private final PassengerSettingsService service = new PassengerSettingsService(
             mock(com.sx.passengerapi.client.PassengerCoreSettingsClient.class),
-            orderClient, calculateClient, lifecycleOrchestrator);
+            orderClient, calculateClient, lifecycleOrchestrator, orderLifecycleShadow);
 
     @Test
     void successfulPhoneChangeClosesOldWsWithoutStartingSaga() {
@@ -63,6 +68,38 @@ class PassengerSettingsServiceTest {
         assertThat(result.getCancelled()).isTrue();
         assertThat(result.getRequireLogin()).isTrue();
         verify(lifecycleOrchestrator).confirmAccountCancel(any(AppAccountCancelConfirmRequest.class));
+        verify(orderLifecycleShadow).compare(10001L, LegacyOrderRiskDecision.PASS);
+    }
+
+    @Test
+    void shadowFailureDoesNotChangeLegacyPassDecision() {
+        when(orderClient.pageOrders(eq(10001L), eq(1), eq(100))).thenReturn(ResponseVo.success(emptyOrderPage()));
+        UnsettledOrderCheckResult unsettled = new UnsettledOrderCheckResult();
+        unsettled.setExists(false);
+        when(orderClient.unsettledExists(10001L)).thenReturn(ResponseVo.success(unsettled));
+        when(calculateClient.lockedCouponsExists(10001L)).thenReturn(ResponseVo.success(false));
+        when(lifecycleOrchestrator.confirmAccountCancel(any())).thenReturn(cancelledResult());
+        when(orderLifecycleShadow.compare(10001L, LegacyOrderRiskDecision.PASS))
+                .thenThrow(new IllegalStateException("shadow unavailable"));
+
+        assertThat(service.confirmAccountCancel(10001L, cancelRequest()).getCancelled()).isTrue();
+    }
+
+    @Test
+    void shadowFailureDoesNotChangeLegacyBlockedDecisionOrCallCancellation() {
+        OrderPageData page = emptyOrderPage();
+        TripOrderRow active = new TripOrderRow();
+        active.setStatus(2);
+        page.setTotal(1);
+        page.setList(java.util.List.of(active));
+        when(orderClient.pageOrders(eq(10001L), eq(1), eq(100))).thenReturn(ResponseVo.success(page));
+        when(orderLifecycleShadow.compare(10001L, LegacyOrderRiskDecision.ACTIVE_ORDER))
+                .thenThrow(new IllegalStateException("shadow unavailable"));
+
+        assertThatThrownBy(() -> service.confirmAccountCancel(10001L, cancelRequest()))
+                .isInstanceOf(BizErrorException.class)
+                .hasMessageContaining("进行中订单");
+        verifyNoInteractions(lifecycleOrchestrator);
     }
 
     private static OrderPageData emptyOrderPage() {

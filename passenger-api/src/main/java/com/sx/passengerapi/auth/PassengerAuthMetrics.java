@@ -46,6 +46,12 @@ public class PassengerAuthMetrics {
         }
     }
 
+    public enum OrderShadowResult {
+        MATCH("match"), LEGACY_ONLY("legacy_only"), NEW_ONLY("new_only"), ERROR("error");
+        private final String tag;
+        OrderShadowResult(String tag) { this.tag = tag; }
+    }
+
     private final MeterRegistry registry;
 
     @Autowired
@@ -80,6 +86,12 @@ public class PassengerAuthMetrics {
         bestEffort(() -> Counter.builder("passenger.lifecycle.action.decision")
                 .tag("actionCode", action == null ? "unknown" : action.name().toLowerCase(Locale.ROOT))
                 .tag("decision", decision == null ? "unknown" : decision.name().toLowerCase(Locale.ROOT))
+                .register(registry).increment());
+    }
+
+    public void orderShadow(OrderShadowResult result) {
+        bestEffort(() -> Counter.builder("passenger.lifecycle.order_shadow")
+                .tag("result", result == null ? "error" : result.tag)
                 .register(registry).increment());
     }
 

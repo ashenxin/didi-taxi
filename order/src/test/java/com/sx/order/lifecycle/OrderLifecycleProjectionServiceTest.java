@@ -3,21 +3,33 @@ package com.sx.order.lifecycle;
 import com.sx.order.lifecycle.dao.OrderAccountLifecycleProjectionMapper;
 import com.sx.order.lifecycle.dao.OrderAccountLifecycleEventInboxMapper;
 import com.sx.order.lifecycle.model.ApplyOrderLifecycleProjectionCommand;
+import com.sx.order.lifecycle.model.OrderAccountLifecycleEventInbox;
 import com.sx.order.lifecycle.model.OrderLifecycleStatus;
 import com.sx.order.lifecycle.service.OrderLifecycleProjectionService;
 import com.sx.order.lifecycle.service.ProjectionApplyResult;
 import com.sx.order.lifecycle.exception.AccountLifecycleUnknownException;
 import com.sx.order.lifecycle.exception.OrderLifecycleProjectionConflictException;
+import com.sx.order.lifecycle.metrics.OrderLifecycleMetrics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -89,6 +101,55 @@ class OrderLifecycleProjectionServiceTest {
         assertThatThrownBy(() -> service.apply(command(10005L, 1,
                 OrderLifecycleStatus.CANCELLED, 3, "op-10005", "event-permanent")))
                 .isInstanceOf(OrderLifecycleProjectionConflictException.class);
+    }
+
+    @Test
+    void sameSourceEventCanBeAppliedConcurrentlyWithoutDuplicateFailure() throws Exception {
+        service.seedActive(10006L, "seed-10006", LocalDateTime.now());
+        var command = command(10006L, 0, OrderLifecycleStatus.CANCELLING, 1,
+                "op-10006", "event-10006-1");
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        Callable<ProjectionApplyResult> task = () -> {
+            ready.countDown();
+            assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+            return service.apply(command);
+        };
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var futures = List.of(executor.submit(task), executor.submit(task));
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(List.of(futures.get(0).get(10, TimeUnit.SECONDS),
+                    futures.get(1).get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(ProjectionApplyResult.APPLIED,
+                            ProjectionApplyResult.REPLAYED);
+        }
+
+        assertThat(eventInboxMapper.selectCount(null)).isEqualTo(2L);
+        assertThat(mapper.selectById(10006L).getLifecycleVersion()).isEqualTo(1L);
+    }
+
+    @Test
+    void eventIsClaimedBeforeAProjectionGapIsReported() {
+        OrderAccountLifecycleProjectionMapper projections =
+                mock(OrderAccountLifecycleProjectionMapper.class);
+        OrderAccountLifecycleEventInboxMapper events =
+                mock(OrderAccountLifecycleEventInboxMapper.class);
+        OrderLifecycleProjectionService isolated = new OrderLifecycleProjectionService(
+                projections, events, mock(OrderLifecycleMetrics.class));
+        when(events.insert(any(OrderAccountLifecycleEventInbox.class))).thenReturn(1);
+        var command = command(10007L, 0, OrderLifecycleStatus.CANCELLING, 1,
+                "op-10007", "event-10007-1");
+
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            assertThatThrownBy(() -> isolated.applyUnderLock(command))
+                    .isInstanceOf(AccountLifecycleUnknownException.class);
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+        verify(events).insert(any(OrderAccountLifecycleEventInbox.class));
     }
 
     private static ApplyOrderLifecycleProjectionCommand command(

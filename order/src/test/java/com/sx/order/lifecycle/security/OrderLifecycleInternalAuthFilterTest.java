@@ -41,6 +41,7 @@ class OrderLifecycleInternalAuthFilterTest {
         assertRejected("/order/api/v1/internal/account-lifecycle;probe/order/fence", "/order", null, 401);
         assertRejected("/api/v1/internal/account-lifecycle%2Forder/fence", "", null, 401);
         assertRejected("/api/v1/internal/account-lifecycle%252Forder/fence", "", null, 401);
+        assertRejected("/api/v1/internal/account-lifecycle%25252Forder/fence", "", null, 401);
     }
 
     @Test

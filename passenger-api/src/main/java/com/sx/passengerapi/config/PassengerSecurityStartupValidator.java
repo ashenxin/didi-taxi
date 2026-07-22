@@ -19,27 +19,32 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
     private final AppJwtProperties jwtProperties;
     private final CouponClaimIdentityProperties claimIdentityProperties;
     private final PassengerInternalClientProperties internalClientProperties;
+    private final OrderLifecycleInternalClientProperties orderLifecycleProperties;
     private final Environment environment;
 
     public PassengerSecurityStartupValidator(AppJwtProperties jwtProperties,
                                              CouponClaimIdentityProperties claimIdentityProperties,
                                              PassengerInternalClientProperties internalClientProperties,
+                                             OrderLifecycleInternalClientProperties orderLifecycleProperties,
                                              Environment environment) {
         this.jwtProperties = jwtProperties;
         this.claimIdentityProperties = claimIdentityProperties;
         this.internalClientProperties = internalClientProperties;
+        this.orderLifecycleProperties = orderLifecycleProperties;
         this.environment = environment;
     }
 
     @Override
     public void afterPropertiesSet() {
         if (!hasOnlyExplicitRelaxedProfiles(environment)) {
-            validateStrict(jwtProperties, claimIdentityProperties, internalClientProperties);
+            validateStrict(jwtProperties, claimIdentityProperties, internalClientProperties,
+                    orderLifecycleProperties);
         }
     }
 
     static void validateStrict(AppJwtProperties jwt, CouponClaimIdentityProperties claimIdentity,
-                               PassengerInternalClientProperties internalClient) {
+                               PassengerInternalClientProperties internalClient,
+                               OrderLifecycleInternalClientProperties orderLifecycle) {
         List<String> errors = new ArrayList<>();
         validateSecret("JWT_SECRET_APP", jwt.getSecret(), "dev-didi-", errors);
         if (!"app-bff".equals(jwt.getAudience())) {
@@ -48,6 +53,7 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
         validateSecret("COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET",
                 claimIdentity.getPhoneHashSecret(), "dev-coupon-", errors);
         validateSecret("PASSENGER_INTERNAL_TOKEN", internalClient.getToken(), "dev-passenger-", errors);
+        validateSecret("ORDER_LIFECYCLE_INTERNAL_TOKEN", orderLifecycle.getToken(), "dev-order-", errors);
         if (!errors.isEmpty()) {
             throw new IllegalStateException("Production security validation failed: " + String.join("; ", errors));
         }

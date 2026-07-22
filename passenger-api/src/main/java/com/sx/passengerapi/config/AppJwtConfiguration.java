@@ -7,7 +7,8 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({
         AppJwtProperties.class,
         CouponClaimIdentityProperties.class,
-        PassengerInternalClientProperties.class
+        PassengerInternalClientProperties.class,
+        OrderLifecycleInternalClientProperties.class
 })
 public class AppJwtConfiguration {
 }

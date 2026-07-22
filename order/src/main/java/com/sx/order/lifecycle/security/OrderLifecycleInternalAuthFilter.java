@@ -13,6 +13,7 @@ import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.UriUtils;
+import org.springframework.web.util.ServletRequestPathUtils;
 import org.springframework.web.util.pattern.PathPattern;
 import org.springframework.web.util.pattern.PathPatternParser;
 
@@ -42,6 +43,14 @@ public class OrderLifecycleInternalAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
+        try {
+            if (isProtectedPath(ServletRequestPathUtils.parseAndCache(request)
+                    .pathWithinApplication().value())) {
+                return false;
+            }
+        } catch (RuntimeException ignored) {
+            // 原始URI仍需参与失败关闭判断，避免畸形编码绕过内部边界。
+        }
         return !isProtectedPath(pathWithinApplication(request));
     }
 
@@ -79,7 +88,7 @@ public class OrderLifecycleInternalAuthFilter extends OncePerRequestFilter {
 
     private static boolean isProtectedPath(String rawPath) {
         String candidate = rawPath;
-        for (int decodeCount = 0; decodeCount <= 2; decodeCount++) {
+        for (int decodeCount = 0; decodeCount <= rawPath.length(); decodeCount++) {
             if (pathMatches(candidate) || hasProtectedPrefixBoundary(candidate)) return true;
             try {
                 String decoded = UriUtils.decode(candidate, StandardCharsets.UTF_8);

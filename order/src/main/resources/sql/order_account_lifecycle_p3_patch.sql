@@ -25,6 +25,28 @@ CREATE TABLE IF NOT EXISTS `order_account_lifecycle_projection` (
     KEY `idx_order_lifecycle_status_version` (`lifecycle_status`, `lifecycle_version`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='乘客账户生命周期Order本地投影';
 
+-- 兼容先上线旧版投影表的环境：在投影被后续事件覆盖前，把当前source_event_id补入永久Inbox。
+-- 摘要算法与OrderLifecycleProjectionService完全一致：每段均为 UTF-8字节数:value;，空operationNo为0:;。
+INSERT INTO `order_account_lifecycle_event_inbox`
+    (`source_event_id`, `customer_id`, `lifecycle_version`, `request_hash`, `created_at`)
+SELECT p.source_event_id,
+       p.customer_id,
+       p.lifecycle_version,
+       SHA2(CONCAT(
+           OCTET_LENGTH(CAST(p.customer_id AS CHAR)), ':', p.customer_id, ';',
+           OCTET_LENGTH(CAST(p.business_status AS CHAR)), ':', p.business_status, ';',
+           OCTET_LENGTH(TRIM(p.lifecycle_status)), ':', TRIM(p.lifecycle_status), ';',
+           OCTET_LENGTH(CAST(p.lifecycle_version AS CHAR)), ':', p.lifecycle_version, ';',
+           IF(p.operation_no IS NULL OR TRIM(p.operation_no) = '', '0:;',
+              CONCAT(OCTET_LENGTH(TRIM(p.operation_no)), ':', TRIM(p.operation_no), ';')),
+           OCTET_LENGTH(TRIM(p.source_event_id)), ':', TRIM(p.source_event_id), ';'
+       ), 256),
+       p.updated_at
+FROM `order_account_lifecycle_projection` p
+ON DUPLICATE KEY UPDATE
+    `request_hash` = IF(`order_account_lifecycle_event_inbox`.`request_hash` = VALUES(`request_hash`),
+                        `order_account_lifecycle_event_inbox`.`request_hash`, NULL);
+
 CREATE TABLE IF NOT EXISTS `order_lifecycle_participant_inbox` (
     `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
     `operation_no` VARCHAR(64) NOT NULL COMMENT '生命周期操作号',
@@ -41,5 +63,4 @@ CREATE TABLE IF NOT EXISTS `order_lifecycle_participant_inbox` (
     KEY `idx_order_lifecycle_inbox_customer` (`customer_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Order生命周期参与者幂等结果';
 
--- 回填语句将在 P3.4 根据 Passenger 权威库的实际连通方式生成。
 -- 硬门禁启用前必须保证所有可下单乘客均已有 ACTIVE 投影；缺失投影会按 503 fail-close。
