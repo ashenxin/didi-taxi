@@ -1,7 +1,12 @@
 package com.sx.passengerapi.ws;
 
 import com.sx.passengerapi.auth.AppJwtService;
-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
+import com.sx.passengerapi.auth.InvalidPassengerSessionException;
+import com.sx.passengerapi.auth.PassengerAuthDecisionService;
+import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
+import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
+import com.sx.passengerapi.common.vo.ResponseVo;
+import feign.FeignException;
 import io.jsonwebtoken.JwtException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -14,6 +19,9 @@ import org.springframework.web.socket.server.HandshakeInterceptor;
 
 import java.net.URI;
 import java.util.Map;
+import java.util.Objects;
+
+import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
 
 @Component
 @Slf4j
@@ -23,14 +31,17 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
 
     private final PassengerWsProperties wsProperties;
     private final AppJwtService jwtService;
-    private final PassengerTokenVersionStore tokenVersionStore;
+    private final PassengerCoreAuthStateClient authStateClient;
+    private final PassengerAuthDecisionService decisionService;
 
     public PassengerWsHandshakeInterceptor(PassengerWsProperties wsProperties,
                                            AppJwtService jwtService,
-                                           PassengerTokenVersionStore tokenVersionStore) {
+                                           PassengerCoreAuthStateClient authStateClient,
+                                           PassengerAuthDecisionService decisionService) {
         this.wsProperties = wsProperties;
         this.jwtService = jwtService;
-        this.tokenVersionStore = tokenVersionStore;
+        this.authStateClient = authStateClient;
+        this.decisionService = decisionService;
     }
 
     @Override
@@ -45,23 +56,34 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
         try {
             String token = extractToken(request);
             var parsed = jwtService.parseAndVerify(token);
-            if (parsed.audit() != 2) {
-                response.setStatusCode(HttpStatus.UNAUTHORIZED);
+            ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
+            if (result == null || !Objects.equals(result.getCode(), HttpStatus.OK.value())
+                    || result.getData() == null) {
+                response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
                 return false;
             }
-            Long tv = tokenVersionStore.currentVersion(parsed.customerId());
-            if (tv == null || tv.longValue() != parsed.tokenVersion()) {
-                response.setStatusCode(HttpStatus.UNAUTHORIZED);
+
+            if (parsed.scope() == LIFECYCLE_RESTRICTED) {
+                decisionService.verify(parsed, result.getData(), 1);
+                response.setStatusCode(HttpStatus.FORBIDDEN);
                 return false;
             }
+
+            decisionService.verify(parsed, result.getData(), 2);
             attributes.put(ATTR_CUSTOMER_ID, parsed.customerId());
             return true;
+        } catch (InvalidPassengerSessionException e) {
+            response.setStatusCode(HttpStatus.UNAUTHORIZED);
+            return false;
         } catch (JwtException | IllegalArgumentException e) {
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
+        } catch (FeignException e) {
+            response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+            return false;
         } catch (Exception e) {
-            log.warn("WS handshake error: {}", e.toString());
-            response.setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR);
+            log.warn("WS handshake authentication failed type={}", e.getClass().getSimpleName());
+            response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
             return false;
         }
     }

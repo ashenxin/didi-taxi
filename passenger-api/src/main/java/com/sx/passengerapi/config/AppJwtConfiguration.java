@@ -4,6 +4,10 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
-@EnableConfigurationProperties({AppJwtProperties.class, CouponClaimIdentityProperties.class})
+@EnableConfigurationProperties({
+        AppJwtProperties.class,
+        CouponClaimIdentityProperties.class,
+        PassengerInternalClientProperties.class
+})
 public class AppJwtConfiguration {
 }

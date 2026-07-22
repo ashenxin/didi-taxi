@@ -1,6 +1,10 @@
 package com.sx.passengerapi.auth;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
+import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
+import com.sx.passengerapi.common.vo.ResponseVo;
+import feign.FeignException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -13,9 +17,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
 
 /**
- * 校验乘客 JWT 签名、aud、{@code tv} 与 Redis 当前版本一致；通过后注入 {@code X-User-Id}/{@code X-User-Phone}。
+ * 校验乘客 JWT 签名、aud 及 passenger DB 权威认证状态；通过后注入可信身份头。
  * 公开路径：登录、发短信；{@code POST /app/api/v1/auth/logout} 须鉴权。
  */
 @Component
@@ -23,17 +31,21 @@ import java.util.Map;
 public class PassengerJwtAuthFilter extends OncePerRequestFilter {
 
     private static final String BEARER = "Bearer ";
+    private static final Set<String> RESTRICTED_LIFECYCLE_PATHS = Set.of();
 
     private final AppJwtService jwtService;
-    private final PassengerTokenVersionStore tokenVersionStore;
+    private final PassengerCoreAuthStateClient authStateClient;
+    private final PassengerAuthDecisionService decisionService;
     private final ObjectMapper objectMapper;
 
     public PassengerJwtAuthFilter(
             AppJwtService jwtService,
-            PassengerTokenVersionStore tokenVersionStore,
+            PassengerCoreAuthStateClient authStateClient,
+            PassengerAuthDecisionService decisionService,
             ObjectMapper objectMapper) {
         this.jwtService = jwtService;
-        this.tokenVersionStore = tokenVersionStore;
+        this.authStateClient = authStateClient;
+        this.decisionService = decisionService;
         this.objectMapper = objectMapper;
     }
 
@@ -79,18 +91,29 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        Long cur = tokenVersionStore.currentVersion(parsed.customerId());
-        if (cur == null || cur.longValue() != parsed.tokenVersion()) {
+        final PassengerAuthContext authContext;
+        try {
+            ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
+            if (result == null || !Objects.equals(result.getCode(), HttpServletResponse.SC_OK)
+                    || result.getData() == null) {
+                writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "认证服务暂时不可用");
+                return;
+            }
+            authContext = decisionService.verify(parsed, result.getData(), 1);
+        } catch (InvalidPassengerSessionException e) {
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "登录已失效，请重新登录");
             return;
-        }
-
-        if (parsed.audit() != 1) {
-            writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "token 渠道不匹配，请重新登录或使用 WebSocket 专用令牌");
+        } catch (FeignException e) {
+            writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "认证服务暂时不可用");
             return;
         }
 
-        filterChain.doFilter(new PassengerAuthRequestWrapper(request, parsed.customerId(), parsed.phone()), response);
+        if (authContext.scope() == LIFECYCLE_RESTRICTED && !isRestrictedLifecyclePath(path)) {
+            writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "受限会话不可访问该资源");
+            return;
+        }
+
+        filterChain.doFilter(new PassengerAuthRequestWrapper(request, authContext), response);
     }
 
     private static boolean isPublicAuth(String path, String method) {
@@ -100,6 +123,10 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
         return "/app/api/v1/auth/sms/send".equals(path)
                 || "/app/api/v1/auth/login-sms".equals(path)
                 || "/app/api/v1/auth/login-password".equals(path);
+    }
+
+    private static boolean isRestrictedLifecyclePath(String path) {
+        return RESTRICTED_LIFECYCLE_PATHS.contains(path);
     }
 
     private void writeJsonError(HttpServletResponse response, int httpStatus, String msg) throws IOException {

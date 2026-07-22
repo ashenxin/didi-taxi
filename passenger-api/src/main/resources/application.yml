@@ -21,6 +21,8 @@ app:
     audience: app-bff
 
 passenger:
+  internal-auth:
+    token: ${PASSENGER_INTERNAL_TOKEN:}
   ws:
     # 运维总闸：false 时拒绝 ws-token / WS 握手
     enabled: ${PASSENGER_WS_ENABLED:true}

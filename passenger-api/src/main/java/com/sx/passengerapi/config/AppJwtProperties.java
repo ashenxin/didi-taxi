@@ -13,6 +13,8 @@ public class AppJwtProperties {
 
     private long expirationSeconds = 604800L;
 
+    private long restrictedExpirationSeconds = 1800L;
+
     /** 与 gateway.application.yml gateway.jwt.audience-app 一致 */
     private String audience = "app-bff";
 
@@ -30,6 +32,14 @@ public class AppJwtProperties {
 
     public void setExpirationSeconds(long expirationSeconds) {
         this.expirationSeconds = expirationSeconds;
+    }
+
+    public long getRestrictedExpirationSeconds() {
+        return restrictedExpirationSeconds;
+    }
+
+    public void setRestrictedExpirationSeconds(long restrictedExpirationSeconds) {
+        this.restrictedExpirationSeconds = restrictedExpirationSeconds;
     }
 
     public String getAudience() {
