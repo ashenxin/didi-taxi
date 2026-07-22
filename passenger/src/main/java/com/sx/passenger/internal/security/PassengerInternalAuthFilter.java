@@ -12,6 +12,8 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.ServletRequestPathUtils;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -24,8 +26,10 @@ public class PassengerInternalAuthFilter extends OncePerRequestFilter {
 
     static final String INTERNAL_TOKEN_HEADER = "X-Internal-Service-Token";
     private static final String REQUEST_ID_HEADER = "X-Request-Id";
-    private static final String APP_PREFIX = "/api/v1/app";
-    private static final String INTERNAL_PREFIX = "/api/v1/internal";
+    private static final PathPattern APP_ROOT = pathPattern("/api/v1/app");
+    private static final PathPattern APP_DESCENDANTS = pathPattern("/api/v1/app/**");
+    private static final PathPattern INTERNAL_ROOT = pathPattern("/api/v1/internal");
+    private static final PathPattern INTERNAL_DESCENDANTS = pathPattern("/api/v1/internal/**");
 
     private final PassengerInternalAuthProperties properties;
     private final ObjectMapper objectMapper;
@@ -37,9 +41,11 @@ public class PassengerInternalAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        ServletRequestPathUtils.parseAndCache(request);
-        String path = ServletRequestPathUtils.getCachedPathValue(request);
-        return !matchesPrefix(path, APP_PREFIX) && !matchesPrefix(path, INTERNAL_PREFIX);
+        var path = ServletRequestPathUtils.parseAndCache(request).pathWithinApplication();
+        return !APP_ROOT.matches(path)
+                && !APP_DESCENDANTS.matches(path)
+                && !INTERNAL_ROOT.matches(path)
+                && !INTERNAL_DESCENDANTS.matches(path);
     }
 
     @Override
@@ -79,7 +85,7 @@ public class PassengerInternalAuthFilter extends OncePerRequestFilter {
                 : ResultUtil.forbidden(message));
     }
 
-    private static boolean matchesPrefix(String path, String prefix) {
-        return path.equals(prefix) || path.startsWith(prefix + "/");
+    private static PathPattern pathPattern(String pattern) {
+        return PathPatternParser.defaultInstance.parse(pattern);
     }
 }

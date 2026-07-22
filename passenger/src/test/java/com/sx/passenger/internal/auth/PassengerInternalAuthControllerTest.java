@@ -17,6 +17,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.net.URI;
+
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -77,6 +79,43 @@ class PassengerInternalAuthControllerTest {
                 7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
 
         mvc.perform(get("/api/v1/internal;probe/auth-state/7").header(INTERNAL_HEADER, TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.customerId").value(7))
+                .andExpect(jsonPath("$.data.authEpoch").value(9))
+                .andExpect(jsonPath("$.data.allowedScope").value("NORMAL"));
+
+        verify(service).loadState(7L);
+    }
+
+    @Test
+    void encodedInternalPrefixCannotBypassAuthentication() throws Exception {
+        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
+                7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
+
+        mvc.perform(get(URI.create("/api/v1/%69nternal/auth-state/7")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
+
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void encodedAppPrefixCannotBypassAuthentication() throws Exception {
+        mvc.perform(post(URI.create("/api/v1/%61pp/auth/login-password"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"phone\":\"13800138000\",\"password\":\"secret\"}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401));
+
+        verifyNoInteractions(appCustomerAuthService);
+    }
+
+    @Test
+    void exactTokenAllowsEncodedInternalPathToReachController() throws Exception {
+        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
+                7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
+
+        mvc.perform(get(URI.create("/api/v1/%69nternal/auth-state/7")).header(INTERNAL_HEADER, TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.customerId").value(7))
                 .andExpect(jsonPath("$.data.authEpoch").value(9))
