@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS `customer_phone_binding_history` (
 -- =============================================================================
 -- 上线前必须完成但不应在本 SQL 中伪造的数据工作：
 -- 1. 使用应用侧 KMS/密钥配置为现存 customer 回填手机号绑定历史。
--- 2. 将 Redis passenger:tv:{customerId} 与 customer.auth_epoch 对齐，之后 Redis 降级为缓存。
+-- 2. P2 统一切换后仅以 customer.auth_epoch 为认证权威，不读取、扫描或回填旧 Redis 会话版本键。
 -- 3. participant 服务增加 (operation_id, step_code) 唯一 Inbox，并保证 Inbox 与副作用同事务。
 -- 4. account-lifecycle 启动时校验 YAML 计划、participant/step_code 契约与唯一 ACTIVE 版本。
 -- 5. 灰度阶段仍保留旧 settings 接口，但内部转调新 Lifecycle Application Service。

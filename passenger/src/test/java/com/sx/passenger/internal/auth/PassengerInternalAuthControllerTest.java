@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.net.URI;
+import java.io.InputStream;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -27,6 +28,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.assertj.core.api.Assertions.assertThat;
 
 class PassengerInternalAuthControllerTest {
 
@@ -190,5 +192,35 @@ class PassengerInternalAuthControllerTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(503))
                 .andExpect(jsonPath("$.msg").value("服务暂不可用，请稍后重试"));
+    }
+
+    @Test
+    void controllerResponsesConformToSharedAuthStateContractFixture() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        try (InputStream input = getClass().getResourceAsStream("/contracts/passenger-auth-state-v1.json")) {
+            assertThat(input).as("共享认证状态契约必须位于 classpath:/contracts").isNotNull();
+            var cases = mapper.readTree(input).path("cases");
+            assertThat(cases).hasSize(3);
+            for (var contractCase : cases) {
+                var expected = contractCase.path("response");
+                long customerId = expected.path("customerId").asLong();
+                AuthSessionScope scope = expected.path("allowedScope").isNull()
+                        ? null : AuthSessionScope.valueOf(expected.path("allowedScope").asText());
+                Integer businessStatus = expected.path("businessStatus").isNull()
+                        ? null : expected.path("businessStatus").asInt();
+                String lifecycleStatus = expected.path("lifecycleStatus").isNull()
+                        ? null : expected.path("lifecycleStatus").asText();
+                String operationNo = expected.path("currentLifecycleOperationNo").isNull()
+                        ? null : expected.path("currentLifecycleOperationNo").asText();
+                when(service.loadState(customerId)).thenReturn(new AuthoritativeAuthState(
+                        customerId, businessStatus, lifecycleStatus, expected.path("authEpoch").asLong(),
+                        operationNo, scope, expected.path("allowed").asBoolean()));
+
+                String response = mvc.perform(get("/api/v1/internal/auth-state/{customerId}", customerId)
+                                .header(INTERNAL_HEADER, TOKEN))
+                        .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+                assertThat(mapper.readTree(response).path("data")).isEqualTo(expected);
+            }
+        }
     }
 }

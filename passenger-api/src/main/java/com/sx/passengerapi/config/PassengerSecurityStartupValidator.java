@@ -17,24 +17,28 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
 
     private final AppJwtProperties jwtProperties;
     private final CouponClaimIdentityProperties claimIdentityProperties;
+    private final PassengerInternalClientProperties internalClientProperties;
     private final Environment environment;
 
     public PassengerSecurityStartupValidator(AppJwtProperties jwtProperties,
                                              CouponClaimIdentityProperties claimIdentityProperties,
+                                             PassengerInternalClientProperties internalClientProperties,
                                              Environment environment) {
         this.jwtProperties = jwtProperties;
         this.claimIdentityProperties = claimIdentityProperties;
+        this.internalClientProperties = internalClientProperties;
         this.environment = environment;
     }
 
     @Override
     public void afterPropertiesSet() {
         if (!environment.acceptsProfiles(RELAXED_PROFILES)) {
-            validateStrict(jwtProperties, claimIdentityProperties);
+            validateStrict(jwtProperties, claimIdentityProperties, internalClientProperties);
         }
     }
 
-    static void validateStrict(AppJwtProperties jwt, CouponClaimIdentityProperties claimIdentity) {
+    static void validateStrict(AppJwtProperties jwt, CouponClaimIdentityProperties claimIdentity,
+                               PassengerInternalClientProperties internalClient) {
         List<String> errors = new ArrayList<>();
         validateSecret("JWT_SECRET_APP", jwt.getSecret(), "dev-didi-", errors);
         if (!"app-bff".equals(jwt.getAudience())) {
@@ -42,6 +46,7 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
         }
         validateSecret("COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET",
                 claimIdentity.getPhoneHashSecret(), "dev-coupon-", errors);
+        validateSecret("PASSENGER_INTERNAL_TOKEN", internalClient.getToken(), "dev-passenger-", errors);
         if (!errors.isEmpty()) {
             throw new IllegalStateException("Production security validation failed: " + String.join("; ", errors));
         }

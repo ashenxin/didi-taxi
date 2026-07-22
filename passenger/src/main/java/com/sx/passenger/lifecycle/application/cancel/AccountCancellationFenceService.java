@@ -4,6 +4,7 @@ import com.sx.passenger.auth.otp.AtomicOtpService;
 import com.sx.passenger.auth.otp.OtpConsumeResult;
 import com.sx.passenger.auth.otp.OtpPurpose;
 import com.sx.passenger.auth.otp.OtpSubject;
+import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.lifecycle.application.CreateLifecycleSnapshotCommand;
 import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
@@ -43,6 +44,7 @@ public class AccountCancellationFenceService {
     private final LifecycleRequestHasher hasher;
     private final LifecycleRuntimeSnapshotFactory snapshotFactory;
     private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
+    private final PassengerAuthMetrics metrics;
 
     public AccountCancellationFenceService(AtomicOtpService otp,
                                             LifecycleSnapshotStore snapshots,
@@ -51,7 +53,8 @@ public class AccountCancellationFenceService {
                                             LifecycleEventMapper events,
                                             PlatformTransactionManager transactionManager,
                                             LifecycleRequestHasher hasher,
-                                            LifecyclePlanRegistry plans) {
+                                            LifecyclePlanRegistry plans,
+                                            PassengerAuthMetrics metrics) {
         this.otp = otp;
         this.snapshots = snapshots;
         this.customers = customers;
@@ -64,6 +67,7 @@ public class AccountCancellationFenceService {
         this.hasher = hasher;
         this.snapshotFactory = new LifecycleRuntimeSnapshotFactory(
                 plans, new UuidLifecycleIdentifierGenerator(), new LifecycleJson());
+        this.metrics = metrics;
     }
 
     public AccountCancellationFenceResult fence(FenceAccountCancellationCommand command) {
@@ -104,6 +108,9 @@ public class AccountCancellationFenceService {
         int customerUpdated = customers.fenceAccountCancellation(
                 command.customerId(), command.expectedLifecycleVersion(), operationNo, now);
         if (customerUpdated != 1) {
+            metrics.lifecycleCasConflict(LifecycleOperationType.ACCOUNT_CANCEL);
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
+                    PassengerAuthMetrics.OperationResult.CONFLICT);
             throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
         }
         Customer fencedCustomer = customers.selectById(command.customerId());
@@ -116,6 +123,7 @@ public class AccountCancellationFenceService {
         int operationUpdated = operations.fenceRequestedCas(operation.getId(), 0L,
                 fencedCustomer.getAuthEpoch(), fencedCustomer.getLifecycleVersion(), now);
         if (operationUpdated != 1) {
+            metrics.lifecycleCasConflict(LifecycleOperationType.ACCOUNT_CANCEL);
             throw new LifecycleOperationConflictException("Lifecycle operation changed while creating fence");
         }
         LifecycleEventEntity fencedEvent = new LifecycleEventEntity()
@@ -128,6 +136,8 @@ public class AccountCancellationFenceService {
         if (events.insert(fencedEvent) != 1) {
             throw new IllegalStateException("Failed to insert lifecycle fence event");
         }
+        metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
+                PassengerAuthMetrics.OperationResult.SUCCESS);
         return new AccountCancellationFenceResult(operation.getId(), operationNo, command.customerId(),
                 fencedCustomer.getLifecycleVersion(), fencedCustomer.getAuthEpoch(), "FENCED");
     }

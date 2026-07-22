@@ -3,6 +3,7 @@ package com.sx.passengerapi.ws;
 import com.sx.passengerapi.auth.AppJwtService;
 import com.sx.passengerapi.auth.InvalidPassengerSessionException;
 import com.sx.passengerapi.auth.PassengerAuthDecisionService;
+import com.sx.passengerapi.auth.PassengerAuthMetrics;
 import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
 import com.sx.passengerapi.common.vo.ResponseVo;
@@ -14,12 +15,14 @@ import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
 import java.net.URI;
 import java.util.Map;
 import java.util.Objects;
+import java.time.Duration;
 
 import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
 
@@ -35,17 +38,29 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
     private final PassengerCoreAuthStateClient authStateClient;
     private final PassengerAuthDecisionService decisionService;
     private final PassengerWsSessionRegistry registry;
+    private final PassengerAuthMetrics metrics;
 
+    @Autowired
     public PassengerWsHandshakeInterceptor(PassengerWsProperties wsProperties,
                                            AppJwtService jwtService,
                                            PassengerCoreAuthStateClient authStateClient,
                                            PassengerAuthDecisionService decisionService,
-                                           PassengerWsSessionRegistry registry) {
+                                           PassengerWsSessionRegistry registry,
+                                           PassengerAuthMetrics metrics) {
         this.wsProperties = wsProperties;
         this.jwtService = jwtService;
         this.authStateClient = authStateClient;
         this.decisionService = decisionService;
         this.registry = registry;
+        this.metrics = metrics;
+    }
+
+    public PassengerWsHandshakeInterceptor(PassengerWsProperties wsProperties, AppJwtService jwtService,
+                                           PassengerCoreAuthStateClient authStateClient,
+                                           PassengerAuthDecisionService decisionService,
+                                           PassengerWsSessionRegistry registry) {
+        this(wsProperties, jwtService, authStateClient, decisionService, registry,
+                new PassengerAuthMetrics());
     }
 
     @Override
@@ -62,15 +77,28 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
             var parsed = jwtService.parseAndVerify(token);
             PassengerWsSessionRegistry.RegistrationPermit permit =
                     registry.captureRegistration(parsed.customerId());
-            ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
+            long queryStartedAt = System.nanoTime();
+            ResponseVo<InternalAuthStateResponse> result;
+            try {
+                result = authStateClient.get(parsed.customerId());
+            } catch (FeignException ex) {
+                metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
+                        PassengerAuthMetrics.AuthStateResult.UNAVAILABLE);
+                throw ex;
+            }
             if (result == null || !Objects.equals(result.getCode(), HttpStatus.OK.value())
                     || result.getData() == null) {
+                metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
+                        PassengerAuthMetrics.AuthStateResult.INVALID_RESPONSE);
                 response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
                 return false;
             }
+            metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
+                    PassengerAuthMetrics.AuthStateResult.SUCCESS);
 
             if (parsed.scope() == LIFECYCLE_RESTRICTED) {
                 decisionService.verify(parsed, result.getData(), 1);
+                metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.RESTRICTED);
                 response.setStatusCode(HttpStatus.FORBIDDEN);
                 return false;
             }
@@ -80,12 +108,15 @@ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
             attributes.put(ATTR_REGISTRATION_PERMIT, permit);
             return true;
         } catch (InvalidPassengerSessionException e) {
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         } catch (JwtException | IllegalArgumentException e) {
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MALFORMED);
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         } catch (FeignException e) {
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.AUTH_STATE_UNAVAILABLE);
             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
             return false;
         } catch (Exception e) {

@@ -7,22 +7,17 @@ server:
 spring:
   application:
     name: passenger-api
-  data:
-    redis:
-      host: ${REDIS_HOST:127.0.0.1}
-      port: ${REDIS_PORT:6379}
-      database: ${REDIS_DB:0}
-
 app:
   jwt:
     # 与网关 gateway.jwt.secret-app 保持一致；非 local/dev/test 必须显式配置。
     secret: ${JWT_SECRET_APP:}
-    expiration-seconds: 604800
+    expiration-seconds: ${JWT_EXPIRATION_SECONDS_APP:86400}
+    restricted-expiration-seconds: ${JWT_RESTRICTED_EXPIRATION_SECONDS_APP:1800}
     audience: app-bff
 
 passenger:
   internal-auth:
-    token: ${PASSENGER_INTERNAL_TOKEN:}
+    token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
   ws:
     # 运维总闸：false 时拒绝 ws-token / WS 握手
     enabled: ${PASSENGER_WS_ENABLED:true}

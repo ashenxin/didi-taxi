@@ -5,6 +5,7 @@ import com.sx.passenger.auth.otp.AtomicOtpService;
 import com.sx.passenger.auth.otp.OtpConsumeResult;
 import com.sx.passenger.auth.otp.OtpPurpose;
 import com.sx.passenger.auth.otp.OtpSubject;
+import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.lifecycle.application.CreateLifecycleSnapshotCommand;
 import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
@@ -70,6 +71,7 @@ public class CustomerPhoneChangeService {
     private final LifecycleStepStateMachine stepStateMachine = new LifecycleStepStateMachine();
     private final TransactionTemplate withoutTransaction;
     private final TransactionTemplate databaseTransaction;
+    private final PassengerAuthMetrics metrics;
 
     public CustomerPhoneChangeService(AtomicOtpService otp,
                                       LifecycleSnapshotStore snapshots,
@@ -82,7 +84,8 @@ public class CustomerPhoneChangeService {
                                       PhoneBindingValueFactory bindingValues,
                                       LifecycleRequestHasher hasher,
                                       LifecyclePlanRegistry plans,
-                                      PlatformTransactionManager transactionManager) {
+                                      PlatformTransactionManager transactionManager,
+                                      PassengerAuthMetrics metrics) {
         this.otp = otp;
         this.snapshots = snapshots;
         this.customers = customers;
@@ -99,6 +102,7 @@ public class CustomerPhoneChangeService {
         this.withoutTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
         this.databaseTransaction = new TransactionTemplate(transactionManager);
         this.databaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
+        this.metrics = metrics;
     }
 
     public ChangeCustomerPhoneResult change(ChangeCustomerPhoneCommand command) {
@@ -147,17 +151,22 @@ public class CustomerPhoneChangeService {
                     command.expectedLifecycleVersion());
         } catch (DuplicateKeyException ex) {
             if (hasConstraint(ex, "uk_customer_phone_active")) {
+                metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
                 throw new LifecycleOperationConflictException("New phone is already occupied");
             }
             throw ex;
         }
         if (customerUpdated != 1) {
+            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
+                    PassengerAuthMetrics.OperationResult.CONFLICT);
             throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
         }
         Customer changed = customers.selectById(command.customerId());
         if (changed == null) throw new LifecycleOperationConflictException("Customer disappeared during phone change");
 
         if (bindings.replaceActive(command.customerId(), operation.getOperationNo(), now) != 1) {
+            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
             throw new LifecycleOperationConflictException("Active phone binding changed concurrently");
         }
         Long maxVersion = bindings.selectMaxBindingVersion(command.customerId());
@@ -171,6 +180,7 @@ public class CustomerPhoneChangeService {
         operationStateMachine.requireTransition(LifecycleOperationType.PHONE_CHANGE,
                 LifecycleOperationStatus.REQUESTED, LifecycleOperationStatus.EXECUTING, false);
         if (operations.startPhoneChangeCas(operation.getId(), 0L, now) != 1) {
+            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
             throw new LifecycleOperationConflictException("Phone change operation could not start");
         }
         insertTransitionEvent(operation, "REQUESTED", "EXECUTING", "PHONE_CHANGE_STARTED", command, now);
@@ -184,6 +194,7 @@ public class CustomerPhoneChangeService {
                 .set(LifecycleStepEntity::getStartedAt, now)
                 .set(LifecycleStepEntity::getUpdatedAt, now));
         if (startedSteps != snapshot.steps().size()) {
+            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
             throw new LifecycleOperationConflictException("Phone change steps could not start");
         }
         stepStateMachine.requireTransition(LifecycleStepStatus.RUNNING, LifecycleStepStatus.SUCCEEDED);
@@ -194,6 +205,7 @@ public class CustomerPhoneChangeService {
                 .set(LifecycleStepEntity::getCompletedAt, now)
                 .set(LifecycleStepEntity::getUpdatedAt, now));
         if (completedSteps != snapshot.steps().size()) {
+            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
             throw new LifecycleOperationConflictException("Phone change steps changed concurrently");
         }
 
@@ -201,11 +213,15 @@ public class CustomerPhoneChangeService {
                 LifecycleOperationStatus.EXECUTING, LifecycleOperationStatus.COMPLETED, false);
         if (operations.completePhoneChangeCas(operation.getId(), 1L, changed.getLifecycleVersion(),
                 changed.getAuthEpoch(), now) != 1) {
+            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
             throw new LifecycleOperationConflictException("Phone change operation could not complete");
         }
         String completedEventId = insertTransitionEvent(operation, "EXECUTING", "COMPLETED",
                 "PHONE_CHANGE_COMPLETED", command, now);
         insertCompletedOutbox(operation, changed, completedEventId, command, now);
+
+        metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
+                PassengerAuthMetrics.OperationResult.SUCCESS);
 
         return new ChangeCustomerPhoneResult(operation.getId(), operation.getOperationNo(), command.customerId(),
                 changed.getLifecycleVersion(), changed.getAuthEpoch(), true);

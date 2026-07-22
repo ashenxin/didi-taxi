@@ -12,6 +12,7 @@ import com.sx.passenger.auth.otp.AtomicOtpService;
 import com.sx.passenger.auth.otp.OtpConsumeResult;
 import com.sx.passenger.auth.otp.OtpPurpose;
 import com.sx.passenger.auth.otp.OtpSubject;
+import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
 import com.sx.passenger.common.util.ResultUtil;
 import com.sx.passenger.common.vo.ResponseVo;
 import com.sx.passenger.dao.CustomerEntityMapper;
@@ -21,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
@@ -46,16 +48,25 @@ public class AppCustomerSettingsService {
     private final StringRedisTemplate redis;
     private final AppCustomerAuthProperties smsProps;
     private final AtomicOtpService otpService;
+    private final PassengerAuthMetrics metrics;
 
+    @Autowired
     public AppCustomerSettingsService(
             CustomerEntityMapper customerMapper,
             StringRedisTemplate redis,
             AppCustomerAuthProperties smsProps,
-            AtomicOtpService otpService) {
+            AtomicOtpService otpService,
+            PassengerAuthMetrics metrics) {
         this.customerMapper = customerMapper;
         this.redis = redis;
         this.smsProps = smsProps;
         this.otpService = otpService;
+        this.metrics = metrics;
+    }
+
+    public AppCustomerSettingsService(CustomerEntityMapper customerMapper, StringRedisTemplate redis,
+                                      AppCustomerAuthProperties smsProps, AtomicOtpService otpService) {
+        this(customerMapper, redis, smsProps, otpService, new PassengerAuthMetrics());
     }
 
     public ResponseVo<AppSettingsProfileResponse> profile(Long customerId) {
@@ -127,11 +138,17 @@ public class AppCustomerSettingsService {
             int updated = customerMapper.changePhoneCas(
                     req.getCustomerId(), newPhone, lifecycleVersion(current));
             if (updated != 1) {
+                metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
+                        PassengerAuthMetrics.OperationResult.CONFLICT);
                 return ResultUtil.error(409, "账号状态已变化，请重试");
             }
         } catch (DuplicateKeyException e) {
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
+                    PassengerAuthMetrics.OperationResult.CONFLICT);
             return ResultUtil.error(409, "该手机号已被使用");
         }
+        metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
+                PassengerAuthMetrics.OperationResult.SUCCESS);
         AppPhoneChangeResult out = new AppPhoneChangeResult();
         out.setChanged(true);
         out.setRequireLogin(true);
@@ -185,8 +202,12 @@ public class AppCustomerSettingsService {
         int updated = customerMapper.cancelAccountCas(
                 req.getCustomerId(), lifecycleVersion(current), cancelledAt);
         if (updated != 1) {
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
+                    PassengerAuthMetrics.OperationResult.CONFLICT);
             return ResultUtil.error(409, "账号状态已变化，请重试");
         }
+        metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
+                PassengerAuthMetrics.OperationResult.SUCCESS);
         AppAccountCancelResult out = new AppAccountCancelResult();
         out.setCancelled(true);
         out.setRequireLogin(true);

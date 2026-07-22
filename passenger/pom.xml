@@ -96,6 +96,18 @@
     </dependencies>
 
     <build>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+            </testResource>
+            <testResource>
+                <directory>../docs/superpowers/contracts</directory>
+                <includes>
+                    <include>passenger-auth-state-v1.json</include>
+                </includes>
+                <targetPath>contracts</targetPath>
+            </testResource>
+        </testResources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

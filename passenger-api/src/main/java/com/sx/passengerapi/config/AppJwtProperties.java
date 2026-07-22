@@ -11,7 +11,7 @@ public class AppJwtProperties {
 
     private String secret = "";
 
-    private long expirationSeconds = 604800L;
+    private long expirationSeconds = 86400L;
 
     private long restrictedExpirationSeconds = 1800L;
 

@@ -3,6 +3,7 @@ package com.sx.passengerapi.service;
 import com.sx.passengerapi.auth.AppJwtService;
 import com.sx.passengerapi.auth.PassengerAuthContext;
 import com.sx.passengerapi.auth.PassengerSessionScope;
+import com.sx.passengerapi.auth.PassengerAuthMetrics;
 import com.sx.passengerapi.client.PassengerCoreAuthClient;
 import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
@@ -24,6 +25,7 @@ import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
 import feign.FeignException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
 
@@ -37,20 +39,34 @@ public class PassengerAuthService {
     private final PassengerOrderService passengerOrderService;
     private final PassengerWsProperties passengerWsProperties;
     private final PassengerWsSessionRegistry sessions;
+    private final PassengerAuthMetrics metrics;
 
+    @Autowired
     public PassengerAuthService(
             PassengerCoreAuthClient passengerCoreAuthClient,
             PassengerCoreAuthStateClient authStateClient,
             AppJwtService jwtService,
             PassengerOrderService passengerOrderService,
             PassengerWsProperties passengerWsProperties,
-            PassengerWsSessionRegistry sessions) {
+            PassengerWsSessionRegistry sessions,
+            PassengerAuthMetrics metrics) {
         this.passengerCoreAuthClient = passengerCoreAuthClient;
         this.authStateClient = authStateClient;
         this.jwtService = jwtService;
         this.passengerOrderService = passengerOrderService;
         this.passengerWsProperties = passengerWsProperties;
         this.sessions = sessions;
+        this.metrics = metrics;
+    }
+
+    public PassengerAuthService(PassengerCoreAuthClient passengerCoreAuthClient,
+                                PassengerCoreAuthStateClient authStateClient,
+                                AppJwtService jwtService,
+                                PassengerOrderService passengerOrderService,
+                                PassengerWsProperties passengerWsProperties,
+                                PassengerWsSessionRegistry sessions) {
+        this(passengerCoreAuthClient, authStateClient, jwtService, passengerOrderService,
+                passengerWsProperties, sessions, new PassengerAuthMetrics());
     }
 
     public SmsSendResult sendSms(String phone) {
@@ -176,6 +192,9 @@ public class PassengerAuthService {
         sessions.closeCustomerSessions(brief.getId(), "auth_epoch_changed");
         String token = jwtService.createPassengerToken(
                 brief.getId(), brief.getPhone(), brief.getAuthEpoch(), scope, 1, brief.getOperationNo());
+        if (scope == PassengerSessionScope.LIFECYCLE_RESTRICTED) {
+            metrics.restrictedIssued();
+        }
         CustomerLoginResponse response = new CustomerLoginResponse();
         response.setAccessToken(token);
         response.setTokenType("Bearer");

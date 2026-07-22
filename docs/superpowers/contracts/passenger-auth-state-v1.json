@@ -1,0 +1,41 @@
+{
+  "contract": "passenger-auth-state-v1",
+  "cases": [
+    {
+      "name": "ACTIVE",
+      "response": {
+        "customerId": 7,
+        "businessStatus": 0,
+        "lifecycleStatus": "ACTIVE",
+        "authEpoch": 9,
+        "currentLifecycleOperationNo": null,
+        "allowedScope": "NORMAL",
+        "allowed": true
+      }
+    },
+    {
+      "name": "CANCELLING",
+      "response": {
+        "customerId": 7,
+        "businessStatus": 0,
+        "lifecycleStatus": "CANCELLING",
+        "authEpoch": 10,
+        "currentLifecycleOperationNo": "contract-operation-1",
+        "allowedScope": "LIFECYCLE_RESTRICTED",
+        "allowed": true
+      }
+    },
+    {
+      "name": "REJECTED",
+      "response": {
+        "customerId": 404,
+        "businessStatus": null,
+        "lifecycleStatus": null,
+        "authEpoch": 0,
+        "currentLifecycleOperationNo": null,
+        "allowedScope": null,
+        "allowed": false
+      }
+    }
+  ]
+}

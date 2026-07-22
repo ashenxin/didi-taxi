@@ -13,12 +13,14 @@ import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.time.Duration;
 
 import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
 
@@ -37,16 +39,25 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
     private final PassengerCoreAuthStateClient authStateClient;
     private final PassengerAuthDecisionService decisionService;
     private final ObjectMapper objectMapper;
+    private final PassengerAuthMetrics metrics;
 
+    @Autowired
     public PassengerJwtAuthFilter(
             AppJwtService jwtService,
             PassengerCoreAuthStateClient authStateClient,
             PassengerAuthDecisionService decisionService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            PassengerAuthMetrics metrics) {
         this.jwtService = jwtService;
         this.authStateClient = authStateClient;
         this.decisionService = decisionService;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
+    }
+
+    public PassengerJwtAuthFilter(AppJwtService jwtService, PassengerCoreAuthStateClient authStateClient,
+                                  PassengerAuthDecisionService decisionService, ObjectMapper objectMapper) {
+        this(jwtService, authStateClient, decisionService, objectMapper, new PassengerAuthMetrics());
     }
 
     @Override
@@ -74,11 +85,13 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
 
         String raw = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (raw == null || !raw.regionMatches(true, 0, BEARER, 0, BEARER.length())) {
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MISSING);
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "缺少或非法的 Authorization");
             return;
         }
         String token = raw.substring(BEARER.length()).trim();
         if (token.isEmpty()) {
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MISSING);
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "缺少或非法的 Authorization");
             return;
         }
@@ -87,28 +100,39 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
         try {
             parsed = jwtService.parseAndVerify(token);
         } catch (Exception e) {
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MALFORMED);
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "token 无效");
             return;
         }
 
         final PassengerAuthContext authContext;
+        long queryStartedAt = System.nanoTime();
         try {
             ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
             if (result == null || !Objects.equals(result.getCode(), HttpServletResponse.SC_OK)
                     || result.getData() == null) {
+                metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
+                        PassengerAuthMetrics.AuthStateResult.INVALID_RESPONSE);
                 writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "认证服务暂时不可用");
                 return;
             }
+            metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
+                    PassengerAuthMetrics.AuthStateResult.SUCCESS);
             authContext = decisionService.verify(parsed, result.getData(), 1);
         } catch (InvalidPassengerSessionException e) {
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "登录已失效，请重新登录");
             return;
         } catch (FeignException e) {
+            metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
+                    PassengerAuthMetrics.AuthStateResult.UNAVAILABLE);
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.AUTH_STATE_UNAVAILABLE);
             writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "认证服务暂时不可用");
             return;
         }
 
         if (authContext.scope() == LIFECYCLE_RESTRICTED && !isRestrictedLifecyclePath(path)) {
+            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.RESTRICTED);
             writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "受限会话不可访问该资源");
             return;
         }

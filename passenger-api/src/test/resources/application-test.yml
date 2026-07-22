@@ -1,6 +1,13 @@
 app:
   jwt:
     secret: test-didi-app-jwt-secret-at-least-32-bytes!!
+    audience: app-bff
+    expiration-seconds: 86400
+    restricted-expiration-seconds: 1800
+
+passenger:
+  internal-auth:
+    token: test-passenger-internal-secret-32bytes
 
 coupon:
   claim-identity:

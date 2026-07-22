@@ -286,3 +286,58 @@ P2 不引入 mTLS 基础设施，内部 Token 是当前最小可落地方案。
 - epoch 变化后本节点 WS 关闭，旧 WS Token 不能重连。
 - 没有新公开换号/注销 Controller，旧 settings 未切到新 Saga。
 - passenger 与 passenger-api 全量 verify 通过。
+
+## 18. P2 实现结果与上线检查单
+
+### 18.1 已落地组件
+
+认证职责已经收束到以下稳定边界：
+
+- passenger 的 `AtomicOtpService` 统一生成并以 Lua 原子消费 LOGIN、PHONE_CHANGE_NEW_PHONE、ACCOUNT_CANCEL 三种 OTP。
+- passenger 的 `PassengerAuthEpochService` 统一完成登录/重新认证的 epoch 递增、权威状态读取和登出 CAS。
+- passenger 的 `PassengerInternalAuthFilter` 保护内部路径；`PassengerInternalAuthController` 只适配
+  `GET /api/v1/internal/auth-state/{customerId}` 与 `POST /api/v1/internal/auth-state/logout`。
+- passenger 的 `AccountCancellationFenceService` 与 `CustomerPhoneChangeService` 是未公开的生命周期应用服务，
+  共同复用 P1 快照和状态机；没有新增 lifecycle Controller。
+- passenger-api 的 `AppJwtService` 只签发、解析 `ae/scope/audit` 契约；`PassengerJwtAuthFilter` 与
+  `PassengerWsHandshakeInterceptor` 每次均回查 passenger 权威状态，认证裁决不依赖 Redis。
+- passenger-api 的 `PassengerWsSessionRegistry` 负责本节点 generation 栅栏、单会话替换和 epoch 变化后的连接关闭。
+- 两模块使用 `docs/superpowers/contracts/passenger-auth-state-v1.json` 作为同一份认证状态契约测试源。
+
+配置口径如下：
+
+- 两端内部身份统一读取 `PASSENGER_INTERNAL_TOKEN`；非 local/dev/test 环境必须至少 32 bytes，且不得包含
+  `change-me` 或以 `dev-passenger-` 开头。
+- passenger-api JWT audience 固定为 `app-bff`，密钥读取 `JWT_SECRET_APP`；普通与受限 TTL 分别读取
+  `JWT_EXPIRATION_SECONDS_APP`（默认 86400 秒）和 `JWT_RESTRICTED_EXPIRATION_SECONDS_APP`（默认 1800 秒）。
+- 旧 settings 的公开入口继续保留原即时编排，不创建 Saga；其换号/注销 SQL 已在同一数据库写入中递增或终结
+  `auth_epoch`，因此不会重新引入 Redis 会话版本权威。
+
+### 18.2 固定低基数指标
+
+以下指标只允许枚举白名单 Tag，不包含 customerId、operationNo、手机号、Token、OTP Key 或异常 message：
+
+- `passenger.auth.state.query{result}`：passenger 权威状态查询时延和结果。
+- `passenger.auth.jwt.rejected{reason}`：JWT/认证状态拒绝原因。
+- `passenger.auth.otp.consume{purpose,result}`：按用途聚合的 OTP 消费结果。
+- `passenger.auth.epoch.bump{cause,result}`：认证代次变更结果。
+- `passenger.auth.restricted.issued`：受限会话签发次数。
+- `passenger.auth.ws.closed{reason}`：本节点 WS 关闭次数。
+- `passenger.lifecycle.cas.conflict{operationType}`：换号/注销生命周期 CAS 冲突。
+
+### 18.3 上线检查单
+
+1. 先部署 passenger，确认 schema 已包含 `auth_epoch/lifecycle_status/current_lifecycle_operation_no`，内部认证状态接口正常，
+   且生产 `PASSENGER_INTERNAL_TOKEN` 通过启动校验。
+2. 再部署 passenger-api，确认 `aud=app-bff`、JWT 密钥和相同的内部 Token 已注入。
+3. 在统一切换点停止接受 `tv`，不读取、不扫描、不回填旧 Redis 会话版本键，并强制所有乘客重新登录。
+4. 观察 HTTP/WS 的 401、403、503 比例，`passenger.auth.state.query` 的 P95/P99/错误率，受限会话签发量、
+   epoch/CAS 冲突和 WS 关闭量；异常上升时先确认 passenger 与数据库容量和内部链路。
+5. 验证 ACTIVE 普通登录、CANCELLING 受限重认证、旧 HTTP/WS Token 拒绝、登出 CAS 和本节点 WS 撤销。
+6. 确认旧 settings 仍按原入口工作，且没有新公开换号/注销 Controller。
+
+### 18.4 回滚边界
+
+回滚只能回退无状态的 BFF 发布物或停止新增流量，不能降低任何 customer 的 `auth_epoch`，不能恢复已经失效的旧
+Token，不能重新接受 `tv`，也不能把 Redis 会话版本恢复为认证权威。已经进入 CANCELLING 或已经完成换号的事务继续
+以前向恢复和数据库状态为准；若 passenger/数据库不可用，HTTP 与 WS 必须保持 503 失败关闭，禁止绕过权威校验放行。

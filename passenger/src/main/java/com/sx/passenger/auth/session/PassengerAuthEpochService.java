@@ -6,6 +6,7 @@ import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.model.Customer;
+import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,16 +24,21 @@ public class PassengerAuthEpochService {
 
     private final CustomerEntityMapper customers;
     private final LifecycleOperationMapper operations;
+    private final PassengerAuthMetrics metrics;
 
-    public PassengerAuthEpochService(CustomerEntityMapper customers, LifecycleOperationMapper operations) {
+    public PassengerAuthEpochService(CustomerEntityMapper customers, LifecycleOperationMapper operations,
+                                     PassengerAuthMetrics metrics) {
         this.customers = customers;
         this.operations = operations;
+        this.metrics = metrics;
     }
 
     @Transactional
     public AppAuthCustomerBrief completeAuthentication(long customerId) {
         requirePositiveCustomerId(customerId);
         if (customers.bumpAuthEpochForAuthentication(customerId) != 1) {
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGIN,
+                    PassengerAuthMetrics.OperationResult.REJECTED);
             throw new AuthStateRejectedException();
         }
         Customer current = customers.selectById(customerId);
@@ -40,8 +46,13 @@ public class PassengerAuthEpochService {
         if (scope == AuthSessionScope.LIFECYCLE_RESTRICTED
                 && operations.updateRestrictedAuthEpoch(customerId, current.getCurrentLifecycleOperationNo(),
                 current.getAuthEpoch(), LocalDateTime.now(ZoneOffset.UTC)) != 1) {
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.REAUTHENTICATION,
+                    PassengerAuthMetrics.OperationResult.REJECTED);
             throw new AuthStateRejectedException();
         }
+        metrics.epochBump(scope == AuthSessionScope.NORMAL
+                        ? PassengerAuthMetrics.EpochCause.LOGIN : PassengerAuthMetrics.EpochCause.REAUTHENTICATION,
+                PassengerAuthMetrics.OperationResult.SUCCESS);
         return AppAuthCustomerBrief.from(current, scope.name());
     }
 
@@ -49,12 +60,18 @@ public class PassengerAuthEpochService {
     public long logout(long customerId, long expectedAuthEpoch) {
         requirePositiveCustomerId(customerId);
         if (expectedAuthEpoch < 0 || customers.bumpAuthEpochForLogout(customerId, expectedAuthEpoch) != 1) {
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
+                    PassengerAuthMetrics.OperationResult.CONFLICT);
             throw new AuthEpochConflictException();
         }
         Customer current = customers.selectById(customerId);
         if (current == null || current.getAuthEpoch() == null) {
+            metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
+                    PassengerAuthMetrics.OperationResult.CONFLICT);
             throw new AuthEpochConflictException();
         }
+        metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
+                PassengerAuthMetrics.OperationResult.SUCCESS);
         return current.getAuthEpoch();
     }
 

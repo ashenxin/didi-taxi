@@ -2,6 +2,8 @@ package com.sx.passengerapi.ws;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import com.sx.passengerapi.auth.PassengerAuthMetrics;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -83,6 +85,16 @@ public class PassengerWsSessionRegistry {
     private final Map<String, Long> customerIdBySessionId = new ConcurrentHashMap<>();
     private final Map<Long, FenceReference> fences = new ConcurrentHashMap<>();
     private final ReferenceQueue<CustomerFence> collectedFences = new ReferenceQueue<>();
+    private final PassengerAuthMetrics metrics;
+
+    public PassengerWsSessionRegistry() {
+        this(new PassengerAuthMetrics());
+    }
+
+    @Autowired
+    public PassengerWsSessionRegistry(PassengerAuthMetrics metrics) {
+        this.metrics = metrics;
+    }
 
     public RegistrationPermit captureRegistration(long customerId) {
         if (customerId <= 0) {
@@ -182,6 +194,7 @@ public class PassengerWsSessionRegistry {
             }
             customerIdBySessionId.remove(current.getSession().getId(), customerId);
             safeClose(current.getSession(), new CloseStatus(4001, sanitizeReason(reason)));
+            metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.from(reason));
         }
     }
 
