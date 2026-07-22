@@ -97,6 +97,9 @@ public class GlobalExceptionHandler {
         if (status == 404) {
             return entity(ResultUtil.error(ExceptionCode.NOT_FOUND.getValue(), "资源不存在"));
         }
+        if (status == 409 && "/app/api/v1/auth/logout".equals(request.getRequestURI())) {
+            return entity(ResultUtil.error(ExceptionCode.CONFLICT.getValue(), "认证状态已变化，请刷新后重试"));
+        }
         if (status == 504) {
             return entity(ResultUtil.error(ExceptionCode.GATEWAY_TIMEOUT.getValue(), "下游服务响应超时，请稍后重试"));
         }

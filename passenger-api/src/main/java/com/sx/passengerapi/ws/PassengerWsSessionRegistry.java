@@ -10,12 +10,16 @@ import org.springframework.web.socket.WebSocketSession;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 @Slf4j
 public class PassengerWsSessionRegistry {
+
+    private static final Set<String> ALLOWED_CLOSE_REASONS = Set.of(
+            "logout", "phone_changed", "account_cancelling", "account_cancelled");
 
     @Getter
     public static class PassengerSession {
@@ -88,6 +92,19 @@ public class PassengerWsSessionRegistry {
                 log.info("WS session removed customerId={} sessionId={}", customerId, session.getId());
             }
         }
+    }
+
+    public void closeCustomerSessions(long customerId, String reason) {
+        PassengerSession current = byCustomerId.remove(customerId);
+        if (current == null || current.getSession() == null) {
+            return;
+        }
+        customerIdBySessionId.remove(current.getSession().getId());
+        safeClose(current.getSession(), new CloseStatus(4001, sanitizeReason(reason)));
+    }
+
+    private static String sanitizeReason(String reason) {
+        return ALLOWED_CLOSE_REASONS.contains(reason) ? reason : "auth_epoch_changed";
     }
 
     public void safeClose(WebSocketSession session, CloseStatus status) {

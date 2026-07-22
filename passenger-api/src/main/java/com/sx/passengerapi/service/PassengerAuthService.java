@@ -1,13 +1,17 @@
 package com.sx.passengerapi.service;
 
 import com.sx.passengerapi.auth.AppJwtService;
-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
+import com.sx.passengerapi.auth.PassengerAuthContext;
+import com.sx.passengerapi.auth.PassengerSessionScope;
 import com.sx.passengerapi.client.PassengerCoreAuthClient;
+import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
 import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
 import com.sx.passengerapi.client.dto.AppLoginPasswordRequest;
 import com.sx.passengerapi.client.dto.AppSmsLoginRequest;
 import com.sx.passengerapi.client.dto.AppSmsSendRequest;
 import com.sx.passengerapi.client.dto.AppSmsSendResult;
+import com.sx.passengerapi.client.dto.InternalLogoutRequest;
+import com.sx.passengerapi.client.dto.InternalLogoutResponse;
 import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.auth.CustomerLoginResponse;
@@ -15,30 +19,36 @@ import com.sx.passengerapi.model.auth.CustomerProfileVO;
 import com.sx.passengerapi.model.auth.PassengerLogoutResult;
 import com.sx.passengerapi.model.auth.SmsSendResult;
 import com.sx.passengerapi.ws.PassengerWsProperties;
+import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+
+import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
 
 @Service
 @Slf4j
 public class PassengerAuthService {
 
     private final PassengerCoreAuthClient passengerCoreAuthClient;
+    private final PassengerCoreAuthStateClient authStateClient;
     private final AppJwtService jwtService;
-    private final PassengerTokenVersionStore tokenVersionStore;
     private final PassengerOrderService passengerOrderService;
     private final PassengerWsProperties passengerWsProperties;
+    private final PassengerWsSessionRegistry sessions;
 
     public PassengerAuthService(
             PassengerCoreAuthClient passengerCoreAuthClient,
+            PassengerCoreAuthStateClient authStateClient,
             AppJwtService jwtService,
-            PassengerTokenVersionStore tokenVersionStore,
             PassengerOrderService passengerOrderService,
-            PassengerWsProperties passengerWsProperties) {
+            PassengerWsProperties passengerWsProperties,
+            PassengerWsSessionRegistry sessions) {
         this.passengerCoreAuthClient = passengerCoreAuthClient;
+        this.authStateClient = authStateClient;
         this.jwtService = jwtService;
-        this.tokenVersionStore = tokenVersionStore;
         this.passengerOrderService = passengerOrderService;
         this.passengerWsProperties = passengerWsProperties;
+        this.sessions = sessions;
     }
 
     public SmsSendResult sendSms(String phone) {
@@ -49,7 +59,7 @@ public class PassengerAuthService {
         if (body.getCode() != 200) {
             throw new BizErrorException(body.getCode(), body.getMsg());
         }
-        log.info("乘客短信发送请求已提交 phone={}", maskPhone(phone));
+        log.info("乘客短信发送请求已提交");
         AppSmsSendResult data = body.getData();
         return new SmsSendResult(data == null ? null : data.getMockCode());
     }
@@ -60,58 +70,67 @@ public class PassengerAuthService {
     }
 
     public CustomerLoginResponse loginPassword(String phone, String password) {
-        AppAuthCustomerBrief brief = unwrap(passengerCoreAuthClient.loginPassword(new AppLoginPasswordRequest(phone, password)));
+        AppAuthCustomerBrief brief = unwrap(
+                passengerCoreAuthClient.loginPassword(new AppLoginPasswordRequest(phone, password)));
         return toLoginResponse(brief);
     }
 
-    /**
-     * 登出：到达前在途单按 PRD §5.6 代乘客取消；到达后/行程中不取消仅提示；最后递增 token 版本使 JWT 失效。
-     */
-    public PassengerLogoutResult logout(long passengerId) {
-        if (passengerId <= 0) {
-            throw new BizErrorException(400, "乘客ID非法");
+    /** 先由 passenger core CAS 失效认证代次，再撤销本节点 WS，最后处理订单清单。 */
+    public PassengerLogoutResult logout(long passengerId, long tokenAuthEpoch) {
+        if (passengerId <= 0 || tokenAuthEpoch <= 0) {
+            throw new BizErrorException(400, "乘客认证信息非法");
         }
-        PassengerLogoutResult side = passengerOrderService.cancelInFlightOrdersOnPassengerLogout(passengerId);
-        tokenVersionStore.nextVersion(passengerId);
-        log.info("乘客已登出 customerId={}", passengerId);
-        return side;
+        unwrapLogout(authStateClient.logout(new InternalLogoutRequest(passengerId, tokenAuthEpoch)));
+        sessions.closeCustomerSessions(passengerId, "logout");
+        try {
+            PassengerLogoutResult result = passengerOrderService.cancelInFlightOrdersOnPassengerLogout(passengerId);
+            if (result == null) {
+                result = new PassengerLogoutResult();
+            }
+            result.setLoggedOut(true);
+            result.setOrderCleanupPending(false);
+            log.info("乘客已登出 customerId={}", passengerId);
+            return result;
+        } catch (RuntimeException ex) {
+            log.error("登出已生效但订单处理失败 customerId={}", passengerId, ex);
+            return PassengerLogoutResult.loggedOutWithPendingCleanup("已经登出，订单处理需重试或查询");
+        }
     }
 
-    /**
-     * 用 HTTP API token（audit=1）换取 WebSocket 握手 token（audit=2），{@code tv} 不变。
-     */
-    public CustomerLoginResponse issueWsToken(long passengerId) {
+    /** 用已由 Filter 验证的 NORMAL HTTP 上下文签发同认证代次的 audit=2 WS 小票。 */
+    public CustomerLoginResponse issueWsToken(PassengerAuthContext context) {
         if (!passengerWsProperties.isEnabled()) {
             throw new BizErrorException(503, "实时通道暂未开放（WebSocket 已关闭）");
         }
-        Long tv = tokenVersionStore.currentVersion(passengerId);
-        if (tv == null) {
+        if (context == null || context.customerId() <= 0 || context.authEpoch() <= 0 || context.audit() != 1) {
             throw new BizErrorException(401, "登录已失效，请重新登录");
         }
-        String wsTok = jwtService.createPassengerToken(passengerId, "", tv, 2);
+        if (context.scope() != NORMAL) {
+            throw new BizErrorException(403, "受限会话不可使用实时通道");
+        }
+        String wsToken = jwtService.createPassengerToken(
+                context.customerId(), context.phone(), context.authEpoch(), NORMAL, 2, null);
         CustomerProfileVO profile = new CustomerProfileVO();
-        profile.setId(passengerId);
+        profile.setId(context.customerId());
         profile.setPhone(null);
 
         CustomerLoginResponse out = new CustomerLoginResponse();
-        out.setAccessToken(wsTok);
+        out.setAccessToken(wsToken);
         out.setTokenType("Bearer");
-        out.setExpiresIn(jwtService.getExpirationSeconds());
+        out.setExpiresIn(jwtService.getExpirationSeconds(NORMAL));
+        out.setScope(NORMAL.name());
+        out.setOperationNo(null);
         out.setCustomer(profile);
-        log.info("乘客 WebSocket Token 已签发 customerId={}", passengerId);
+        log.info("乘客 WebSocket Token 已签发 customerId={}", context.customerId());
         return out;
     }
 
     private AppAuthCustomerBrief unwrap(ResponseVo<AppAuthCustomerBrief> body) {
-        if (body == null) {
+        if (body == null || body.getCode() == null) {
             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
         }
-        Integer code = body.getCode();
-        if (code == null) {
-            throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
-        }
-        if (code != 200) {
-            throw new BizErrorException(code, body.getMsg());
+        if (body.getCode() != 200) {
+            throw new BizErrorException(body.getCode(), body.getMsg());
         }
         if (body.getData() == null || body.getData().getId() == null) {
             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
@@ -119,27 +138,42 @@ public class PassengerAuthService {
         return body.getData();
     }
 
+    private static void unwrapLogout(ResponseVo<InternalLogoutResponse> body) {
+        if (body == null || body.getCode() == null) {
+            throw new BizErrorException(502, "认证服务暂时不可用，请稍后重试");
+        }
+        if (body.getCode() != 200) {
+            throw new BizErrorException(body.getCode(), body.getMsg());
+        }
+    }
+
     private CustomerLoginResponse toLoginResponse(AppAuthCustomerBrief brief) {
+        if (brief.getAuthEpoch() == null || brief.getAuthEpoch() <= 0 || brief.getScope() == null) {
+            throw new BizErrorException(502, "认证服务返回的登录状态不完整");
+        }
+        final PassengerSessionScope scope;
+        try {
+            scope = PassengerSessionScope.valueOf(brief.getScope());
+        } catch (IllegalArgumentException ex) {
+            throw new BizErrorException(502, "认证服务返回的登录状态不完整");
+        }
+
         CustomerProfileVO profile = new CustomerProfileVO();
         profile.setId(brief.getId());
         profile.setPhone(brief.getPhone());
         profile.setNickname(brief.getNickname());
 
-        long tv = tokenVersionStore.nextVersion(brief.getId());
-        String token = jwtService.createPassengerToken(brief.getId(), brief.getPhone(), tv, 1);
-        CustomerLoginResponse resp = new CustomerLoginResponse();
-        resp.setAccessToken(token);
-        resp.setTokenType("Bearer");
-        resp.setExpiresIn(jwtService.getExpirationSeconds());
-        resp.setCustomer(profile);
-        log.info("乘客登录成功 customerId={} phone={}", brief.getId(), maskPhone(brief.getPhone()));
-        return resp;
-    }
-
-    private static String maskPhone(String phone) {
-        if (phone == null || phone.length() < 4) {
-            return "****";
-        }
-        return "****" + phone.substring(phone.length() - 4);
+        sessions.closeCustomerSessions(brief.getId(), "auth_epoch_changed");
+        String token = jwtService.createPassengerToken(
+                brief.getId(), brief.getPhone(), brief.getAuthEpoch(), scope, 1, brief.getOperationNo());
+        CustomerLoginResponse response = new CustomerLoginResponse();
+        response.setAccessToken(token);
+        response.setTokenType("Bearer");
+        response.setExpiresIn(jwtService.getExpirationSeconds(scope));
+        response.setScope(scope.name());
+        response.setOperationNo(brief.getOperationNo());
+        response.setCustomer(profile);
+        log.info("乘客登录成功 customerId={}", brief.getId());
+        return response;
     }
 }

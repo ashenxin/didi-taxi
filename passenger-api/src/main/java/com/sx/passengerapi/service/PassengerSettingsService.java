@@ -1,6 +1,5 @@
 package com.sx.passengerapi.service;
 
-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
 import com.sx.passengerapi.client.CalculateClient;
 import com.sx.passengerapi.client.OrderClient;
 import com.sx.passengerapi.client.PassengerCoreSettingsClient;
@@ -27,6 +26,7 @@ import com.sx.passengerapi.model.settings.PhoneChangeSmsSendRequest;
 import com.sx.passengerapi.model.settings.SettingsProfileVO;
 import com.sx.passengerapi.model.settings.SettingsSmsSendResultVO;
 import com.sx.passengerapi.model.wallet.CouponInvalidateRequest;
+import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -39,17 +39,17 @@ public class PassengerSettingsService {
     private final PassengerCoreSettingsClient passengerCoreSettingsClient;
     private final OrderClient orderClient;
     private final CalculateClient calculateClient;
-    private final PassengerTokenVersionStore tokenVersionStore;
+    private final PassengerWsSessionRegistry sessions;
 
     public PassengerSettingsService(
             PassengerCoreSettingsClient passengerCoreSettingsClient,
             OrderClient orderClient,
             CalculateClient calculateClient,
-            PassengerTokenVersionStore tokenVersionStore) {
+            PassengerWsSessionRegistry sessions) {
         this.passengerCoreSettingsClient = passengerCoreSettingsClient;
         this.orderClient = orderClient;
         this.calculateClient = calculateClient;
-        this.tokenVersionStore = tokenVersionStore;
+        this.sessions = sessions;
     }
 
     public SettingsProfileVO profile(long customerId) {
@@ -73,8 +73,7 @@ public class PassengerSettingsService {
     public PhoneChangeResultVO confirmPhoneChange(long customerId, PhoneChangeConfirmRequest req) {
         AppPhoneChangeResult data = unwrap(passengerCoreSettingsClient.confirmPhoneChange(
                 new AppPhoneChangeConfirmRequest(customerId, req.getNewPhone(), req.getCode())));
-        // 更换手机号后强制重新登录，避免旧 token 继续代表已变更的登录凭据。
-        tokenVersionStore.nextVersion(customerId);
+        sessions.closeCustomerSessions(customerId, "phone_changed");
 
         PhoneChangeResultVO out = new PhoneChangeResultVO();
         out.setChanged(data.getChanged());
@@ -105,10 +104,9 @@ public class PassengerSettingsService {
         }
         AppAccountCancelResult data = unwrap(passengerCoreSettingsClient.confirmAccountCancel(
                 new AppAccountCancelConfirmRequest(customerId, req.getCode(), req.getConfirm())));
+        sessions.closeCustomerSessions(customerId, "account_cancelled");
         tryInvalidateUnusedCoupons(customerId);
         tryClearBenefitPoints(customerId);
-        // 注销生效后旧 token 立即失效；后台历史数据仍按原 customerId 可查。
-        tokenVersionStore.nextVersion(customerId);
 
         AccountCancelResultVO out = new AccountCancelResultVO();
         out.setCancelled(data.getCancelled());

@@ -54,13 +54,6 @@ public class AppJwtService {
                 .compact();
     }
 
-    /**
-     * Task 5 会把现有登录签发调用切到显式 scope；过渡期间该入口也只签发严格 ae/scope claims。
-     */
-    public String createPassengerToken(long customerId, String phone, long authEpoch, int audit) {
-        return createPassengerToken(customerId, phone, authEpoch, NORMAL, audit, null);
-    }
-
     public ParsedPassengerJwt parseAndVerify(String token) {
         if (token == null || token.isBlank()) {
             throw new JwtException("missing token");
@@ -102,6 +95,12 @@ public class AppJwtService {
 
     public long getExpirationSeconds() {
         return props.getExpirationSeconds();
+    }
+
+    public long getExpirationSeconds(PassengerSessionScope scope) {
+        return scope == LIFECYCLE_RESTRICTED
+                ? props.getRestrictedExpirationSeconds()
+                : props.getExpirationSeconds();
     }
 
     private SecretKey signingKey() {

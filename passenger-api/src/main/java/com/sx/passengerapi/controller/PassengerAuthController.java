@@ -1,5 +1,7 @@
 package com.sx.passengerapi.controller;
 
+import com.sx.passengerapi.auth.PassengerAuthContext;
+import com.sx.passengerapi.auth.PassengerSessionScope;
 import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.util.ResultUtil;
 import com.sx.passengerapi.common.vo.ResponseVo;
@@ -23,6 +25,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class PassengerAuthController {
 
     private static final String USER_ID_HEADER = "X-User-Id";
+    private static final String USER_PHONE_HEADER = "X-User-Phone";
+    private static final String AUTH_EPOCH_HEADER = "X-Auth-Epoch";
+    private static final String AUTH_SCOPE_HEADER = "X-Auth-Scope";
+    private static final String OPERATION_NO_HEADER = "X-Lifecycle-Operation-No";
 
     private final PassengerAuthService passengerAuthService;
 
@@ -63,11 +69,12 @@ public class PassengerAuthController {
      */
     @PostMapping("/logout")
     public ResponseVo<PassengerLogoutResult> logout(
-            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId) {
-        if (passengerId == null) {
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @RequestHeader(value = AUTH_EPOCH_HEADER, required = false) Long authEpoch) {
+        if (passengerId == null || authEpoch == null) {
             throw new BizErrorException(401, "未授权，请重新登录");
         }
-        return ResultUtil.success(passengerAuthService.logout(passengerId));
+        return ResultUtil.success(passengerAuthService.logout(passengerId, authEpoch));
     }
 
     /**
@@ -76,10 +83,22 @@ public class PassengerAuthController {
      */
     @PostMapping("/ws-token")
     public ResponseVo<CustomerLoginResponse> wsToken(
-            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId) {
-        if (passengerId == null) {
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @RequestHeader(value = USER_PHONE_HEADER, required = false) String phone,
+            @RequestHeader(value = AUTH_EPOCH_HEADER, required = false) Long authEpoch,
+            @RequestHeader(value = AUTH_SCOPE_HEADER, required = false) String scope,
+            @RequestHeader(value = OPERATION_NO_HEADER, required = false) String operationNo) {
+        if (passengerId == null || authEpoch == null || scope == null) {
             throw new BizErrorException(401, "未授权，请重新登录");
         }
-        return ResultUtil.success(passengerAuthService.issueWsToken(passengerId));
+        final PassengerSessionScope trustedScope;
+        try {
+            trustedScope = PassengerSessionScope.valueOf(scope);
+        } catch (IllegalArgumentException ex) {
+            throw new BizErrorException(401, "未授权，请重新登录");
+        }
+        PassengerAuthContext context = new PassengerAuthContext(
+                passengerId, phone, authEpoch, trustedScope, 1, operationNo);
+        return ResultUtil.success(passengerAuthService.issueWsToken(context));
     }
 }

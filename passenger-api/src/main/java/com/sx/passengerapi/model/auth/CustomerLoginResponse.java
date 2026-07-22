@@ -7,6 +7,8 @@ public class CustomerLoginResponse implements Serializable {
     private String accessToken;
     private String tokenType = "Bearer";
     private long expiresIn;
+    private String scope;
+    private String operationNo;
     private CustomerProfileVO customer;
 
     public String getAccessToken() {
@@ -33,6 +35,22 @@ public class CustomerLoginResponse implements Serializable {
         this.expiresIn = expiresIn;
     }
 
+    public String getScope() {
+        return scope;
+    }
+
+    public void setScope(String scope) {
+        this.scope = scope;
+    }
+
+    public String getOperationNo() {
+        return operationNo;
+    }
+
+    public void setOperationNo(String operationNo) {
+        this.operationNo = operationNo;
+    }
+
     public CustomerProfileVO getCustomer() {
         return customer;
     }
@@ -41,4 +59,3 @@ public class CustomerLoginResponse implements Serializable {
         this.customer = customer;
     }
 }
-

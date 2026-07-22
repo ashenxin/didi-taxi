@@ -1,15 +1,17 @@
 package com.sx.passengerapi.service;
 
-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
 import com.sx.passengerapi.client.CalculateClient;
 import com.sx.passengerapi.client.OrderClient;
 import com.sx.passengerapi.client.PassengerCoreSettingsClient;
 import com.sx.passengerapi.client.dto.AppAccountCancelResult;
+import com.sx.passengerapi.client.dto.AppPhoneChangeResult;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ordercore.OrderPageData;
 import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
 import com.sx.passengerapi.model.settings.AccountCancelConfirmRequest;
 import com.sx.passengerapi.model.settings.AccountCancelResultVO;
+import com.sx.passengerapi.model.settings.PhoneChangeConfirmRequest;
+import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -19,15 +21,30 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class PassengerSettingsServiceTest {
     private final PassengerCoreSettingsClient passengerCoreSettingsClient = mock(PassengerCoreSettingsClient.class);
     private final OrderClient orderClient = mock(OrderClient.class);
     private final CalculateClient calculateClient = mock(CalculateClient.class);
-    private final PassengerTokenVersionStore tokenVersionStore = mock(PassengerTokenVersionStore.class);
+    private final PassengerWsSessionRegistry sessions = mock(PassengerWsSessionRegistry.class);
     private final PassengerSettingsService service = new PassengerSettingsService(
-            passengerCoreSettingsClient, orderClient, calculateClient, tokenVersionStore);
+            passengerCoreSettingsClient, orderClient, calculateClient, sessions);
+
+    @Test
+    void successfulPhoneChangeClosesOldWsWithoutStartingSaga() {
+        AppPhoneChangeResult changed = new AppPhoneChangeResult();
+        changed.setChanged(true);
+        changed.setRequireLogin(true);
+        changed.setMaskedNewPhone("****8000");
+        when(passengerCoreSettingsClient.confirmPhoneChange(any())).thenReturn(ResponseVo.success(changed));
+
+        service.confirmPhoneChange(10001L, phoneChangeRequest());
+
+        verify(sessions).closeCustomerSessions(10001L, "phone_changed");
+        verifyNoInteractions(orderClient, calculateClient);
+    }
 
     @Test
     void confirmAccountCancelKeepsCancellationSuccessfulWhenBenefitCleanupFails() {
@@ -45,7 +62,7 @@ class PassengerSettingsServiceTest {
 
         assertThat(result.getCancelled()).isTrue();
         assertThat(result.getRequireLogin()).isTrue();
-        verify(tokenVersionStore).nextVersion(10001L);
+        verify(sessions).closeCustomerSessions(10001L, "account_cancelled");
     }
 
     private static OrderPageData emptyOrderPage() {
@@ -68,6 +85,13 @@ class PassengerSettingsServiceTest {
         AccountCancelConfirmRequest request = new AccountCancelConfirmRequest();
         request.setCode("123456");
         request.setConfirm(true);
+        return request;
+    }
+
+    private static PhoneChangeConfirmRequest phoneChangeRequest() {
+        PhoneChangeConfirmRequest request = new PhoneChangeConfirmRequest();
+        request.setNewPhone("13800138000");
+        request.setCode("123456");
         return request;
     }
 }
