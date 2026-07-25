@@ -16,3 +16,7 @@ logs/
 
 # Local isolated feature worktrees
 .worktrees/
+/.superpowers/
+/.claude/
+/.superpowers/sdd/
+/.superpowers/brainstorm/
