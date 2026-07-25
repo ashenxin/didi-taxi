@@ -1,0 +1,47 @@
+<h2>B 方案 · 控制面与执行面的边界</h2>
+<p class="subtitle">生命周期中心负责“流程有没有完成”，各业务域继续负责“自己的钱、券、订单到底是什么状态”。</p>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">请求入口与权威归属</div>
+    <div class="mockup-body">
+      <div class="mock-nav">乘客 H5　→　Gateway　→　passenger-api（认证、OTP 交互、DTO、状态查询）</div>
+      <div class="mock-content">↓ 只提交 accountId + proof + idempotencyKey + expectedVersion</div>
+      <div class="mock-content"><strong>passenger / Account Lifecycle</strong>：账户状态、Operation、Step、Auth Epoch、Outbox 的唯一权威</div>
+      <div class="mock-content">↓ 标准化检查命令 / 执行命令 / 回执事件</div>
+      <div class="mock-content">Order：履约与结算　｜　Wallet：支付与渠道协议　｜　Calculate：券与积分　｜　Session/WS：连接撤销</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>一次注销请求的主流程</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+      <div class="mock-content">① 受理：原子消费 OTP，按 Idempotency-Key 创建 Operation</div>
+      <div class="mock-content">② 建栅栏：账户 ACTIVE → CANCELLING；递增 authEpoch；禁止新增风险业务</div>
+      <div class="mock-content">③ 校验：责任链收集订单、结算、支付、锁券、争议等结构化 blockers</div>
+      <div class="mock-content">④ 执行：按策略注册表生成步骤，Outbox 驱动各领域幂等处理</div>
+      <div class="mock-content">⑤ 收敛：回执更新 Step；超时重试；不可自动处理则转 MANUAL_REVIEW</div>
+      <div class="mock-content">⑥ 完成：必要步骤全部成功后 CANCELLING → CANCELLED；保留财务与审计链路</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>三个不能越界的原则</h3>
+  <div class="options" data-multiselect>
+    <div class="option" data-choice="identity-authority" onclick="toggleSelect(this)">
+      <div class="letter">1</div>
+      <div class="content"><h3>passenger 是生命周期权威</h3><p>BFF 不保存流程状态，Gateway 不裁决注销资格。</p></div>
+    </div>
+    <div class="option" data-choice="domain-authority" onclick="toggleSelect(this)">
+      <div class="letter">2</div>
+      <div class="content"><h3>业务域仍是数据权威</h3><p>生命周期中心不直接改 order、wallet、calculate 的表。</p></div>
+    </div>
+    <div class="option" data-choice="forward-recovery" onclick="toggleSelect(this)">
+      <div class="letter">3</div>
+      <div class="content"><h3>核心提交后只做前向恢复</h3><p>不因清券失败而把已经注销的账号“补偿复活”。</p></div>
+    </div>
+  </div>
+</div>

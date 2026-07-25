@@ -4,6 +4,7 @@ public class ResponseVo<T> {
     private int code;
     private String msg;
     private T data;
+    private String error;
 
     public int getCode() {
         return code;
@@ -28,4 +29,7 @@ public class ResponseVo<T> {
     public void setData(T data) {
         this.data = data;
     }
+
+    public String getError() { return error; }
+    public void setError(String error) { this.error = error; }
 }

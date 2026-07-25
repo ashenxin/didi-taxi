@@ -6,6 +6,11 @@ spring:
     default: local
   application:
     name: wallet-service
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:127.0.0.1:9092}
+    consumer:
+      group-id: ${ACCOUNT_LIFECYCLE_WALLET_GROUP:wallet-account-lifecycle-command-v1}
+      auto-offset-reset: earliest
   datasource:
     url: jdbc:mysql://127.0.0.1:3306/wallet?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf8&autoReconnect=true&useSSL=false&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true
     username: root
@@ -23,6 +28,16 @@ mybatis-plus:
       id-type: auto
 
 wallet:
+  lifecycle:
+    messaging:
+      enabled: ${ACCOUNT_LIFECYCLE_KAFKA_ENABLED:true}
+      command-topic: ${ACCOUNT_LIFECYCLE_COMMAND_TOPIC:account.lifecycle.command.v1}
+      result-topic: ${ACCOUNT_LIFECYCLE_RESULT_TOPIC:account.lifecycle.result.v1}
+      event-topic: ${ACCOUNT_LIFECYCLE_EVENT_TOPIC:account.lifecycle.event.v1}
+    internal-auth:
+      token: ${ACCOUNT_LIFECYCLE_INTERNAL_TOKEN:${ORDER_LIFECYCLE_INTERNAL_TOKEN:dev-wallet-lifecycle-change-me}}
+    write-fence:
+      mode: ${WALLET_LIFECYCLE_WRITE_FENCE_MODE:SHADOW}
   payment:
     mock:
       enabled: ${WALLET_PAYMENT_MOCK_ENABLED:true}

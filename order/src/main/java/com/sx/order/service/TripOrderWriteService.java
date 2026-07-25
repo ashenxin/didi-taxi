@@ -131,11 +131,19 @@ public class TripOrderWriteService {
         String requestId = normalizeIdempotencyKey(idempotencyKey);
         String requestHash = requestHash(body);
         OrderIdempotentRecord existing = selectIdempotentRecord(requestId);
-        if (existing != null) {
+
+        // 已成功创建的订单重放不产生新义务，允许绕过生命周期围栏。
+        if (existing != null && IDEMPOTENT_STATUS_SUCCESS.equals(existing.getStatus())) {
             return resolveExistingCreateRequest(existing, requestHash);
         }
 
+        // 新请求或之前未成功（PROCESSING/FAILED）的记录：必须先通过围栏校验，
+        // 防止账号在请求间隙进入 CANCELLING 后仍能创建订单。
         accountWriteFence.lockAndRequireAllowed(body.getPassengerId(), OrderWriteAction.RIDE_CREATE);
+
+        if (existing != null) {
+            return resolveExistingCreateRequest(existing, requestHash);
+        }
 
         LocalDateTime now = LocalDateTime.now();
         OrderIdempotentRecord record = new OrderIdempotentRecord()

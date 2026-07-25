@@ -24,4 +24,13 @@ public final class ResultUtil {
         vo.setMsg(msg);
         return vo;
     }
+
+    public static <T> ResponseVo<T> error(int code, String error, String msg, T data) {
+        ResponseVo<T> vo = new ResponseVo<>();
+        vo.setCode(code);
+        vo.setError(error);
+        vo.setMsg(msg);
+        vo.setData(data);
+        return vo;
+    }
 }

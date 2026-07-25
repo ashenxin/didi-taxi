@@ -5,11 +5,14 @@ import com.sx.calculate.config.BenefitSignInProperties;
 import com.sx.calculate.dao.BenefitPointsAccountMapper;
 import com.sx.calculate.dao.BenefitPointsFlowMapper;
 import com.sx.calculate.dao.BenefitSignRecordMapper;
+import com.sx.calculate.lifecycle.model.CalculateWriteAction;
+import com.sx.calculate.lifecycle.service.CalculateAccountWriteFence;
 import com.sx.calculate.model.BenefitPointsAccount;
 import com.sx.calculate.model.BenefitPointsFlow;
 import com.sx.calculate.model.BenefitSignRecord;
 import com.sx.calculate.model.dto.BenefitClearPointsRequest;
 import com.sx.calculate.model.dto.BenefitDayVO;
+import com.sx.calculate.model.dto.BenefitClearPointsResult;
 import com.sx.calculate.model.dto.BenefitOverviewVO;
 import com.sx.calculate.model.dto.BenefitPointsVO;
 import com.sx.calculate.model.dto.BenefitSignInResult;
@@ -56,17 +59,20 @@ public class BenefitService {
     private final BenefitPointsFlowMapper flowMapper;
     private final StringRedisTemplate redisTemplate;
     private final BenefitSignInProperties properties;
+    private final CalculateAccountWriteFence accountWriteFence;
 
     public BenefitService(BenefitSignRecordMapper signRecordMapper,
                           BenefitPointsAccountMapper accountMapper,
                           BenefitPointsFlowMapper flowMapper,
                           StringRedisTemplate redisTemplate,
-                          BenefitSignInProperties properties) {
+                          BenefitSignInProperties properties,
+                          CalculateAccountWriteFence accountWriteFence) {
         this.signRecordMapper = signRecordMapper;
         this.accountMapper = accountMapper;
         this.flowMapper = flowMapper;
         this.redisTemplate = redisTemplate;
         this.properties = properties;
+        this.accountWriteFence = accountWriteFence;
     }
 
     public BenefitOverviewVO overview(Long customerId) {
@@ -121,6 +127,7 @@ public class BenefitService {
     @Transactional
     public BenefitSignInResult signIn(Long customerId, String requestId) {
         validateCustomerId(customerId);
+        accountWriteFence.lockAndRequireActive(customerId, CalculateWriteAction.BENEFIT_SIGN_IN);
         LocalDate today = businessDate();
         if (!isConfigValid(true)) {
             return disabledSignIn(today, "签到配置异常，请稍后再试", DISABLED_CONFIG_ERROR);
@@ -151,11 +158,33 @@ public class BenefitService {
     }
 
     @Transactional
-    public void clearPointsForAccountCancel(BenefitClearPointsRequest request) {
+    public BenefitClearPointsResult clearPointsForAccountCancel(BenefitClearPointsRequest request) {
         if (request == null || request.getCustomerId() == null || request.getCustomerId() <= 0) {
             throw new IllegalArgumentException("customerId不能为空");
         }
-        Long customerId = request.getCustomerId();
+        String requestId = safeCancelRequestId(request.getCancelRequestId());
+        String bizId = "account_cancel:" + request.getCustomerId() + ":" + requestId;
+        return clearPoints(request.getCustomerId(), bizId, requestId);
+    }
+
+    @Transactional
+    public BenefitClearPointsResult clearPointsForLifecycle(
+            Long customerId, String operationNo, String stepCode) {
+        validateCustomerId(customerId);
+        if (operationNo == null || operationNo.isBlank()
+                || stepCode == null || stepCode.isBlank()) {
+            throw new IllegalArgumentException("operationNo和stepCode不能为空");
+        }
+        String normalizedOperationNo = operationNo.trim();
+        String bizId = normalizedOperationNo + ":" + stepCode.trim();
+        if (bizId.length() > 160) {
+            throw new IllegalArgumentException("积分生命周期业务幂等ID过长");
+        }
+        return clearPoints(customerId, bizId, normalizedOperationNo);
+    }
+
+    private BenefitClearPointsResult clearPoints(
+            Long customerId, String bizId, String requestId) {
         BenefitPointsAccount account = accountMapper.selectByCustomerIdForUpdate(customerId);
         if (account == null) {
             LocalDateTime now = LocalDateTime.now();
@@ -170,10 +199,12 @@ public class BenefitService {
                     .setCreatedAt(now)
                     .setUpdatedAt(now);
             accountMapper.insert(cancelled);
-            return;
+            return new BenefitClearPointsResult(0, 0, 0, ACCOUNT_CANCELLED, null);
         }
         if (ACCOUNT_CANCELLED.equals(account.getStatus())) {
-            return;
+            return new BenefitClearPointsResult(safeInt(account.getAvailablePoints()), 0,
+                    safeInt(account.getAvailablePoints()), ACCOUNT_CANCELLED,
+                    account.getLastPointsFlowId());
         }
         int before = safeInt(account.getAvailablePoints());
         LocalDateTime now = LocalDateTime.now();
@@ -183,25 +214,29 @@ public class BenefitService {
                     .setCustomerId(customerId)
                     .setAccountId(account.getId())
                     .setBizType(BIZ_CANCEL_CLEAR)
-                    .setBizId("account_cancel:" + customerId + ":" + safeCancelRequestId(request.getCancelRequestId()))
+                    .setBizId(bizId)
                     .setPointsDelta(-before)
                     .setBalanceBefore(before)
                     .setBalanceAfter(0)
                     .setFlowDirection(FLOW_OUT)
                     .setRemark("账号注销清零积分")
                     .setRuleSnapshot("{\"reason\":\"ACCOUNT_CANCEL\"}")
-                    .setRequestId(request.getCancelRequestId())
+                    .setRequestId(requestId)
                     .setCreatedAt(now);
             flowMapper.insert(flow);
             flowId = flow.getId();
         }
+        int expectedVersion = safeInt(account.getVersion());
         account.setAvailablePoints(0)
                 .setTotalClearedPoints(safeInt(account.getTotalClearedPoints()) + before)
                 .setStatus(ACCOUNT_CANCELLED)
                 .setLastPointsFlowId(flowId == null ? account.getLastPointsFlowId() : flowId)
-                .setVersion(safeInt(account.getVersion()) + 1)
+                .setVersion(expectedVersion + 1)
                 .setUpdatedAt(now);
-        accountMapper.updateById(account);
+        if (accountMapper.updateWithVersion(account, expectedVersion) != 1) {
+            throw new IllegalStateException("积分账户清零CAS更新失败，版本冲突");
+        }
+        return new BenefitClearPointsResult(before, before, 0, ACCOUNT_CANCELLED, flowId);
     }
 
     protected BenefitSignInResult doSignIn(Long customerId, LocalDate today, String requestId) {

@@ -12,3 +12,12 @@ spring:
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
+
+calculate:
+  lifecycle:
+    messaging:
+      enabled: false
+    internal-auth:
+      token: dev-order-lifecycle-change-me
+    write-fence:
+      mode: SHADOW

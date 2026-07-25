@@ -1,6 +1,25 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper">
+    <select id="findByOperationNoForUpdate"
+            resultType="com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity">
+        SELECT *
+        FROM account_lifecycle_operation
+        WHERE operation_no = #{operationNo}
+        FOR UPDATE
+    </select>
+
+    <select id="findDueForRecovery"
+            resultType="com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity">
+        SELECT *
+        FROM account_lifecycle_operation
+        WHERE operation_type = 'ACCOUNT_CANCEL'
+          AND status IN ('FENCED', 'VALIDATING', 'EXECUTING', 'RETRY_PENDING')
+          AND (next_wakeup_at IS NULL OR next_wakeup_at &lt;= #{now})
+        ORDER BY COALESCE(next_wakeup_at, created_at), id
+        LIMIT #{limit}
+    </select>
+
     <update id="updateRestrictedAuthEpoch">
         UPDATE account_lifecycle_operation
         SET restricted_auth_epoch = #{restrictedAuthEpoch},

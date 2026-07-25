@@ -44,7 +44,8 @@ class PaymentAttemptServiceTest {
                 WalletPaymentOrder.class);
         service = new PaymentAttemptService(
                 agreementMapper, paymentMapper, paymentChannel, mockProperties,
-                10, "unit-test-checkout-secret");
+                10, "unit-test-checkout-secret",
+                mock(com.sx.wallet.lifecycle.service.WalletAccountWriteFence.class));
         when(paymentMapper.updateById(any(WalletPaymentOrder.class))).thenReturn(1);
         when(paymentMapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
         when(paymentChannel.initiate(any())).thenReturn(

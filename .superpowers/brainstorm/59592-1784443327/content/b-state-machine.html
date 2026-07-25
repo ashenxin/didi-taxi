@@ -1,0 +1,53 @@
+<h2>B 方案 · 账户状态与注销操作状态分离</h2>
+<p class="subtitle">账户只表达能否继续开展业务；Operation 负责表达注销流程走到了哪一步。</p>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">账户生命周期（低基数、稳定）</div>
+    <div class="mockup-body">
+      <div class="mock-nav">ACTIVE　→　CANCELLING　→　CANCELLED</div>
+      <div class="mock-content">在不可逆清理开始前：CANCELLING → ACTIVE（用户撤销）</div>
+      <div class="mock-content">冻结、封禁仍由独立 businessStatus 表达，不与生命周期状态做枚举笛卡尔积。</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">注销 Operation（可观测、可恢复）</div>
+    <div class="mockup-body">
+      <div class="mock-content">REQUESTED → FENCED → VALIDATING</div>
+      <div class="mock-content">VALIDATING → BLOCKED → VALIDATING　（用户完成行程、支付欠款后自动复检）</div>
+      <div class="mock-content">VALIDATING → EXECUTING → COMPLETED</div>
+      <div class="mock-content">任一执行步骤 → RETRY_PENDING → EXECUTING</div>
+      <div class="mock-content">超过阈值或需要运营裁决 → MANUAL_REVIEW → EXECUTING / COMPLETED</div>
+      <div class="mock-content">FENCED / BLOCKED → ABORTED　（仅限 irreversibleStarted=false）</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>CANCELLING 状态的操作门禁</h3>
+  <div class="table-responsive">
+    <table class="table table-sm">
+      <thead><tr><th>动作类型</th><th>代表动作</th><th>门禁</th><th>原因</th></tr></thead>
+      <tbody>
+        <tr><td>解阻动作</td><td>取消订单、完成行程、支付欠款、提交退款材料</td><td>允许</td><td>帮助消除 blocker</td></tr>
+        <tr><td>只读与取证</td><td>订单/账单/退款进度、下载必要凭证</td><td>允许</td><td>保障用户知情与售后</td></tr>
+        <tr><td>增加风险</td><td>新下单、领券、签到、兑换、签免密、绑卡</td><td>拒绝</td><td>禁止新增资产和义务</td></tr>
+        <tr><td>身份变更</td><td>再次换号、绑定 OAuth、修改实名</td><td>拒绝</td><td>防止生命周期并发冲突</td></tr>
+        <tr><td>系统后处理</td><td>支付回调、退款、对账、发票红冲、收入冲正</td><td>允许</td><td>以内部服务身份继续履约</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <h3>风险项的四类裁决</h3>
+  <div class="options" data-multiselect>
+    <div class="option" data-choice="blocker"><div class="letter">B</div><div class="content"><h3>BLOCKER</h3><p>在途订单、未结清支付、锁券、退款/拒付争议。</p></div></div>
+    <div class="option" data-choice="automatic"><div class="letter">A</div><div class="content"><h3>AUTO_ACTION</h3><p>关免密、作废未使用券、积分清零、撤销会话和 OAuth。</p></div></div>
+    <div class="option" data-choice="retain"><div class="letter">R</div><div class="content"><h3>RETAIN</h3><p>订单、支付、退款、券/积分流水、对账与发票记录。</p></div></div>
+    <div class="option" data-choice="manual"><div class="letter">M</div><div class="content"><h3>MANUAL</h3><p>渠道解约失败、长短款、重复扣款、红冲和收入冲正异常。</p></div></div>
+  </div>
+</div>

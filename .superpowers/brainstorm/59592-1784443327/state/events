@@ -1,0 +1,4 @@
+{"type":"click","text":"BBLOCKER在途订单、未结清支付、锁券、退款/拒付争议。","choice":"blocker","id":null,"timestamp":1784452475341}
+{"type":"click","text":"AAUTO_ACTION关免密、作废未使用券、积分清零、撤销会话和 OAuth。","choice":"automatic","id":null,"timestamp":1784452476426}
+{"type":"click","text":"RRETAIN订单、支付、退款、券/积分流水、对账与发票记录。","choice":"retain","id":null,"timestamp":1784452477191}
+{"type":"click","text":"MMANUAL渠道解约失败、长短款、重复扣款、红冲和收入冲正异常。","choice":"manual","id":null,"timestamp":1784452477874}

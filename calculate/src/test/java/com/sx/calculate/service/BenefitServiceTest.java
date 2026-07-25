@@ -9,6 +9,7 @@ import com.sx.calculate.model.BenefitPointsFlow;
 import com.sx.calculate.model.BenefitSignRecord;
 import com.sx.calculate.model.dto.BenefitClearPointsRequest;
 import com.sx.calculate.model.dto.BenefitSignInResult;
+import com.sx.calculate.lifecycle.service.CalculateAccountWriteFence;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -199,7 +200,8 @@ class BenefitServiceTest {
             props.setDisplayDays(32);
 
             BenefitService service = new BenefitService(
-                    signRecordMapper, accountMapper, flowMapper, redisTemplate, props);
+                    signRecordMapper, accountMapper, flowMapper, redisTemplate, props,
+                    mock(CalculateAccountWriteFence.class));
 
             assertThatCode(() -> service.overview(CUSTOMER_ID)).doesNotThrowAnyException();
             assertThat(service.overview(CUSTOMER_ID).getSignEnabled()).isFalse();
@@ -213,7 +215,8 @@ class BenefitServiceTest {
             BenefitPointsFlowMapper flowMapper = mock(BenefitPointsFlowMapper.class);
             StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
             BenefitService racedService = new BenefitService(
-                    signRecordMapper, accountMapper, flowMapper, redisTemplate, properties());
+                    signRecordMapper, accountMapper, flowMapper, redisTemplate, properties(),
+                    mock(CalculateAccountWriteFence.class));
 
             BenefitPointsAccount existingAccount = new BenefitPointsAccount()
                     .setId(10L)

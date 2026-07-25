@@ -4,6 +4,11 @@ server:
 spring:
   application:
     name: passenger-service
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:127.0.0.1:9092}
+    consumer:
+      group-id: ${ACCOUNT_LIFECYCLE_RESULT_GROUP:passenger-account-lifecycle-result-v1}
+      auto-offset-reset: earliest
   data:
     redis:
       host: ${REDIS_HOST:127.0.0.1}
@@ -25,6 +30,10 @@ logging:
     path: ./logs/passenger-service
 
 management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
   tracing:
     sampling:
       probability: 1.0
@@ -38,6 +47,29 @@ management:
 passenger:
   internal-auth:
     token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
+  account-lifecycle:
+    participant-token: ${ACCOUNT_LIFECYCLE_INTERNAL_TOKEN:dev-account-lifecycle-change-me}
+    messaging:
+      enabled: ${ACCOUNT_LIFECYCLE_KAFKA_ENABLED:true}
+      command-topic: ${ACCOUNT_LIFECYCLE_COMMAND_TOPIC:account.lifecycle.command.v1}
+      result-topic: ${ACCOUNT_LIFECYCLE_RESULT_TOPIC:account.lifecycle.result.v1}
+      event-topic: ${ACCOUNT_LIFECYCLE_EVENT_TOPIC:account.lifecycle.event.v1}
+    jobs:
+      outbox:
+        batch-size: ${ACCOUNT_LIFECYCLE_OUTBOX_BATCH_SIZE:50}
+        send-timeout-seconds: ${ACCOUNT_LIFECYCLE_OUTBOX_SEND_TIMEOUT_SECONDS:5}
+        batch-deadline-seconds: ${ACCOUNT_LIFECYCLE_OUTBOX_BATCH_DEADLINE_SECONDS:25}
+        stale-processing-seconds: ${ACCOUNT_LIFECYCLE_OUTBOX_STALE_SECONDS:120}
+      recovery:
+        operation-batch-size: ${ACCOUNT_LIFECYCLE_RECOVERY_OPERATION_BATCH_SIZE:50}
+        step-batch-size: ${ACCOUNT_LIFECYCLE_RECOVERY_STEP_BATCH_SIZE:50}
+        batch-deadline-seconds: ${ACCOUNT_LIFECYCLE_RECOVERY_BATCH_DEADLINE_SECONDS:55}
+    participants:
+      order-base-url: ${ORDER_SERVICE_BASE_URL:http://127.0.0.1:8093}
+      calculate-base-url: ${CALCULATE_SERVICE_BASE_URL:http://127.0.0.1:8091}
+      wallet-base-url: ${WALLET_SERVICE_BASE_URL:http://127.0.0.1:8095}
+      connect-timeout-ms: ${ACCOUNT_LIFECYCLE_CONNECT_TIMEOUT_MS:1000}
+      read-timeout-ms: ${ACCOUNT_LIFECYCLE_READ_TIMEOUT_MS:10000}
   admin:
     # 须与 admin-api 的 admin.security-context-cache.key-prefix 一致
     security-context-cache:
@@ -59,6 +91,19 @@ mybatis-plus:
     db-config:
       id-type: auto
   mapper-locations: classpath*:mapper/**/*.xml
+
+xxl:
+  job:
+    enabled: ${XXL_JOB_PASSENGER_ENABLED:true}
+    access-token: ${XXL_JOB_ACCESS_TOKEN:default_token}
+    admin:
+      addresses: ${XXL_JOB_ADMIN_ADDRESSES:http://127.0.0.1:8081/xxl-job-admin}
+    executor:
+      appname: passenger-lifecycle-executor
+      address: ${XXL_JOB_PASSENGER_EXECUTOR_ADDRESS:http://127.0.0.1:9995}
+      port: 9995
+      log-path: ./logs/xxl-job
+      log-retention-days: 7
 
 ---
 spring:

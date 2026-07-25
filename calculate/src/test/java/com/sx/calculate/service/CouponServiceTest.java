@@ -11,6 +11,7 @@ import com.sx.calculate.model.CouponUseRecord;
 import com.sx.calculate.model.dto.CouponLockRequest;
 import com.sx.calculate.model.dto.CouponLockResult;
 import com.sx.calculate.model.dto.CouponUseRequest;
+import com.sx.calculate.lifecycle.service.CalculateAccountWriteFence;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -33,13 +34,14 @@ class CouponServiceTest {
     private final CouponTemplateMapper templateMapper = mock(CouponTemplateMapper.class);
     private final UserCouponMapper userCouponMapper = mock(UserCouponMapper.class);
     private final CouponUseRecordMapper recordMapper = mock(CouponUseRecordMapper.class);
+    private final CalculateAccountWriteFence accountWriteFence = mock(CalculateAccountWriteFence.class);
     private CouponService service;
 
     @BeforeEach
     void setUp() {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), "coupon-test"),
                 UserCoupon.class);
-        service = new CouponService(templateMapper, userCouponMapper, recordMapper);
+        service = new CouponService(templateMapper, userCouponMapper, recordMapper, accountWriteFence);
     }
 
     @Test

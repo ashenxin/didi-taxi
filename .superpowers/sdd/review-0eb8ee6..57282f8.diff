@@ -1,0 +1,813 @@
+# Review package: 0eb8ee6..57282f8
+
+## Commits
+57282f8 修复：关闭内部接口编码路径鉴权绕过
+3d7b062 修复：关闭内部接口矩阵参数鉴权绕过
+00b803b 功能：保护乘客内部认证状态接口
+
+## Files changed
+ .../sx/passenger/common/enums/ExceptionCode.java   |   2 +
+ .../common/exception/GlobalExceptionHandler.java   |  23 +++
+ .../auth/PassengerInternalAuthController.java      |  38 ++++
+ .../auth/dto/InternalAuthStateResponse.java        |  25 +++
+ .../internal/auth/dto/InternalLogoutRequest.java   |   4 +
+ .../internal/auth/dto/InternalLogoutResponse.java  |   4 +
+ .../security/PassengerInternalAuthFilter.java      |  91 ++++++++++
+ .../security/PassengerInternalAuthProperties.java  |  17 ++
+ .../PassengerInternalSecurityStartupValidator.java |  46 +++++
+ passenger/src/main/resources/application.yml       |   2 +
+ .../auth/PassengerInternalAuthControllerTest.java  | 194 +++++++++++++++++++++
+ .../security/PassengerInternalAuthFilterTest.java  | 112 ++++++++++++
+ ...sengerInternalSecurityStartupValidatorTest.java |  61 +++++++
+ passenger/src/test/resources/application-test.yml  |   4 +
+ 14 files changed, 623 insertions(+)
+
+## Diff
+diff --git a/passenger/src/main/java/com/sx/passenger/common/enums/ExceptionCode.java b/passenger/src/main/java/com/sx/passenger/common/enums/ExceptionCode.java
+index 2b2769b..2d71450 100644
+--- a/passenger/src/main/java/com/sx/passenger/common/enums/ExceptionCode.java
++++ b/passenger/src/main/java/com/sx/passenger/common/enums/ExceptionCode.java
+@@ -1,18 +1,20 @@
+ package com.sx.passenger.common.enums;
+ 
+ public enum ExceptionCode implements NameValueEnum<Integer> {
+     SUCCESS(200, "success"),
+     BAD_REQUEST(400, "bad request"),
+     UNAUTHORIZED(401, "unauthorized"),
+     FORBIDDEN(403, "forbidden"),
+     NOT_FOUND(404, "Not Found"),
++    CONFLICT(409, "conflict"),
++    SERVICE_UNAVAILABLE(503, "服务暂不可用"),
+     SERVER_ERROR(500, "服务异常");
+ 
+     private final Integer code;
+     private final String msg;
+ 
+     ExceptionCode(Integer code, String msg) {
+         this.code = code;
+         this.msg = msg;
+     }
+ 
+diff --git a/passenger/src/main/java/com/sx/passenger/common/exception/GlobalExceptionHandler.java b/passenger/src/main/java/com/sx/passenger/common/exception/GlobalExceptionHandler.java
+index 4fc4f0c..5b200a7 100644
+--- a/passenger/src/main/java/com/sx/passenger/common/exception/GlobalExceptionHandler.java
++++ b/passenger/src/main/java/com/sx/passenger/common/exception/GlobalExceptionHandler.java
+@@ -1,34 +1,57 @@
+ package com.sx.passenger.common.exception;
+ 
++import com.sx.passenger.auth.session.AuthEpochConflictException;
+ import com.sx.passenger.common.enums.ExceptionCode;
+ import com.sx.passenger.common.util.ResultUtil;
+ import com.sx.passenger.common.vo.ResponseVo;
++import jakarta.servlet.http.HttpServletRequest;
+ import jakarta.validation.ConstraintViolation;
+ import jakarta.validation.ConstraintViolationException;
+ import lombok.extern.slf4j.Slf4j;
++import org.springframework.dao.DataAccessException;
+ import org.springframework.validation.BindException;
+ import org.springframework.validation.FieldError;
+ import org.springframework.validation.annotation.Validated;
+ import org.springframework.web.bind.MethodArgumentNotValidException;
+ import org.springframework.web.bind.MissingServletRequestParameterException;
+ import org.springframework.http.ResponseEntity;
+ import org.springframework.web.bind.annotation.ExceptionHandler;
+ import org.springframework.web.bind.annotation.RestControllerAdvice;
+ 
+ import static java.util.stream.Collectors.joining;
+ 
+ @Validated
+ @RestControllerAdvice
+ @Slf4j
+ public class GlobalExceptionHandler {
+ 
++    private static final String REQUEST_ID_HEADER = "X-Request-Id";
++
++    @ExceptionHandler(AuthEpochConflictException.class)
++    public ResponseEntity<ResponseVo<?>> authEpochConflictException(
++            AuthEpochConflictException ignored, HttpServletRequest request) {
++        log.warn("internal auth request rejected uri={} requestId={} status={}",
++                request.getRequestURI(), request.getHeader(REQUEST_ID_HEADER), 409);
++        return ResponseEntity.status(409)
++                .body(ResultUtil.error(ExceptionCode.CONFLICT.getValue(), "认证状态已变化，请刷新后重试"));
++    }
++
++    @ExceptionHandler(DataAccessException.class)
++    public ResponseEntity<ResponseVo<?>> dataAccessException(
++            DataAccessException ignored, HttpServletRequest request) {
++        log.error("infrastructure unavailable uri={} requestId={} status={}",
++                request.getRequestURI(), request.getHeader(REQUEST_ID_HEADER), 503);
++        return ResponseEntity.status(503)
++                .body(ResultUtil.error(ExceptionCode.SERVICE_UNAVAILABLE.getValue(), "服务暂不可用，请稍后重试"));
++    }
++
+     @ExceptionHandler(AdminPermissionException.class)
+     public ResponseEntity<ResponseVo<?>> adminPermissionException(AdminPermissionException e) {
+         log.warn("管理端权限异常：{}", e.getMessage());
+         return ResponseEntity.status(403).body(ResultUtil.forbidden(e.getMessage()));
+     }
+ 
+     @ExceptionHandler(AdminResourceNotFoundException.class)
+     public ResponseEntity<ResponseVo<?>> adminResourceNotFoundException(AdminResourceNotFoundException e) {
+         log.warn("管理端资源不存在：{}", e.getMessage());
+         return ResponseEntity.status(404).body(ResultUtil.error(ExceptionCode.NOT_FOUND.getValue(), e.getMessage()));
+diff --git a/passenger/src/main/java/com/sx/passenger/internal/auth/PassengerInternalAuthController.java b/passenger/src/main/java/com/sx/passenger/internal/auth/PassengerInternalAuthController.java
+new file mode 100644
+index 0000000..78ce44e
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/internal/auth/PassengerInternalAuthController.java
+@@ -0,0 +1,38 @@
++package com.sx.passenger.internal.auth;
++
++import com.sx.passenger.auth.session.AuthoritativeAuthState;
++import com.sx.passenger.auth.session.PassengerAuthEpochService;
++import com.sx.passenger.common.util.ResultUtil;
++import com.sx.passenger.common.vo.ResponseVo;
++import com.sx.passenger.internal.auth.dto.InternalAuthStateResponse;
++import com.sx.passenger.internal.auth.dto.InternalLogoutRequest;
++import com.sx.passenger.internal.auth.dto.InternalLogoutResponse;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.PathVariable;
++import org.springframework.web.bind.annotation.PostMapping;
++import org.springframework.web.bind.annotation.RequestBody;
++import org.springframework.web.bind.annotation.RequestMapping;
++import org.springframework.web.bind.annotation.RestController;
++
++@RestController
++@RequestMapping("/api/v1/internal/auth-state")
++public class PassengerInternalAuthController {
++
++    private final PassengerAuthEpochService authEpochService;
++
++    public PassengerInternalAuthController(PassengerAuthEpochService authEpochService) {
++        this.authEpochService = authEpochService;
++    }
++
++    @GetMapping("/{customerId}")
++    public ResponseVo<InternalAuthStateResponse> loadState(@PathVariable long customerId) {
++        AuthoritativeAuthState state = authEpochService.loadState(customerId);
++        return ResultUtil.success(InternalAuthStateResponse.from(state));
++    }
++
++    @PostMapping("/logout")
++    public ResponseVo<InternalLogoutResponse> logout(@RequestBody InternalLogoutRequest request) {
++        long authEpoch = authEpochService.logout(request.customerId(), request.expectedAuthEpoch());
++        return ResultUtil.success(new InternalLogoutResponse(request.customerId(), authEpoch));
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalAuthStateResponse.java b/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalAuthStateResponse.java
+new file mode 100644
+index 0000000..7293c6c
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalAuthStateResponse.java
+@@ -0,0 +1,25 @@
++package com.sx.passenger.internal.auth.dto;
++
++import com.sx.passenger.auth.session.AuthSessionScope;
++import com.sx.passenger.auth.session.AuthoritativeAuthState;
++
++public record InternalAuthStateResponse(
++        long customerId,
++        Integer businessStatus,
++        String lifecycleStatus,
++        long authEpoch,
++        String currentLifecycleOperationNo,
++        AuthSessionScope allowedScope,
++        boolean allowed) {
++
++    public static InternalAuthStateResponse from(AuthoritativeAuthState state) {
++        return new InternalAuthStateResponse(
++                state.customerId(),
++                state.businessStatus(),
++                state.lifecycleStatus(),
++                state.authEpoch(),
++                state.currentLifecycleOperationNo(),
++                state.allowedScope(),
++                state.allowed());
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalLogoutRequest.java b/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalLogoutRequest.java
+new file mode 100644
+index 0000000..850e9a2
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalLogoutRequest.java
+@@ -0,0 +1,4 @@
++package com.sx.passenger.internal.auth.dto;
++
++public record InternalLogoutRequest(long customerId, long expectedAuthEpoch) {
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalLogoutResponse.java b/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalLogoutResponse.java
+new file mode 100644
+index 0000000..74b9f9e
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/internal/auth/dto/InternalLogoutResponse.java
+@@ -0,0 +1,4 @@
++package com.sx.passenger.internal.auth.dto;
++
++public record InternalLogoutResponse(long customerId, long authEpoch) {
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalAuthFilter.java b/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalAuthFilter.java
+new file mode 100644
+index 0000000..1293b6c
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalAuthFilter.java
+@@ -0,0 +1,91 @@
++package com.sx.passenger.internal.security;
++
++import com.fasterxml.jackson.databind.ObjectMapper;
++import com.sx.passenger.common.util.ResultUtil;
++import jakarta.servlet.FilterChain;
++import jakarta.servlet.ServletException;
++import jakarta.servlet.http.HttpServletRequest;
++import jakarta.servlet.http.HttpServletResponse;
++import lombok.extern.slf4j.Slf4j;
++import org.springframework.boot.context.properties.EnableConfigurationProperties;
++import org.springframework.http.MediaType;
++import org.springframework.stereotype.Component;
++import org.springframework.web.filter.OncePerRequestFilter;
++import org.springframework.web.util.ServletRequestPathUtils;
++import org.springframework.web.util.pattern.PathPattern;
++import org.springframework.web.util.pattern.PathPatternParser;
++
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++
++@Component
++@EnableConfigurationProperties(PassengerInternalAuthProperties.class)
++@Slf4j
++public class PassengerInternalAuthFilter extends OncePerRequestFilter {
++
++    static final String INTERNAL_TOKEN_HEADER = "X-Internal-Service-Token";
++    private static final String REQUEST_ID_HEADER = "X-Request-Id";
++    private static final PathPattern APP_ROOT = pathPattern("/api/v1/app");
++    private static final PathPattern APP_DESCENDANTS = pathPattern("/api/v1/app/**");
++    private static final PathPattern INTERNAL_ROOT = pathPattern("/api/v1/internal");
++    private static final PathPattern INTERNAL_DESCENDANTS = pathPattern("/api/v1/internal/**");
++
++    private final PassengerInternalAuthProperties properties;
++    private final ObjectMapper objectMapper;
++
++    public PassengerInternalAuthFilter(PassengerInternalAuthProperties properties, ObjectMapper objectMapper) {
++        this.properties = properties;
++        this.objectMapper = objectMapper;
++    }
++
++    @Override
++    protected boolean shouldNotFilter(HttpServletRequest request) {
++        var path = ServletRequestPathUtils.parseAndCache(request).pathWithinApplication();
++        return !APP_ROOT.matches(path)
++                && !APP_DESCENDANTS.matches(path)
++                && !INTERNAL_ROOT.matches(path)
++                && !INTERNAL_DESCENDANTS.matches(path);
++    }
++
++    @Override
++    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
++            throws ServletException, IOException {
++        String supplied = request.getHeader(INTERNAL_TOKEN_HEADER);
++        if (supplied == null) {
++            reject(request, response, HttpServletResponse.SC_UNAUTHORIZED, "Missing internal service identity");
++            return;
++        }
++        if (!matches(supplied)) {
++            reject(request, response, HttpServletResponse.SC_FORBIDDEN, "Invalid internal service identity");
++            return;
++        }
++        filterChain.doFilter(request, response);
++    }
++
++    private boolean matches(String supplied) {
++        String configured = properties.getToken();
++        if (configured == null || configured.isBlank()) {
++            return false;
++        }
++        byte[] expected = configured.getBytes(StandardCharsets.UTF_8);
++        byte[] actual = supplied.getBytes(StandardCharsets.UTF_8);
++        return MessageDigest.isEqual(expected, actual);
++    }
++
++    private void reject(HttpServletRequest request, HttpServletResponse response, int status, String message)
++            throws IOException {
++        log.warn("passenger internal authentication rejected uri={} requestId={} status={}",
++                request.getRequestURI(), request.getHeader(REQUEST_ID_HEADER), status);
++        response.setStatus(status);
++        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
++        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
++        objectMapper.writeValue(response.getWriter(), status == HttpServletResponse.SC_UNAUTHORIZED
++                ? ResultUtil.unauthorized(message)
++                : ResultUtil.forbidden(message));
++    }
++
++    private static PathPattern pathPattern(String pattern) {
++        return PathPatternParser.defaultInstance.parse(pattern);
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalAuthProperties.java b/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalAuthProperties.java
+new file mode 100644
+index 0000000..bbba8dd
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalAuthProperties.java
+@@ -0,0 +1,17 @@
++package com.sx.passenger.internal.security;
++
++import org.springframework.boot.context.properties.ConfigurationProperties;
++
++@ConfigurationProperties(prefix = "passenger.internal-auth")
++public class PassengerInternalAuthProperties {
++
++    private String token;
++
++    public String getToken() {
++        return token;
++    }
++
++    public void setToken(String token) {
++        this.token = token;
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalSecurityStartupValidator.java b/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalSecurityStartupValidator.java
+new file mode 100644
+index 0000000..02cb7cc
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/internal/security/PassengerInternalSecurityStartupValidator.java
+@@ -0,0 +1,46 @@
++package com.sx.passenger.internal.security;
++
++import org.springframework.beans.factory.InitializingBean;
++import org.springframework.core.env.Environment;
++import org.springframework.core.env.Profiles;
++import org.springframework.stereotype.Component;
++
++import java.nio.charset.StandardCharsets;
++import java.util.Locale;
++
++@Component
++public class PassengerInternalSecurityStartupValidator implements InitializingBean {
++
++    private static final Profiles RELAXED_PROFILES = Profiles.of("local", "dev", "test");
++
++    private final PassengerInternalAuthProperties properties;
++    private final Environment environment;
++
++    public PassengerInternalSecurityStartupValidator(PassengerInternalAuthProperties properties,
++                                                      Environment environment) {
++        this.properties = properties;
++        this.environment = environment;
++    }
++
++    @Override
++    public void afterPropertiesSet() {
++        if (environment.acceptsProfiles(RELAXED_PROFILES)) {
++            return;
++        }
++        validateStrict(properties);
++    }
++
++    static void validateStrict(PassengerInternalAuthProperties properties) {
++        String token = properties.getToken();
++        if (token == null || token.isBlank()) {
++            throw new IllegalStateException("PASSENGER_INTERNAL_TOKEN must be configured");
++        }
++        if (token.getBytes(StandardCharsets.UTF_8).length < 32) {
++            throw new IllegalStateException("PASSENGER_INTERNAL_TOKEN must contain at least 32 bytes");
++        }
++        String normalized = token.toLowerCase(Locale.ROOT);
++        if (normalized.startsWith("dev-passenger-") || normalized.contains("change-me")) {
++            throw new IllegalStateException("PASSENGER_INTERNAL_TOKEN must not use a development default");
++        }
++    }
++}
+diff --git a/passenger/src/main/resources/application.yml b/passenger/src/main/resources/application.yml
+index 7a1a812..53b1294 100644
+--- a/passenger/src/main/resources/application.yml
++++ b/passenger/src/main/resources/application.yml
+@@ -29,20 +29,22 @@ management:
+     sampling:
+       probability: 1.0
+     export:
+       zipkin:
+         enabled: false
+   zipkin:
+     tracing:
+       endpoint: http://127.0.0.1:9411/api/v2/spans
+ 
+ passenger:
++  internal-auth:
++    token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
+   admin:
+     # 须与 admin-api 的 admin.security-context-cache.key-prefix 一致
+     security-context-cache:
+       key-prefix: ${ADMIN_SECURITY_CONTEXT_CACHE_KEY_PREFIX:adm:user:}
+   app:
+     customer-auth:
+       sms:
+         code-ttl-seconds: ${APP_SMS_CODE_TTL_SECONDS:300}
+         min-interval-seconds: ${APP_SMS_MIN_INTERVAL_SECONDS:2}
+         daily-limit-per-phone: ${APP_SMS_DAILY_LIMIT_PER_PHONE:100}
+diff --git a/passenger/src/test/java/com/sx/passenger/internal/auth/PassengerInternalAuthControllerTest.java b/passenger/src/test/java/com/sx/passenger/internal/auth/PassengerInternalAuthControllerTest.java
+new file mode 100644
+index 0000000..c627df9
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/internal/auth/PassengerInternalAuthControllerTest.java
+@@ -0,0 +1,194 @@
++package com.sx.passenger.internal.auth;
++
++import com.fasterxml.jackson.databind.ObjectMapper;
++import com.sx.passenger.auth.session.AuthEpochConflictException;
++import com.sx.passenger.auth.session.AuthSessionScope;
++import com.sx.passenger.auth.session.AuthoritativeAuthState;
++import com.sx.passenger.auth.session.PassengerAuthEpochService;
++import com.sx.passenger.app.AppCustomerAuthController;
++import com.sx.passenger.app.AppCustomerAuthService;
++import com.sx.passenger.common.exception.GlobalExceptionHandler;
++import com.sx.passenger.internal.security.PassengerInternalAuthFilter;
++import com.sx.passenger.internal.security.PassengerInternalAuthProperties;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.dao.DataAccessResourceFailureException;
++import org.springframework.http.MediaType;
++import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++
++import java.net.URI;
++
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoInteractions;
++import static org.mockito.Mockito.when;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++
++class PassengerInternalAuthControllerTest {
++
++    private static final String INTERNAL_HEADER = "X-Internal-Service-Token";
++    private static final String TOKEN = "test-passenger-internal-secret-32bytes";
++
++    private final PassengerAuthEpochService service = mock(PassengerAuthEpochService.class);
++    private final AppCustomerAuthService appCustomerAuthService = mock(AppCustomerAuthService.class);
++    private MockMvc mvc;
++
++    @BeforeEach
++    void setUp() {
++        PassengerInternalAuthProperties properties = new PassengerInternalAuthProperties();
++        properties.setToken(TOKEN);
++        PassengerInternalAuthFilter filter = new PassengerInternalAuthFilter(properties, new ObjectMapper());
++        mvc = MockMvcBuilders.standaloneSetup(
++                        new PassengerInternalAuthController(service),
++                        new AppCustomerAuthController(appCustomerAuthService))
++                .setControllerAdvice(new GlobalExceptionHandler())
++                .addFilters(filter)
++                .build();
++    }
++
++    @Test
++    void matrixParameterCannotBypassInternalAuthentication() throws Exception {
++        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
++                7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
++
++        mvc.perform(get("/api/v1/internal;probe/auth-state/7"))
++                .andExpect(status().isUnauthorized())
++                .andExpect(jsonPath("$.code").value(401));
++
++        verifyNoInteractions(service);
++    }
++
++    @Test
++    void matrixParameterCannotBypassAppAuthentication() throws Exception {
++        mvc.perform(post("/api/v1/app;probe/auth/login-password")
++                        .contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"phone\":\"13800138000\",\"password\":\"secret\"}"))
++                .andExpect(status().isUnauthorized())
++                .andExpect(jsonPath("$.code").value(401));
++
++        verifyNoInteractions(appCustomerAuthService);
++    }
++
++    @Test
++    void exactTokenAllowsMatrixInternalPathToReachController() throws Exception {
++        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
++                7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
++
++        mvc.perform(get("/api/v1/internal;probe/auth-state/7").header(INTERNAL_HEADER, TOKEN))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.customerId").value(7))
++                .andExpect(jsonPath("$.data.authEpoch").value(9))
++                .andExpect(jsonPath("$.data.allowedScope").value("NORMAL"));
++
++        verify(service).loadState(7L);
++    }
++
++    @Test
++    void encodedInternalPrefixCannotBypassAuthentication() throws Exception {
++        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
++                7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
++
++        mvc.perform(get(URI.create("/api/v1/%69nternal/auth-state/7")))
++                .andExpect(status().isUnauthorized())
++                .andExpect(jsonPath("$.code").value(401));
++
++        verifyNoInteractions(service);
++    }
++
++    @Test
++    void encodedAppPrefixCannotBypassAuthentication() throws Exception {
++        mvc.perform(post(URI.create("/api/v1/%61pp/auth/login-password"))
++                        .contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"phone\":\"13800138000\",\"password\":\"secret\"}"))
++                .andExpect(status().isUnauthorized())
++                .andExpect(jsonPath("$.code").value(401));
++
++        verifyNoInteractions(appCustomerAuthService);
++    }
++
++    @Test
++    void exactTokenAllowsEncodedInternalPathToReachController() throws Exception {
++        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
++                7L, 0, "ACTIVE", 9L, null, AuthSessionScope.NORMAL, true));
++
++        mvc.perform(get(URI.create("/api/v1/%69nternal/auth-state/7")).header(INTERNAL_HEADER, TOKEN))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.customerId").value(7))
++                .andExpect(jsonPath("$.data.authEpoch").value(9))
++                .andExpect(jsonPath("$.data.allowedScope").value("NORMAL"));
++
++        verify(service).loadState(7L);
++    }
++
++    @Test
++    void returnsCompleteAuthoritativeState() throws Exception {
++        when(service.loadState(7L)).thenReturn(new AuthoritativeAuthState(
++                7L, 0, "CANCELLING", 9L, "op-1", AuthSessionScope.LIFECYCLE_RESTRICTED, true));
++
++        mvc.perform(get("/api/v1/internal/auth-state/7").header(INTERNAL_HEADER, TOKEN))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.code").value(200))
++                .andExpect(jsonPath("$.data.customerId").value(7))
++                .andExpect(jsonPath("$.data.businessStatus").value(0))
++                .andExpect(jsonPath("$.data.lifecycleStatus").value("CANCELLING"))
++                .andExpect(jsonPath("$.data.authEpoch").value(9))
++                .andExpect(jsonPath("$.data.currentLifecycleOperationNo").value("op-1"))
++                .andExpect(jsonPath("$.data.allowedScope").value("LIFECYCLE_RESTRICTED"))
++                .andExpect(jsonPath("$.data.allowed").value(true));
++
++        verify(service).loadState(7L);
++    }
++
++    @Test
++    void returnsDisallowedAuthoritativeStateWithOkStatus() throws Exception {
++        when(service.loadState(404L)).thenReturn(new AuthoritativeAuthState(
++                404L, null, null, 0L, null, null, false));
++
++        mvc.perform(get("/api/v1/internal/auth-state/404").header(INTERNAL_HEADER, TOKEN))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.authEpoch").value(0))
++                .andExpect(jsonPath("$.data.allowedScope").doesNotExist())
++                .andExpect(jsonPath("$.data.allowed").value(false));
++    }
++
++    @Test
++    void logoutReturnsNewAuthoritativeEpoch() throws Exception {
++        when(service.logout(7L, 8L)).thenReturn(9L);
++
++        mvc.perform(post("/api/v1/internal/auth-state/logout")
++                        .header(INTERNAL_HEADER, TOKEN)
++                        .contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"customerId\":7,\"expectedAuthEpoch\":8}"))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.customerId").value(7))
++                .andExpect(jsonPath("$.data.authEpoch").value(9));
++
++        verify(service).logout(7L, 8L);
++    }
++
++    @Test
++    void staleLogoutReturnsConflict() throws Exception {
++        when(service.logout(7L, 8L)).thenThrow(new AuthEpochConflictException());
++
++        mvc.perform(post("/api/v1/internal/auth-state/logout")
++                        .header(INTERNAL_HEADER, TOKEN)
++                        .contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"customerId\":7,\"expectedAuthEpoch\":8}"))
++                .andExpect(status().isConflict())
++                .andExpect(jsonPath("$.code").value(409));
++    }
++
++    @Test
++    void infrastructureFailureReturnsServiceUnavailable() throws Exception {
++        when(service.loadState(7L)).thenThrow(new DataAccessResourceFailureException("database unavailable"));
++
++        mvc.perform(get("/api/v1/internal/auth-state/7").header(INTERNAL_HEADER, TOKEN))
++                .andExpect(status().isServiceUnavailable())
++                .andExpect(jsonPath("$.code").value(503))
++                .andExpect(jsonPath("$.msg").value("服务暂不可用，请稍后重试"));
++    }
++}
+diff --git a/passenger/src/test/java/com/sx/passenger/internal/security/PassengerInternalAuthFilterTest.java b/passenger/src/test/java/com/sx/passenger/internal/security/PassengerInternalAuthFilterTest.java
+new file mode 100644
+index 0000000..c533e29
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/internal/security/PassengerInternalAuthFilterTest.java
+@@ -0,0 +1,112 @@
++package com.sx.passenger.internal.security;
++
++import com.fasterxml.jackson.databind.ObjectMapper;
++import jakarta.servlet.FilterChain;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.mock.web.MockHttpServletRequest;
++import org.springframework.mock.web.MockHttpServletResponse;
++
++import java.util.concurrent.atomic.AtomicBoolean;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++class PassengerInternalAuthFilterTest {
++
++    private static final String HEADER = "X-Internal-Service-Token";
++    private static final String TOKEN = "test-passenger-internal-secret-32bytes";
++
++    private PassengerInternalAuthFilter filter;
++
++    @BeforeEach
++    void setUp() {
++        PassengerInternalAuthProperties properties = new PassengerInternalAuthProperties();
++        properties.setToken(TOKEN);
++        filter = new PassengerInternalAuthFilter(properties, new ObjectMapper());
++    }
++
++    @Test
++    void rejectsMissingInternalTokenWithUnauthorizedResponse() throws Exception {
++        MockHttpServletResponse response = execute("/api/v1/internal/auth-state/7", null, new AtomicBoolean());
++
++        assertThat(response.getStatus()).isEqualTo(401);
++        assertThat(response.getContentType()).startsWith("application/json");
++        assertThat(response.getContentAsString()).contains("\"code\":401");
++    }
++
++    @Test
++    void rejectsWrongInternalTokenWithForbiddenResponse() throws Exception {
++        MockHttpServletResponse response = execute("/api/v1/internal/auth-state/7", "wrong", new AtomicBoolean());
++
++        assertThat(response.getStatus()).isEqualTo(403);
++        assertThat(response.getContentAsString()).contains("\"code\":403");
++    }
++
++    @Test
++    void acceptsExactInternalToken() throws Exception {
++        AtomicBoolean invoked = new AtomicBoolean();
++
++        MockHttpServletResponse response = execute("/api/v1/internal/auth-state/7", TOKEN, invoked);
++
++        assertThat(response.getStatus()).isEqualTo(200);
++        assertThat(invoked).isTrue();
++    }
++
++    @Test
++    void protectsExistingAppEntrypoints() throws Exception {
++        AtomicBoolean invoked = new AtomicBoolean();
++
++        MockHttpServletResponse response = execute("/api/v1/app/auth/login-password", null, invoked);
++
++        assertThat(response.getStatus()).isEqualTo(401);
++        assertThat(invoked).isFalse();
++    }
++
++    @Test
++    void ignoresPathsOutsideAppAndInternalPrefixes() throws Exception {
++        AtomicBoolean invoked = new AtomicBoolean();
++
++        MockHttpServletResponse response = execute("/api/v1/customers/7", null, invoked);
++
++        assertThat(response.getStatus()).isEqualTo(200);
++        assertThat(invoked).isTrue();
++    }
++
++    @Test
++    void protectsMatrixInternalPathBehindContextPath() throws Exception {
++        AtomicBoolean invoked = new AtomicBoolean();
++
++        MockHttpServletResponse response = execute(
++                "/passenger/api/v1/internal;probe/auth-state/7", "/passenger", null, invoked);
++
++        assertThat(response.getStatus()).isEqualTo(401);
++        assertThat(invoked).isFalse();
++    }
++
++    @Test
++    void ignoresUnrelatedPathContainingSimilarMatrixSegment() throws Exception {
++        AtomicBoolean invoked = new AtomicBoolean();
++
++        MockHttpServletResponse response = execute("/api/v1/internally;probe/auth-state/7", null, invoked);
++
++        assertThat(response.getStatus()).isEqualTo(200);
++        assertThat(invoked).isTrue();
++    }
++
++    private MockHttpServletResponse execute(String path, String token, AtomicBoolean invoked) throws Exception {
++        return execute(path, "", token, invoked);
++    }
++
++    private MockHttpServletResponse execute(String path, String contextPath, String token, AtomicBoolean invoked)
++            throws Exception {
++        MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
++        request.setContextPath(contextPath);
++        if (token != null) {
++            request.addHeader(HEADER, token);
++        }
++        MockHttpServletResponse response = new MockHttpServletResponse();
++        FilterChain chain = (chainRequest, chainResponse) -> invoked.set(true);
++        filter.doFilter(request, response, chain);
++        return response;
++    }
++}
+diff --git a/passenger/src/test/java/com/sx/passenger/internal/security/PassengerInternalSecurityStartupValidatorTest.java b/passenger/src/test/java/com/sx/passenger/internal/security/PassengerInternalSecurityStartupValidatorTest.java
+new file mode 100644
+index 0000000..5f1d57e
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/internal/security/PassengerInternalSecurityStartupValidatorTest.java
+@@ -0,0 +1,61 @@
++package com.sx.passenger.internal.security;
++
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.ValueSource;
++import org.springframework.mock.env.MockEnvironment;
++
++import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++
++class PassengerInternalSecurityStartupValidatorTest {
++
++    @Test
++    void rejectsMissingTokenOutsideRelaxedProfiles() {
++        assertStrictValidationFails(null);
++    }
++
++    @Test
++    void rejectsTokenShorterThanThirtyTwoBytesOutsideRelaxedProfiles() {
++        assertStrictValidationFails("too-short");
++    }
++
++    @Test
++    void rejectsDevelopmentPrefixOutsideRelaxedProfiles() {
++        assertStrictValidationFails("dev-passenger-internal-secret-over-32-bytes");
++    }
++
++    @Test
++    void rejectsChangeMeTokenOutsideRelaxedProfiles() {
++        assertStrictValidationFails("passenger-internal-change-me-secret-over-32-bytes");
++    }
++
++    @Test
++    void acceptsStrongTokenOutsideRelaxedProfiles() {
++        PassengerInternalAuthProperties properties = properties("passenger-4Km8Qp2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG");
++
++        assertDoesNotThrow(() -> new PassengerInternalSecurityStartupValidator(
++                properties, new MockEnvironment()).afterPropertiesSet());
++    }
++
++    @ParameterizedTest
++    @ValueSource(strings = {"local", "dev", "test"})
++    void relaxedProfilesAllowDevelopmentDefault(String profile) {
++        MockEnvironment environment = new MockEnvironment();
++        environment.setActiveProfiles(profile);
++
++        assertDoesNotThrow(() -> new PassengerInternalSecurityStartupValidator(
++                properties("dev-passenger-internal-change-me"), environment).afterPropertiesSet());
++    }
++
++    private static void assertStrictValidationFails(String token) {
++        assertThrows(IllegalStateException.class, () -> new PassengerInternalSecurityStartupValidator(
++                properties(token), new MockEnvironment()).afterPropertiesSet());
++    }
++
++    private static PassengerInternalAuthProperties properties(String token) {
++        PassengerInternalAuthProperties properties = new PassengerInternalAuthProperties();
++        properties.setToken(token);
++        return properties;
++    }
++}
+diff --git a/passenger/src/test/resources/application-test.yml b/passenger/src/test/resources/application-test.yml
+index 77a300a..c7bbe86 100644
+--- a/passenger/src/test/resources/application-test.yml
++++ b/passenger/src/test/resources/application-test.yml
+@@ -2,13 +2,17 @@ spring:
+   datasource:
+     url: jdbc:h2:mem:passenger_test;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+     driver-class-name: org.h2.Driver
+     username: sa
+     password:
+   sql:
+     init:
+       mode: always
+       schema-locations: classpath:schema-test.sql
+ 
++passenger:
++  internal-auth:
++    token: test-passenger-internal-secret-32bytes
++
+ mybatis-plus:
+   configuration:
+     map-underscore-to-camel-case: true

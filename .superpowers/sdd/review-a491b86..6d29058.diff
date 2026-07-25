@@ -1,0 +1,2045 @@
+# Review package: a491b86..6d29058
+
+## Commits
+6d29058 重构：完成乘客认证代次P2切换
+
+## Files changed
+ .../contracts/passenger-auth-state-v1.json         | 41 ++++++++++
+ ...6-07-21-乘客认证代次原子OTP与受限会话-design.md | 55 +++++++++++++
+ passenger-api/pom.xml                              | 17 +++--
+ .../sx/passengerapi/auth/PassengerAuthMetrics.java | 73 ++++++++++++++++++
+ .../passengerapi/auth/PassengerJwtAuthFilter.java  | 26 ++++++-
+ .../auth/PassengerTokenVersionStore.java           | 44 -----------
+ .../sx/passengerapi/config/AppJwtProperties.java   |  2 +-
+ .../config/PassengerSecurityStartupValidator.java  |  9 ++-
+ .../passengerapi/service/PassengerAuthService.java | 21 ++++-
+ .../ws/PassengerWsHandshakeInterceptor.java        | 35 ++++++++-
+ .../ws/PassengerWsSessionRegistry.java             | 13 ++++
+ .../src/main/resources/application-dev.yml         |  4 +
+ .../src/main/resources/application-local.yml       |  4 +
+ passenger-api/src/main/resources/application.yml   | 11 +--
+ .../auth/PassengerAuthMetricsTest.java             | 34 +++++++++
+ .../auth/PassengerAuthStateContractTest.java       | 89 ++++++++++++++++++++++
+ .../PassengerSecurityStartupValidatorTest.java     | 48 +++++++++++-
+ .../src/test/resources/application-test.yml        |  7 ++
+ passenger/pom.xml                                  | 12 +++
+ .../passenger/app/AppCustomerSettingsService.java  | 23 +++++-
+ .../auth/metrics/PassengerAuthMetrics.java         | 72 +++++++++++++++++
+ .../sx/passenger/auth/otp/AtomicOtpService.java    | 16 +++-
+ .../auth/session/PassengerAuthEpochService.java    | 19 ++++-
+ .../cancel/AccountCancellationFenceService.java    | 12 ++-
+ .../phone/CustomerPhoneChangeService.java          | 18 ++++-
+ .../sql/passenger_account_lifecycle_patch.sql      |  2 +-
+ .../auth/metrics/PassengerAuthMetricsTest.java     | 32 ++++++++
+ .../auth/PassengerInternalAuthControllerTest.java  | 32 ++++++++
+ 28 files changed, 698 insertions(+), 73 deletions(-)
+
+## Diff
+diff --git a/docs/superpowers/contracts/passenger-auth-state-v1.json b/docs/superpowers/contracts/passenger-auth-state-v1.json
+new file mode 100644
+index 0000000..cbe517a
+--- /dev/null
++++ b/docs/superpowers/contracts/passenger-auth-state-v1.json
+@@ -0,0 +1,41 @@
++{
++  "contract": "passenger-auth-state-v1",
++  "cases": [
++    {
++      "name": "ACTIVE",
++      "response": {
++        "customerId": 7,
++        "businessStatus": 0,
++        "lifecycleStatus": "ACTIVE",
++        "authEpoch": 9,
++        "currentLifecycleOperationNo": null,
++        "allowedScope": "NORMAL",
++        "allowed": true
++      }
++    },
++    {
++      "name": "CANCELLING",
++      "response": {
++        "customerId": 7,
++        "businessStatus": 0,
++        "lifecycleStatus": "CANCELLING",
++        "authEpoch": 10,
++        "currentLifecycleOperationNo": "contract-operation-1",
++        "allowedScope": "LIFECYCLE_RESTRICTED",
++        "allowed": true
++      }
++    },
++    {
++      "name": "REJECTED",
++      "response": {
++        "customerId": 404,
++        "businessStatus": null,
++        "lifecycleStatus": null,
++        "authEpoch": 0,
++        "currentLifecycleOperationNo": null,
++        "allowedScope": null,
++        "allowed": false
++      }
++    }
++  ]
++}
+diff --git a/docs/superpowers/specs/2026-07-21-乘客认证代次原子OTP与受限会话-design.md b/docs/superpowers/specs/2026-07-21-乘客认证代次原子OTP与受限会话-design.md
+index 5b082ad..a49ef51 100644
+--- a/docs/superpowers/specs/2026-07-21-乘客认证代次原子OTP与受限会话-design.md
++++ b/docs/superpowers/specs/2026-07-21-乘客认证代次原子OTP与受限会话-design.md
+@@ -279,10 +279,65 @@ P2 不引入 mTLS 基础设施，内部 Token 是当前最小可落地方案。
+ - 新 JWT 全部使用 ae+scope，不再依赖 tv。
+ - 新登录/登出保持单会话，数据库 epoch 唯一权威。
+ - Redis 陈旧、丢失或不可用不会错误放行旧 Token。
+ - 三种 OTP Purpose 隔离且只能原子消费一次。
+ - 受限 Token 只支持 HTTP并绑定当前 operationNo。
+ - CANCELLING 用户可重新认证获得新受限 Token。
+ - 注销建栅栏与换号事务复用 P1 SnapshotStore。
+ - epoch 变化后本节点 WS 关闭，旧 WS Token 不能重连。
+ - 没有新公开换号/注销 Controller，旧 settings 未切到新 Saga。
+ - passenger 与 passenger-api 全量 verify 通过。
++
++## 18. P2 实现结果与上线检查单
++
++### 18.1 已落地组件
++
++认证职责已经收束到以下稳定边界：
++
++- passenger 的 `AtomicOtpService` 统一生成并以 Lua 原子消费 LOGIN、PHONE_CHANGE_NEW_PHONE、ACCOUNT_CANCEL 三种 OTP。
++- passenger 的 `PassengerAuthEpochService` 统一完成登录/重新认证的 epoch 递增、权威状态读取和登出 CAS。
++- passenger 的 `PassengerInternalAuthFilter` 保护内部路径；`PassengerInternalAuthController` 只适配
++  `GET /api/v1/internal/auth-state/{customerId}` 与 `POST /api/v1/internal/auth-state/logout`。
++- passenger 的 `AccountCancellationFenceService` 与 `CustomerPhoneChangeService` 是未公开的生命周期应用服务，
++  共同复用 P1 快照和状态机；没有新增 lifecycle Controller。
++- passenger-api 的 `AppJwtService` 只签发、解析 `ae/scope/audit` 契约；`PassengerJwtAuthFilter` 与
++  `PassengerWsHandshakeInterceptor` 每次均回查 passenger 权威状态，认证裁决不依赖 Redis。
++- passenger-api 的 `PassengerWsSessionRegistry` 负责本节点 generation 栅栏、单会话替换和 epoch 变化后的连接关闭。
++- 两模块使用 `docs/superpowers/contracts/passenger-auth-state-v1.json` 作为同一份认证状态契约测试源。
++
++配置口径如下：
++
++- 两端内部身份统一读取 `PASSENGER_INTERNAL_TOKEN`；非 local/dev/test 环境必须至少 32 bytes，且不得包含
++  `change-me` 或以 `dev-passenger-` 开头。
++- passenger-api JWT audience 固定为 `app-bff`，密钥读取 `JWT_SECRET_APP`；普通与受限 TTL 分别读取
++  `JWT_EXPIRATION_SECONDS_APP`（默认 86400 秒）和 `JWT_RESTRICTED_EXPIRATION_SECONDS_APP`（默认 1800 秒）。
++- 旧 settings 的公开入口继续保留原即时编排，不创建 Saga；其换号/注销 SQL 已在同一数据库写入中递增或终结
++  `auth_epoch`，因此不会重新引入 Redis 会话版本权威。
++
++### 18.2 固定低基数指标
++
++以下指标只允许枚举白名单 Tag，不包含 customerId、operationNo、手机号、Token、OTP Key 或异常 message：
++
++- `passenger.auth.state.query{result}`：passenger 权威状态查询时延和结果。
++- `passenger.auth.jwt.rejected{reason}`：JWT/认证状态拒绝原因。
++- `passenger.auth.otp.consume{purpose,result}`：按用途聚合的 OTP 消费结果。
++- `passenger.auth.epoch.bump{cause,result}`：认证代次变更结果。
++- `passenger.auth.restricted.issued`：受限会话签发次数。
++- `passenger.auth.ws.closed{reason}`：本节点 WS 关闭次数。
++- `passenger.lifecycle.cas.conflict{operationType}`：换号/注销生命周期 CAS 冲突。
++
++### 18.3 上线检查单
++
++1. 先部署 passenger，确认 schema 已包含 `auth_epoch/lifecycle_status/current_lifecycle_operation_no`，内部认证状态接口正常，
++   且生产 `PASSENGER_INTERNAL_TOKEN` 通过启动校验。
++2. 再部署 passenger-api，确认 `aud=app-bff`、JWT 密钥和相同的内部 Token 已注入。
++3. 在统一切换点停止接受 `tv`，不读取、不扫描、不回填旧 Redis 会话版本键，并强制所有乘客重新登录。
++4. 观察 HTTP/WS 的 401、403、503 比例，`passenger.auth.state.query` 的 P95/P99/错误率，受限会话签发量、
++   epoch/CAS 冲突和 WS 关闭量；异常上升时先确认 passenger 与数据库容量和内部链路。
++5. 验证 ACTIVE 普通登录、CANCELLING 受限重认证、旧 HTTP/WS Token 拒绝、登出 CAS 和本节点 WS 撤销。
++6. 确认旧 settings 仍按原入口工作，且没有新公开换号/注销 Controller。
++
++### 18.4 回滚边界
++
++回滚只能回退无状态的 BFF 发布物或停止新增流量，不能降低任何 customer 的 `auth_epoch`，不能恢复已经失效的旧
++Token，不能重新接受 `tv`，也不能把 Redis 会话版本恢复为认证权威。已经进入 CANCELLING 或已经完成换号的事务继续
++以前向恢复和数据库状态为准；若 passenger/数据库不可用，HTTP 与 WS 必须保持 503 失败关闭，禁止绕过权威校验放行。
+diff --git a/passenger-api/pom.xml b/passenger-api/pom.xml
+index 9e04121..0e789e7 100644
+--- a/passenger-api/pom.xml
++++ b/passenger-api/pom.xml
+@@ -40,24 +40,20 @@
+             <version>${feign.version}</version>
+         </dependency>
+         <dependency>
+             <groupId>org.springframework.boot</groupId>
+             <artifactId>spring-boot-starter-actuator</artifactId>
+         </dependency>
+         <dependency>
+             <groupId>org.springframework.boot</groupId>
+             <artifactId>spring-boot-starter-validation</artifactId>
+         </dependency>
+-        <dependency>
+-            <groupId>org.springframework.boot</groupId>
+-            <artifactId>spring-boot-starter-data-redis</artifactId>
+-        </dependency>
+         <dependency>
+             <groupId>io.jsonwebtoken</groupId>
+             <artifactId>jjwt-api</artifactId>
+             <version>0.12.6</version>
+         </dependency>
+         <dependency>
+             <groupId>io.jsonwebtoken</groupId>
+             <artifactId>jjwt-impl</artifactId>
+             <version>0.12.6</version>
+             <scope>runtime</scope>
+@@ -85,26 +81,37 @@
+             <optional>true</optional>
+         </dependency>
+         <dependency>
+             <groupId>org.springframework.boot</groupId>
+             <artifactId>spring-boot-starter-test</artifactId>
+             <scope>test</scope>
+         </dependency>
+     </dependencies>
+ 
+     <build>
++        <testResources>
++            <testResource>
++                <directory>src/test/resources</directory>
++            </testResource>
++            <testResource>
++                <directory>../docs/superpowers/contracts</directory>
++                <includes>
++                    <include>passenger-auth-state-v1.json</include>
++                </includes>
++                <targetPath>contracts</targetPath>
++            </testResource>
++        </testResources>
+         <plugins>
+             <plugin>
+                 <groupId>org.apache.maven.plugins</groupId>
+                 <artifactId>maven-compiler-plugin</artifactId>
+             </plugin>
+             <plugin>
+                 <groupId>org.springframework.boot</groupId>
+                 <artifactId>spring-boot-maven-plugin</artifactId>
+                 <configuration>
+                     <mainClass>com.sx.passengerapi.PassengerApiSpringApplication</mainClass>
+                 </configuration>
+             </plugin>
+         </plugins>
+     </build>
+ </project>
+-
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthMetrics.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthMetrics.java
+new file mode 100644
+index 0000000..5d1f199
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthMetrics.java
+@@ -0,0 +1,73 @@
++package com.sx.passengerapi.auth;
++
++import io.micrometer.core.instrument.Counter;
++import io.micrometer.core.instrument.MeterRegistry;
++import io.micrometer.core.instrument.Metrics;
++import io.micrometer.core.instrument.Timer;
++import org.springframework.stereotype.Component;
++import org.springframework.beans.factory.annotation.Autowired;
++
++import java.time.Duration;
++import java.util.Objects;
++
++@Component
++public class PassengerAuthMetrics {
++
++    public enum AuthStateResult {
++        SUCCESS("success"), INVALID_RESPONSE("invalid_response"), UNAVAILABLE("unavailable");
++        private final String tag;
++        AuthStateResult(String tag) { this.tag = tag; }
++    }
++
++    public enum JwtRejectReason {
++        MISSING("missing"), MALFORMED("malformed"), EPOCH_MISMATCH("epoch_mismatch"),
++        STATE_MISMATCH("state_mismatch"), RESTRICTED("restricted"), AUTH_STATE_UNAVAILABLE("auth_state_unavailable");
++        private final String tag;
++        JwtRejectReason(String tag) { this.tag = tag; }
++    }
++
++    public enum WsCloseReason {
++        LOGOUT("logout"), PHONE_CHANGED("phone_changed"), ACCOUNT_CANCELLING("account_cancelling"),
++        ACCOUNT_CANCELLED("account_cancelled"), AUTH_EPOCH_CHANGED("auth_epoch_changed");
++        private final String tag;
++        WsCloseReason(String tag) { this.tag = tag; }
++
++        public static WsCloseReason from(String reason) {
++            return switch (reason) {
++                case "logout" -> LOGOUT;
++                case "phone_changed" -> PHONE_CHANGED;
++                case "account_cancelling" -> ACCOUNT_CANCELLING;
++                case "account_cancelled" -> ACCOUNT_CANCELLED;
++                default -> AUTH_EPOCH_CHANGED;
++            };
++        }
++    }
++
++    private final MeterRegistry registry;
++
++    @Autowired
++    public PassengerAuthMetrics(MeterRegistry registry) {
++        this.registry = Objects.requireNonNull(registry, "registry must not be null");
++    }
++
++    public PassengerAuthMetrics() {
++        this(Metrics.globalRegistry);
++    }
++
++    public void authStateQuery(Duration duration, AuthStateResult result) {
++        Timer.builder("passenger.auth.state.query").tag("result", result.tag)
++                .register(registry).record(duration == null ? Duration.ZERO : duration);
++    }
++
++    public void jwtRejected(JwtRejectReason reason) {
++        Counter.builder("passenger.auth.jwt.rejected").tag("reason", reason.tag).register(registry).increment();
++    }
++
++    public void restrictedIssued() {
++        registry.counter("passenger.auth.restricted.issued").increment();
++    }
++
++    public void wsClosed(WsCloseReason reason) {
++        Counter.builder("passenger.auth.ws.closed").tag("reason", reason.tag).register(registry).increment();
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerJwtAuthFilter.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerJwtAuthFilter.java
+index b6be76d..fa93408 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerJwtAuthFilter.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerJwtAuthFilter.java
+@@ -6,54 +6,65 @@ import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
+ import com.sx.passengerapi.common.vo.ResponseVo;
+ import feign.FeignException;
+ import jakarta.servlet.FilterChain;
+ import jakarta.servlet.ServletException;
+ import jakarta.servlet.http.HttpServletRequest;
+ import jakarta.servlet.http.HttpServletResponse;
+ import org.springframework.core.annotation.Order;
+ import org.springframework.http.HttpHeaders;
+ import org.springframework.http.MediaType;
+ import org.springframework.stereotype.Component;
++import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.web.filter.OncePerRequestFilter;
+ 
+ import java.io.IOException;
+ import java.util.Map;
+ import java.util.Objects;
+ import java.util.Set;
++import java.time.Duration;
+ 
+ import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
+ 
+ /**
+  * 校验乘客 JWT 签名、aud 及 passenger DB 权威认证状态；通过后注入可信身份头。
+  * 公开路径：登录、发短信；{@code POST /app/api/v1/auth/logout} 须鉴权。
+  */
+ @Component
+ @Order(5)
+ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
+ 
+     private static final String BEARER = "Bearer ";
+     private static final Set<String> RESTRICTED_LIFECYCLE_PATHS = Set.of();
+ 
+     private final AppJwtService jwtService;
+     private final PassengerCoreAuthStateClient authStateClient;
+     private final PassengerAuthDecisionService decisionService;
+     private final ObjectMapper objectMapper;
++    private final PassengerAuthMetrics metrics;
+ 
++    @Autowired
+     public PassengerJwtAuthFilter(
+             AppJwtService jwtService,
+             PassengerCoreAuthStateClient authStateClient,
+             PassengerAuthDecisionService decisionService,
+-            ObjectMapper objectMapper) {
++            ObjectMapper objectMapper,
++            PassengerAuthMetrics metrics) {
+         this.jwtService = jwtService;
+         this.authStateClient = authStateClient;
+         this.decisionService = decisionService;
+         this.objectMapper = objectMapper;
++        this.metrics = metrics;
++    }
++
++    public PassengerJwtAuthFilter(AppJwtService jwtService, PassengerCoreAuthStateClient authStateClient,
++                                  PassengerAuthDecisionService decisionService, ObjectMapper objectMapper) {
++        this(jwtService, authStateClient, decisionService, objectMapper, new PassengerAuthMetrics());
+     }
+ 
+     @Override
+     protected boolean shouldNotFilter(HttpServletRequest request) {
+         String path = request.getRequestURI();
+         return path == null || !path.startsWith("/app/api/v1");
+     }
+ 
+     @Override
+     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+@@ -67,55 +78,68 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
+             filterChain.doFilter(request, response);
+             return;
+         }
+         if (isPublicAuth(path, request.getMethod())) {
+             filterChain.doFilter(request, response);
+             return;
+         }
+ 
+         String raw = request.getHeader(HttpHeaders.AUTHORIZATION);
+         if (raw == null || !raw.regionMatches(true, 0, BEARER, 0, BEARER.length())) {
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MISSING);
+             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "缺少或非法的 Authorization");
+             return;
+         }
+         String token = raw.substring(BEARER.length()).trim();
+         if (token.isEmpty()) {
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MISSING);
+             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "缺少或非法的 Authorization");
+             return;
+         }
+ 
+         final ParsedPassengerJwt parsed;
+         try {
+             parsed = jwtService.parseAndVerify(token);
+         } catch (Exception e) {
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MALFORMED);
+             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "token 无效");
+             return;
+         }
+ 
+         final PassengerAuthContext authContext;
++        long queryStartedAt = System.nanoTime();
+         try {
+             ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
+             if (result == null || !Objects.equals(result.getCode(), HttpServletResponse.SC_OK)
+                     || result.getData() == null) {
++                metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
++                        PassengerAuthMetrics.AuthStateResult.INVALID_RESPONSE);
+                 writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "认证服务暂时不可用");
+                 return;
+             }
++            metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
++                    PassengerAuthMetrics.AuthStateResult.SUCCESS);
+             authContext = decisionService.verify(parsed, result.getData(), 1);
+         } catch (InvalidPassengerSessionException e) {
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
+             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "登录已失效，请重新登录");
+             return;
+         } catch (FeignException e) {
++            metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
++                    PassengerAuthMetrics.AuthStateResult.UNAVAILABLE);
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.AUTH_STATE_UNAVAILABLE);
+             writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "认证服务暂时不可用");
+             return;
+         }
+ 
+         if (authContext.scope() == LIFECYCLE_RESTRICTED && !isRestrictedLifecyclePath(path)) {
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.RESTRICTED);
+             writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "受限会话不可访问该资源");
+             return;
+         }
+ 
+         filterChain.doFilter(new PassengerAuthRequestWrapper(request, authContext), response);
+     }
+ 
+     private static boolean isPublicAuth(String path, String method) {
+         if (!"POST".equalsIgnoreCase(method)) {
+             return false;
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerTokenVersionStore.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerTokenVersionStore.java
+deleted file mode 100644
+index 2939e95..0000000
+--- a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerTokenVersionStore.java
++++ /dev/null
+@@ -1,44 +0,0 @@
+-package com.sx.passengerapi.auth;
+-
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.data.redis.core.StringRedisTemplate;
+-import org.springframework.stereotype.Component;
+-
+-import java.util.concurrent.ConcurrentHashMap;
+-
+-/**
+- * 乘客 token 版本：登录/登出时递增，JWT {@code tv} 须与 Redis 当前值一致（与司机端 {@code driver:tv:*} 同思路）。
+- */
+-@Component
+-public class PassengerTokenVersionStore {
+-
+-    private static final String KEY_PREFIX = "passenger:tv:";
+-
+-    private final StringRedisTemplate redis;
+-    private final ConcurrentHashMap<Long, Long> memory = new ConcurrentHashMap<>();
+-
+-    public PassengerTokenVersionStore(@Autowired(required = false) StringRedisTemplate redis) {
+-        this.redis = redis;
+-    }
+-
+-    private static String key(long customerId) {
+-        return KEY_PREFIX + customerId;
+-    }
+-
+-    /** 递增并返回新版本（登录、登出均用此语义使旧 JWT 失效）。 */
+-    public long nextVersion(long customerId) {
+-        if (redis != null) {
+-            Long v = redis.opsForValue().increment(key(customerId));
+-            return v != null ? v : 1L;
+-        }
+-        return memory.merge(customerId, 1L, Long::sum);
+-    }
+-
+-    public Long currentVersion(long customerId) {
+-        if (redis != null) {
+-            String s = redis.opsForValue().get(key(customerId));
+-            return s == null ? null : Long.parseLong(s);
+-        }
+-        return memory.get(customerId);
+-    }
+-}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtProperties.java b/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtProperties.java
+index 1997565..cab74c9 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtProperties.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtProperties.java
+@@ -4,21 +4,21 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
+ 
+ /**
+  * 乘客端 JWT：签发密钥须与网关 {@code gateway.jwt.secret-app} 一致；
+  * {@code audience} 须与 {@code gateway.jwt.audience-app} 一致以便开启 aud 校验。
+  */
+ @ConfigurationProperties(prefix = "app.jwt")
+ public class AppJwtProperties {
+ 
+     private String secret = "";
+ 
+-    private long expirationSeconds = 604800L;
++    private long expirationSeconds = 86400L;
+ 
+     private long restrictedExpirationSeconds = 1800L;
+ 
+     /** 与 gateway.application.yml gateway.jwt.audience-app 一致 */
+     private String audience = "app-bff";
+ 
+     public String getSecret() {
+         return secret;
+     }
+ 
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerSecurityStartupValidator.java b/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerSecurityStartupValidator.java
+index 6b913a4..1988cbe 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerSecurityStartupValidator.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerSecurityStartupValidator.java
+@@ -10,45 +10,50 @@ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.Locale;
+ 
+ @Component
+ public class PassengerSecurityStartupValidator implements InitializingBean {
+ 
+     private static final Profiles RELAXED_PROFILES = Profiles.of("local", "dev", "test");
+ 
+     private final AppJwtProperties jwtProperties;
+     private final CouponClaimIdentityProperties claimIdentityProperties;
++    private final PassengerInternalClientProperties internalClientProperties;
+     private final Environment environment;
+ 
+     public PassengerSecurityStartupValidator(AppJwtProperties jwtProperties,
+                                              CouponClaimIdentityProperties claimIdentityProperties,
++                                             PassengerInternalClientProperties internalClientProperties,
+                                              Environment environment) {
+         this.jwtProperties = jwtProperties;
+         this.claimIdentityProperties = claimIdentityProperties;
++        this.internalClientProperties = internalClientProperties;
+         this.environment = environment;
+     }
+ 
+     @Override
+     public void afterPropertiesSet() {
+         if (!environment.acceptsProfiles(RELAXED_PROFILES)) {
+-            validateStrict(jwtProperties, claimIdentityProperties);
++            validateStrict(jwtProperties, claimIdentityProperties, internalClientProperties);
+         }
+     }
+ 
+-    static void validateStrict(AppJwtProperties jwt, CouponClaimIdentityProperties claimIdentity) {
++    static void validateStrict(AppJwtProperties jwt, CouponClaimIdentityProperties claimIdentity,
++                               PassengerInternalClientProperties internalClient) {
+         List<String> errors = new ArrayList<>();
+         validateSecret("JWT_SECRET_APP", jwt.getSecret(), "dev-didi-", errors);
+         if (!"app-bff".equals(jwt.getAudience())) {
+             errors.add("app.jwt.audience must be app-bff");
+         }
+         validateSecret("COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET",
+                 claimIdentity.getPhoneHashSecret(), "dev-coupon-", errors);
++        validateSecret("PASSENGER_INTERNAL_TOKEN", internalClient.getToken(), "dev-passenger-", errors);
+         if (!errors.isEmpty()) {
+             throw new IllegalStateException("Production security validation failed: " + String.join("; ", errors));
+         }
+     }
+ 
+     private static void validateSecret(String name, String value, String developmentPrefix, List<String> errors) {
+         if (value == null || value.isBlank()) {
+             errors.add(name + " must be configured");
+             return;
+         }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerAuthService.java b/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerAuthService.java
+index ea6b46d..e462c9c 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerAuthService.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerAuthService.java
+@@ -1,15 +1,16 @@
+ package com.sx.passengerapi.service;
+ 
+ import com.sx.passengerapi.auth.AppJwtService;
+ import com.sx.passengerapi.auth.PassengerAuthContext;
+ import com.sx.passengerapi.auth.PassengerSessionScope;
++import com.sx.passengerapi.auth.PassengerAuthMetrics;
+ import com.sx.passengerapi.client.PassengerCoreAuthClient;
+ import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
+ import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
+ import com.sx.passengerapi.client.dto.AppLoginPasswordRequest;
+ import com.sx.passengerapi.client.dto.AppSmsLoginRequest;
+ import com.sx.passengerapi.client.dto.AppSmsSendRequest;
+ import com.sx.passengerapi.client.dto.AppSmsSendResult;
+ import com.sx.passengerapi.client.dto.InternalLogoutRequest;
+ import com.sx.passengerapi.client.dto.InternalLogoutResponse;
+ import com.sx.passengerapi.common.exception.BizErrorException;
+@@ -17,47 +18,62 @@ import com.sx.passengerapi.common.exception.StalePassengerLogoutException;
+ import com.sx.passengerapi.common.vo.ResponseVo;
+ import com.sx.passengerapi.model.auth.CustomerLoginResponse;
+ import com.sx.passengerapi.model.auth.CustomerProfileVO;
+ import com.sx.passengerapi.model.auth.PassengerLogoutResult;
+ import com.sx.passengerapi.model.auth.SmsSendResult;
+ import com.sx.passengerapi.ws.PassengerWsProperties;
+ import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
+ import feign.FeignException;
+ import lombok.extern.slf4j.Slf4j;
+ import org.springframework.stereotype.Service;
++import org.springframework.beans.factory.annotation.Autowired;
+ 
+ import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
+ 
+ @Service
+ @Slf4j
+ public class PassengerAuthService {
+ 
+     private final PassengerCoreAuthClient passengerCoreAuthClient;
+     private final PassengerCoreAuthStateClient authStateClient;
+     private final AppJwtService jwtService;
+     private final PassengerOrderService passengerOrderService;
+     private final PassengerWsProperties passengerWsProperties;
+     private final PassengerWsSessionRegistry sessions;
++    private final PassengerAuthMetrics metrics;
+ 
++    @Autowired
+     public PassengerAuthService(
+             PassengerCoreAuthClient passengerCoreAuthClient,
+             PassengerCoreAuthStateClient authStateClient,
+             AppJwtService jwtService,
+             PassengerOrderService passengerOrderService,
+             PassengerWsProperties passengerWsProperties,
+-            PassengerWsSessionRegistry sessions) {
++            PassengerWsSessionRegistry sessions,
++            PassengerAuthMetrics metrics) {
+         this.passengerCoreAuthClient = passengerCoreAuthClient;
+         this.authStateClient = authStateClient;
+         this.jwtService = jwtService;
+         this.passengerOrderService = passengerOrderService;
+         this.passengerWsProperties = passengerWsProperties;
+         this.sessions = sessions;
++        this.metrics = metrics;
++    }
++
++    public PassengerAuthService(PassengerCoreAuthClient passengerCoreAuthClient,
++                                PassengerCoreAuthStateClient authStateClient,
++                                AppJwtService jwtService,
++                                PassengerOrderService passengerOrderService,
++                                PassengerWsProperties passengerWsProperties,
++                                PassengerWsSessionRegistry sessions) {
++        this(passengerCoreAuthClient, authStateClient, jwtService, passengerOrderService,
++                passengerWsProperties, sessions, new PassengerAuthMetrics());
+     }
+ 
+     public SmsSendResult sendSms(String phone) {
+         ResponseVo<AppSmsSendResult> body = passengerCoreAuthClient.sendSms(new AppSmsSendRequest(phone));
+         if (body == null || body.getCode() == null) {
+             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
+         }
+         if (body.getCode() != 200) {
+             throw new BizErrorException(body.getCode(), body.getMsg());
+         }
+@@ -169,20 +185,23 @@ public class PassengerAuthService {
+         }
+ 
+         CustomerProfileVO profile = new CustomerProfileVO();
+         profile.setId(brief.getId());
+         profile.setPhone(brief.getPhone());
+         profile.setNickname(brief.getNickname());
+ 
+         sessions.closeCustomerSessions(brief.getId(), "auth_epoch_changed");
+         String token = jwtService.createPassengerToken(
+                 brief.getId(), brief.getPhone(), brief.getAuthEpoch(), scope, 1, brief.getOperationNo());
++        if (scope == PassengerSessionScope.LIFECYCLE_RESTRICTED) {
++            metrics.restrictedIssued();
++        }
+         CustomerLoginResponse response = new CustomerLoginResponse();
+         response.setAccessToken(token);
+         response.setTokenType("Bearer");
+         response.setExpiresIn(jwtService.getExpirationSeconds(scope));
+         response.setScope(scope.name());
+         response.setOperationNo(brief.getOperationNo());
+         response.setCustomer(profile);
+         log.info("乘客登录成功 customerId={}", brief.getId());
+         return response;
+     }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
+index 203e315..ab5182b 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
+@@ -1,98 +1,129 @@
+ package com.sx.passengerapi.ws;
+ 
+ import com.sx.passengerapi.auth.AppJwtService;
+ import com.sx.passengerapi.auth.InvalidPassengerSessionException;
+ import com.sx.passengerapi.auth.PassengerAuthDecisionService;
++import com.sx.passengerapi.auth.PassengerAuthMetrics;
+ import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
+ import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
+ import com.sx.passengerapi.common.vo.ResponseVo;
+ import feign.FeignException;
+ import io.jsonwebtoken.JwtException;
+ import lombok.extern.slf4j.Slf4j;
+ import org.springframework.http.HttpStatus;
+ import org.springframework.http.server.ServerHttpRequest;
+ import org.springframework.http.server.ServerHttpResponse;
+ import org.springframework.http.server.ServletServerHttpRequest;
+ import org.springframework.stereotype.Component;
++import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.web.socket.WebSocketHandler;
+ import org.springframework.web.socket.server.HandshakeInterceptor;
+ 
+ import java.net.URI;
+ import java.util.Map;
+ import java.util.Objects;
++import java.time.Duration;
+ 
+ import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
+ 
+ @Component
+ @Slf4j
+ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
+ 
+     public static final String ATTR_CUSTOMER_ID = "customerId";
+     public static final String ATTR_REGISTRATION_PERMIT = "registrationPermit";
+ 
+     private final PassengerWsProperties wsProperties;
+     private final AppJwtService jwtService;
+     private final PassengerCoreAuthStateClient authStateClient;
+     private final PassengerAuthDecisionService decisionService;
+     private final PassengerWsSessionRegistry registry;
++    private final PassengerAuthMetrics metrics;
+ 
++    @Autowired
+     public PassengerWsHandshakeInterceptor(PassengerWsProperties wsProperties,
+                                            AppJwtService jwtService,
+                                            PassengerCoreAuthStateClient authStateClient,
+                                            PassengerAuthDecisionService decisionService,
+-                                           PassengerWsSessionRegistry registry) {
++                                           PassengerWsSessionRegistry registry,
++                                           PassengerAuthMetrics metrics) {
+         this.wsProperties = wsProperties;
+         this.jwtService = jwtService;
+         this.authStateClient = authStateClient;
+         this.decisionService = decisionService;
+         this.registry = registry;
++        this.metrics = metrics;
++    }
++
++    public PassengerWsHandshakeInterceptor(PassengerWsProperties wsProperties, AppJwtService jwtService,
++                                           PassengerCoreAuthStateClient authStateClient,
++                                           PassengerAuthDecisionService decisionService,
++                                           PassengerWsSessionRegistry registry) {
++        this(wsProperties, jwtService, authStateClient, decisionService, registry,
++                new PassengerAuthMetrics());
+     }
+ 
+     @Override
+     public boolean beforeHandshake(ServerHttpRequest request,
+                                    ServerHttpResponse response,
+                                    WebSocketHandler wsHandler,
+                                    Map<String, Object> attributes) {
+         if (!wsProperties.isEnabled()) {
+             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+             return false;
+         }
+         try {
+             String token = extractToken(request);
+             var parsed = jwtService.parseAndVerify(token);
+             PassengerWsSessionRegistry.RegistrationPermit permit =
+                     registry.captureRegistration(parsed.customerId());
+-            ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
++            long queryStartedAt = System.nanoTime();
++            ResponseVo<InternalAuthStateResponse> result;
++            try {
++                result = authStateClient.get(parsed.customerId());
++            } catch (FeignException ex) {
++                metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
++                        PassengerAuthMetrics.AuthStateResult.UNAVAILABLE);
++                throw ex;
++            }
+             if (result == null || !Objects.equals(result.getCode(), HttpStatus.OK.value())
+                     || result.getData() == null) {
++                metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
++                        PassengerAuthMetrics.AuthStateResult.INVALID_RESPONSE);
+                 response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+                 return false;
+             }
++            metrics.authStateQuery(Duration.ofNanos(System.nanoTime() - queryStartedAt),
++                    PassengerAuthMetrics.AuthStateResult.SUCCESS);
+ 
+             if (parsed.scope() == LIFECYCLE_RESTRICTED) {
+                 decisionService.verify(parsed, result.getData(), 1);
++                metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.RESTRICTED);
+                 response.setStatusCode(HttpStatus.FORBIDDEN);
+                 return false;
+             }
+ 
+             decisionService.verify(parsed, result.getData(), 2);
+             attributes.put(ATTR_CUSTOMER_ID, parsed.customerId());
+             attributes.put(ATTR_REGISTRATION_PERMIT, permit);
+             return true;
+         } catch (InvalidPassengerSessionException e) {
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.STATE_MISMATCH);
+             response.setStatusCode(HttpStatus.UNAUTHORIZED);
+             return false;
+         } catch (JwtException | IllegalArgumentException e) {
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.MALFORMED);
+             response.setStatusCode(HttpStatus.UNAUTHORIZED);
+             return false;
+         } catch (FeignException e) {
++            metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.AUTH_STATE_UNAVAILABLE);
+             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+             return false;
+         } catch (Exception e) {
+             log.warn("WS handshake authentication failed type={}", e.getClass().getSimpleName());
+             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+             return false;
+         }
+     }
+ 
+     @Override
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsSessionRegistry.java b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsSessionRegistry.java
+index bc55a57..f26b769 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsSessionRegistry.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsSessionRegistry.java
+@@ -1,14 +1,16 @@
+ package com.sx.passengerapi.ws;
+ 
+ import lombok.extern.slf4j.Slf4j;
+ import org.springframework.stereotype.Component;
++import com.sx.passengerapi.auth.PassengerAuthMetrics;
++import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.web.socket.CloseStatus;
+ import org.springframework.web.socket.TextMessage;
+ import org.springframework.web.socket.WebSocketSession;
+ 
+ import java.io.IOException;
+ import java.lang.ref.ReferenceQueue;
+ import java.lang.ref.WeakReference;
+ import java.util.Collection;
+ import java.util.Map;
+ import java.util.Set;
+@@ -76,20 +78,30 @@ public class PassengerWsSessionRegistry {
+ 
+         public long lastSeenAtMs() {
+             return lastSeenAtMs.get();
+         }
+     }
+ 
+     private final Map<Long, PassengerSession> byCustomerId = new ConcurrentHashMap<>();
+     private final Map<String, Long> customerIdBySessionId = new ConcurrentHashMap<>();
+     private final Map<Long, FenceReference> fences = new ConcurrentHashMap<>();
+     private final ReferenceQueue<CustomerFence> collectedFences = new ReferenceQueue<>();
++    private final PassengerAuthMetrics metrics;
++
++    public PassengerWsSessionRegistry() {
++        this(new PassengerAuthMetrics());
++    }
++
++    @Autowired
++    public PassengerWsSessionRegistry(PassengerAuthMetrics metrics) {
++        this.metrics = metrics;
++    }
+ 
+     public RegistrationPermit captureRegistration(long customerId) {
+         if (customerId <= 0) {
+             throw new IllegalArgumentException("invalid customerId");
+         }
+         cleanupCollectedFences();
+         CustomerFence fence = findOrCreateFence(customerId);
+         synchronized (fence) {
+             return new RegistrationPermit(customerId, fence, fence.generation);
+         }
+@@ -175,20 +187,21 @@ public class PassengerWsSessionRegistry {
+             return;
+         }
+         synchronized (fence) {
+             fence.generation++;
+             PassengerSession current = byCustomerId.remove(customerId);
+             if (current == null || current.getSession() == null) {
+                 return;
+             }
+             customerIdBySessionId.remove(current.getSession().getId(), customerId);
+             safeClose(current.getSession(), new CloseStatus(4001, sanitizeReason(reason)));
++            metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.from(reason));
+         }
+     }
+ 
+     private CustomerFence findOrCreateFence(long customerId) {
+         while (true) {
+             FenceReference currentReference = fences.get(customerId);
+             CustomerFence current = currentReference == null ? null : currentReference.get();
+             if (current != null) {
+                 return current;
+             }
+diff --git a/passenger-api/src/main/resources/application-dev.yml b/passenger-api/src/main/resources/application-dev.yml
+index 2a239c7..6d60483 100644
+--- a/passenger-api/src/main/resources/application-dev.yml
++++ b/passenger-api/src/main/resources/application-dev.yml
+@@ -1,7 +1,11 @@
+ app:
+   jwt:
+     secret: ${JWT_SECRET_APP:dev-didi-app-jwt-secret-change-me-32b!!}
+ 
++passenger:
++  internal-auth:
++    token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
++
+ coupon:
+   claim-identity:
+     phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET:dev-coupon-claim-secret-change-me}
+diff --git a/passenger-api/src/main/resources/application-local.yml b/passenger-api/src/main/resources/application-local.yml
+index 2a239c7..6d60483 100644
+--- a/passenger-api/src/main/resources/application-local.yml
++++ b/passenger-api/src/main/resources/application-local.yml
+@@ -1,7 +1,11 @@
+ app:
+   jwt:
+     secret: ${JWT_SECRET_APP:dev-didi-app-jwt-secret-change-me-32b!!}
+ 
++passenger:
++  internal-auth:
++    token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
++
+ coupon:
+   claim-identity:
+     phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET:dev-coupon-claim-secret-change-me}
+diff --git a/passenger-api/src/main/resources/application.yml b/passenger-api/src/main/resources/application.yml
+index f3753a1..32d94fe 100644
+--- a/passenger-api/src/main/resources/application.yml
++++ b/passenger-api/src/main/resources/application.yml
+@@ -1,35 +1,30 @@
+ server:
+   port: 8100
+ 
+ # 经网关访问时不要开 BFF 自带 CORS（勿设 bff.browser-cors.enabled），与《网关服务_设计》一致。
+ # 仅浏览器直连本端口 8100 排障：bff.browser-cors.enabled=true
+ 
+ spring:
+   application:
+     name: passenger-api
+-  data:
+-    redis:
+-      host: ${REDIS_HOST:127.0.0.1}
+-      port: ${REDIS_PORT:6379}
+-      database: ${REDIS_DB:0}
+-
+ app:
+   jwt:
+     # 与网关 gateway.jwt.secret-app 保持一致；非 local/dev/test 必须显式配置。
+     secret: ${JWT_SECRET_APP:}
+-    expiration-seconds: 604800
++    expiration-seconds: ${JWT_EXPIRATION_SECONDS_APP:86400}
++    restricted-expiration-seconds: ${JWT_RESTRICTED_EXPIRATION_SECONDS_APP:1800}
+     audience: app-bff
+ 
+ passenger:
+   internal-auth:
+-    token: ${PASSENGER_INTERNAL_TOKEN:}
++    token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
+   ws:
+     # 运维总闸：false 时拒绝 ws-token / WS 握手
+     enabled: ${PASSENGER_WS_ENABLED:true}
+     heartbeat-timeout-ms: 90000
+ 
+ coupon:
+   claim-identity:
+     phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET:}
+ 
+ logging:
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerAuthMetricsTest.java b/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerAuthMetricsTest.java
+new file mode 100644
+index 0000000..11430f9
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerAuthMetricsTest.java
+@@ -0,0 +1,34 @@
++package com.sx.passengerapi.auth;
++
++import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
++import org.junit.jupiter.api.Test;
++
++import java.time.Duration;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++class PassengerAuthMetricsTest {
++
++    @Test
++    void recordsDatabaseDecisionAndRejectReasonWithFixedLowCardinalityTags() {
++        SimpleMeterRegistry registry = new SimpleMeterRegistry();
++        PassengerAuthMetrics metrics = new PassengerAuthMetrics(registry);
++
++        metrics.authStateQuery(Duration.ofMillis(12), PassengerAuthMetrics.AuthStateResult.SUCCESS);
++        metrics.jwtRejected(PassengerAuthMetrics.JwtRejectReason.EPOCH_MISMATCH);
++        metrics.restrictedIssued();
++        metrics.wsClosed(PassengerAuthMetrics.WsCloseReason.LOGOUT);
++
++        assertThat(registry.get("passenger.auth.state.query").tag("result", "success").timer().count())
++                .isEqualTo(1);
++        assertThat(registry.get("passenger.auth.jwt.rejected").tag("reason", "epoch_mismatch").counter().count())
++                .isEqualTo(1);
++        assertThat(registry.get("passenger.auth.restricted.issued").counter().count()).isEqualTo(1);
++        assertThat(registry.get("passenger.auth.ws.closed").tag("reason", "logout").counter().count())
++                .isEqualTo(1);
++        assertThat(registry.getMeters()).allSatisfy(meter -> meter.getId().getTags().forEach(tag -> {
++            assertThat(tag.getKey()).isIn("result", "reason");
++            assertThat(tag.getValue()).doesNotContain("7", "13800138000", "op-", "token", "exception");
++        }));
++    }
++}
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerAuthStateContractTest.java b/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerAuthStateContractTest.java
+new file mode 100644
+index 0000000..7817771
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerAuthStateContractTest.java
+@@ -0,0 +1,89 @@
++package com.sx.passengerapi.auth;
++
++import com.fasterxml.jackson.databind.JsonNode;
++import com.fasterxml.jackson.databind.ObjectMapper;
++import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
++import org.junit.jupiter.api.Test;
++
++import java.io.InputStream;
++import java.lang.reflect.Field;
++import java.util.Arrays;
++
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++
++class PassengerAuthStateContractTest {
++
++    private final ObjectMapper mapper = new ObjectMapper();
++    private final PassengerAuthDecisionService decisions = new PassengerAuthDecisionService();
++
++    @Test
++    void bffDtoReadsAllSharedContractCasesWithStableFieldTypes() throws Exception {
++        JsonNode cases = fixture().path("cases");
++        assertThat(cases).hasSize(3);
++        for (JsonNode contractCase : cases) {
++            JsonNode response = contractCase.path("response");
++            InternalAuthStateResponse state = mapper.treeToValue(response, InternalAuthStateResponse.class);
++            assertThat(state.getCustomerId()).isEqualTo(response.path("customerId").longValue());
++            assertThat(response.path("authEpoch").isIntegralNumber()).isTrue();
++            assertThat(response.path("allowed").isBoolean()).isTrue();
++            assertThat(mapper.<JsonNode>valueToTree(state).toString()).isEqualTo(response.toString());
++        }
++    }
++
++    @Test
++    void newerLoginEpochRejectsBothOldHttpAndOldWsTokens() throws Exception {
++        InternalAuthStateResponse active = state("ACTIVE");
++        long epochN = active.getAuthEpoch();
++        assertThat(decisions.verify(token(epochN, NORMAL, 1, null), active, 1).authEpoch()).isEqualTo(epochN);
++
++        active.setAuthEpoch(epochN + 1);
++        assertThatThrownBy(() -> decisions.verify(token(epochN, NORMAL, 1, null), active, 1))
++                .isInstanceOf(InvalidPassengerSessionException.class);
++        assertThatThrownBy(() -> decisions.verify(token(epochN, NORMAL, 2, null), active, 2))
++                .isInstanceOf(InvalidPassengerSessionException.class);
++    }
++
++    @Test
++    void cancellingContractAcceptsOnlyItsBoundRestrictedHttpIdentity() throws Exception {
++        InternalAuthStateResponse cancelling = state("CANCELLING");
++        assertThat(decisions.verify(token(cancelling.getAuthEpoch(), LIFECYCLE_RESTRICTED, 1,
++                cancelling.getCurrentLifecycleOperationNo()), cancelling, 1).scope())
++                .isEqualTo(LIFECYCLE_RESTRICTED);
++        assertThatThrownBy(() -> decisions.verify(token(cancelling.getAuthEpoch(), LIFECYCLE_RESTRICTED, 2,
++                cancelling.getCurrentLifecycleOperationNo()), cancelling, 1))
++                .isInstanceOf(InvalidPassengerSessionException.class);
++    }
++
++    @Test
++    void authenticationDecisionPathHasNoRedisDependency() {
++        assertThat(Arrays.stream(new Class<?>[]{PassengerJwtAuthFilter.class, PassengerAuthDecisionService.class,
++                        com.sx.passengerapi.ws.PassengerWsHandshakeInterceptor.class})
++                .flatMap(type -> Arrays.stream(type.getDeclaredFields()))
++                .map(Field::getType)
++                .map(Class::getName))
++                .noneMatch(name -> name.toLowerCase().contains("redis"));
++    }
++
++    private JsonNode fixture() throws Exception {
++        try (InputStream input = getClass().getResourceAsStream("/contracts/passenger-auth-state-v1.json")) {
++            assertThat(input).as("共享认证状态契约必须位于 classpath:/contracts").isNotNull();
++            return mapper.readTree(input);
++        }
++    }
++
++    private InternalAuthStateResponse state(String name) throws Exception {
++        for (JsonNode contractCase : fixture().path("cases")) {
++            if (name.equals(contractCase.path("name").asText())) {
++                return mapper.treeToValue(contractCase.path("response"), InternalAuthStateResponse.class);
++            }
++        }
++        throw new AssertionError("missing contract case " + name);
++    }
++
++    private static ParsedPassengerJwt token(long epoch, PassengerSessionScope scope, int audit, String operationNo) {
++        return new ParsedPassengerJwt(7L, "", epoch, scope, audit, operationNo);
++    }
++}
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/config/PassengerSecurityStartupValidatorTest.java b/passenger-api/src/test/java/com/sx/passengerapi/config/PassengerSecurityStartupValidatorTest.java
+index d25ab44..40106d0 100644
+--- a/passenger-api/src/test/java/com/sx/passengerapi/config/PassengerSecurityStartupValidatorTest.java
++++ b/passenger-api/src/test/java/com/sx/passengerapi/config/PassengerSecurityStartupValidatorTest.java
+@@ -1,30 +1,74 @@
+ package com.sx.passengerapi.config;
+ 
+ import org.junit.jupiter.api.Test;
+ 
+ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+ import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.assertj.core.api.Assertions.assertThat;
+ 
+ class PassengerSecurityStartupValidatorTest {
+ 
+     @Test
+     void rejectsDevelopmentDefaults() {
+         AppJwtProperties jwt = new AppJwtProperties();
+         jwt.setSecret("dev-didi-app-jwt-secret-change-me-32b!!");
+         CouponClaimIdentityProperties claim = new CouponClaimIdentityProperties();
+         claim.setPhoneHashSecret("dev-coupon-claim-secret-change-me");
+ 
+         assertThrows(IllegalStateException.class,
+-                () -> PassengerSecurityStartupValidator.validateStrict(jwt, claim));
++                () -> PassengerSecurityStartupValidator.validateStrict(jwt, claim, internal("strong-passenger-internal-token-32bytes")));
+     }
+ 
+     @Test
+     void acceptsStrongSecretsAndExpectedAudience() {
+         AppJwtProperties jwt = new AppJwtProperties();
+         jwt.setSecret("app-4Km8Qp2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG");
+         CouponClaimIdentityProperties claim = new CouponClaimIdentityProperties();
+         claim.setPhoneHashSecret("coupon-2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG4Km8Qp");
+ 
+-        assertDoesNotThrow(() -> PassengerSecurityStartupValidator.validateStrict(jwt, claim));
++        assertDoesNotThrow(() -> PassengerSecurityStartupValidator.validateStrict(
++                jwt, claim, internal("prod-passenger-internal-token-32bytes")));
++    }
++
++    @Test
++    void productionRejectsMissingShortAndDevelopmentInternalToken() {
++        AppJwtProperties jwt = strongJwt();
++        CouponClaimIdentityProperties claim = strongCouponIdentity();
++
++        for (String token : new String[]{null, "", "too-short", "dev-passenger-internal-01234567890123456789",
++                "prod-passenger-change-me-01234567890123456789"}) {
++            IllegalStateException failure = assertThrows(IllegalStateException.class,
++                    () -> PassengerSecurityStartupValidator.validateStrict(jwt, claim, internal(token)));
++            assertThat(failure).hasMessageContaining("PASSENGER_INTERNAL_TOKEN");
++        }
++    }
++
++    @Test
++    void productionRequiresAppBffAudience() {
++        AppJwtProperties jwt = strongJwt();
++        jwt.setAudience("wrong-bff");
++
++        assertThat(assertThrows(IllegalStateException.class,
++                () -> PassengerSecurityStartupValidator.validateStrict(
++                        jwt, strongCouponIdentity(), internal("prod-passenger-internal-token-32bytes"))))
++                .hasMessageContaining("app.jwt.audience must be app-bff");
++    }
++
++    private static AppJwtProperties strongJwt() {
++        AppJwtProperties jwt = new AppJwtProperties();
++        jwt.setSecret("app-4Km8Qp2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG");
++        return jwt;
++    }
++
++    private static CouponClaimIdentityProperties strongCouponIdentity() {
++        CouponClaimIdentityProperties claim = new CouponClaimIdentityProperties();
++        claim.setPhoneHashSecret("coupon-2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG4Km8Qp");
++        return claim;
++    }
++
++    private static PassengerInternalClientProperties internal(String token) {
++        PassengerInternalClientProperties internal = new PassengerInternalClientProperties();
++        internal.setToken(token);
++        return internal;
+     }
+ }
+diff --git a/passenger-api/src/test/resources/application-test.yml b/passenger-api/src/test/resources/application-test.yml
+index 7e531db..c20dcb9 100644
+--- a/passenger-api/src/test/resources/application-test.yml
++++ b/passenger-api/src/test/resources/application-test.yml
+@@ -1,7 +1,14 @@
+ app:
+   jwt:
+     secret: test-didi-app-jwt-secret-at-least-32-bytes!!
++    audience: app-bff
++    expiration-seconds: 86400
++    restricted-expiration-seconds: 1800
++
++passenger:
++  internal-auth:
++    token: test-passenger-internal-secret-32bytes
+ 
+ coupon:
+   claim-identity:
+     phone-hash-secret: test-coupon-phone-hash-secret-at-least-32-bytes
+diff --git a/passenger/pom.xml b/passenger/pom.xml
+index baa1924..7900351 100644
+--- a/passenger/pom.xml
++++ b/passenger/pom.xml
+@@ -89,20 +89,32 @@
+             <scope>test</scope>
+         </dependency>
+         <dependency>
+             <groupId>com.h2database</groupId>
+             <artifactId>h2</artifactId>
+             <scope>test</scope>
+         </dependency>
+     </dependencies>
+ 
+     <build>
++        <testResources>
++            <testResource>
++                <directory>src/test/resources</directory>
++            </testResource>
++            <testResource>
++                <directory>../docs/superpowers/contracts</directory>
++                <includes>
++                    <include>passenger-auth-state-v1.json</include>
++                </includes>
++                <targetPath>contracts</targetPath>
++            </testResource>
++        </testResources>
+         <plugins>
+             <plugin>
+                 <groupId>org.apache.maven.plugins</groupId>
+                 <artifactId>maven-compiler-plugin</artifactId>
+             </plugin>
+             <plugin>
+                 <groupId>org.springframework.boot</groupId>
+                 <artifactId>spring-boot-maven-plugin</artifactId>
+             </plugin>
+         </plugins>
+diff --git a/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java b/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
+index 6413fce..cc2ea20 100644
+--- a/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
++++ b/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
+@@ -5,29 +5,31 @@ import com.sx.passenger.app.dto.AppAccountCancelConfirmRequest;
+ import com.sx.passenger.app.dto.AppAccountCancelResult;
+ import com.sx.passenger.app.dto.AppAccountCancelSmsSendResult;
+ import com.sx.passenger.app.dto.AppPhoneChangeConfirmRequest;
+ import com.sx.passenger.app.dto.AppPhoneChangeResult;
+ import com.sx.passenger.app.dto.AppPhoneChangeSmsSendRequest;
+ import com.sx.passenger.app.dto.AppSettingsProfileResponse;
+ import com.sx.passenger.auth.otp.AtomicOtpService;
+ import com.sx.passenger.auth.otp.OtpConsumeResult;
+ import com.sx.passenger.auth.otp.OtpPurpose;
+ import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
+ import com.sx.passenger.common.util.ResultUtil;
+ import com.sx.passenger.common.vo.ResponseVo;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.model.Customer;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.dao.DuplicateKeyException;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.stereotype.Service;
++import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+ import java.security.SecureRandom;
+ import java.time.Duration;
+ import java.time.LocalDate;
+ import java.time.LocalDateTime;
+ import java.time.ZoneId;
+ import java.time.ZoneOffset;
+ import java.util.concurrent.TimeUnit;
+ 
+@@ -39,30 +41,39 @@ public class AppCustomerSettingsService {
+ 
+     private static final String KEY_PHONE_CHANGE_GAP_PREFIX = "app:settings:phone-change:sms:gap:"; // 更换手机号发送间隔锁
+     private static final String KEY_PHONE_CHANGE_DAILY_PREFIX = "app:settings:phone-change:sms:daily:"; // 更换手机号自然日发送次数
+     private static final String KEY_ACCOUNT_CANCEL_GAP_PREFIX = "app:settings:account-cancel:sms:gap:"; // 注销验证码发送间隔锁
+     private static final String KEY_ACCOUNT_CANCEL_DAILY_PREFIX = "app:settings:account-cancel:sms:daily:"; // 注销验证码自然日发送次数
+ 
+     private final CustomerEntityMapper customerMapper;
+     private final StringRedisTemplate redis;
+     private final AppCustomerAuthProperties smsProps;
+     private final AtomicOtpService otpService;
++    private final PassengerAuthMetrics metrics;
+ 
++    @Autowired
+     public AppCustomerSettingsService(
+             CustomerEntityMapper customerMapper,
+             StringRedisTemplate redis,
+             AppCustomerAuthProperties smsProps,
+-            AtomicOtpService otpService) {
++            AtomicOtpService otpService,
++            PassengerAuthMetrics metrics) {
+         this.customerMapper = customerMapper;
+         this.redis = redis;
+         this.smsProps = smsProps;
+         this.otpService = otpService;
++        this.metrics = metrics;
++    }
++
++    public AppCustomerSettingsService(CustomerEntityMapper customerMapper, StringRedisTemplate redis,
++                                      AppCustomerAuthProperties smsProps, AtomicOtpService otpService) {
++        this(customerMapper, redis, smsProps, otpService, new PassengerAuthMetrics());
+     }
+ 
+     public ResponseVo<AppSettingsProfileResponse> profile(Long customerId) {
+         Customer c = findActiveById(customerId);
+         if (c == null) {
+             return ResultUtil.error(404, "账号不存在或已注销");
+         }
+         AppSettingsProfileResponse out = new AppSettingsProfileResponse();
+         out.setCustomerId(c.getId());
+         out.setMaskedPhone(maskPhone(c.getPhone()));
+@@ -120,25 +131,31 @@ public class AppCustomerSettingsService {
+         Customer occupied = findActiveByPhone(newPhone);
+         if (occupied != null && !occupied.getId().equals(req.getCustomerId())) {
+             return ResultUtil.error(409, "该手机号已被使用");
+         }
+ 
+         try {
+             // 只更新同一个 customer.id，历史订单仍通过 passenger_id 关联到原用户。
+             int updated = customerMapper.changePhoneCas(
+                     req.getCustomerId(), newPhone, lifecycleVersion(current));
+             if (updated != 1) {
++                metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
++                        PassengerAuthMetrics.OperationResult.CONFLICT);
+                 return ResultUtil.error(409, "账号状态已变化，请重试");
+             }
+         } catch (DuplicateKeyException e) {
++            metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
++                    PassengerAuthMetrics.OperationResult.CONFLICT);
+             return ResultUtil.error(409, "该手机号已被使用");
+         }
++        metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
++                PassengerAuthMetrics.OperationResult.SUCCESS);
+         AppPhoneChangeResult out = new AppPhoneChangeResult();
+         out.setChanged(true);
+         out.setRequireLogin(true);
+         out.setMaskedNewPhone(maskPhone(newPhone));
+         log.info("乘客更换手机号成功 customerId={} oldPhone={} newPhone={}",
+                 req.getCustomerId(), maskPhone(current.getPhone()), maskPhone(newPhone));
+         return ResultUtil.success(out);
+     }
+ 
+     /**
+@@ -178,22 +195,26 @@ public class AppCustomerSettingsService {
+         if (otpService.consume(OtpPurpose.ACCOUNT_CANCEL, subject, req.getCode())
+                 != OtpConsumeResult.CONSUMED) {
+             return ResultUtil.unauthorized("验证码错误或已过期");
+         }
+ 
+         // 逻辑删除后 phone_active 生成列应变为 NULL，旧手机号允许重新注册成新的 customer.id。
+         LocalDateTime cancelledAt = LocalDateTime.now(ZoneOffset.UTC);
+         int updated = customerMapper.cancelAccountCas(
+                 req.getCustomerId(), lifecycleVersion(current), cancelledAt);
+         if (updated != 1) {
++            metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
++                    PassengerAuthMetrics.OperationResult.CONFLICT);
+             return ResultUtil.error(409, "账号状态已变化，请重试");
+         }
++        metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
++                PassengerAuthMetrics.OperationResult.SUCCESS);
+         AppAccountCancelResult out = new AppAccountCancelResult();
+         out.setCancelled(true);
+         out.setRequireLogin(true);
+         log.info("乘客账号已逻辑注销 customerId={} phone={}", req.getCustomerId(), maskPhone(current.getPhone()));
+         return ResultUtil.success(out);
+     }
+ 
+     /**
+      * 设置功能沿用独立发送频控 key，验证码本身由 AtomicOtpService 按用途保存。
+      */
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/metrics/PassengerAuthMetrics.java b/passenger/src/main/java/com/sx/passenger/auth/metrics/PassengerAuthMetrics.java
+new file mode 100644
+index 0000000..1637440
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/metrics/PassengerAuthMetrics.java
+@@ -0,0 +1,72 @@
++package com.sx.passenger.auth.metrics;
++
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
++import io.micrometer.core.instrument.Counter;
++import io.micrometer.core.instrument.MeterRegistry;
++import io.micrometer.core.instrument.Metrics;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.stereotype.Component;
++
++import java.util.Locale;
++import java.util.Objects;
++
++@Component
++public class PassengerAuthMetrics {
++
++    public enum EpochCause {
++        LOGIN("login"), REAUTHENTICATION("reauthentication"), LOGOUT("logout"),
++        PHONE_CHANGE("phone_change"), ACCOUNT_CANCEL("account_cancel");
++        private final String tag;
++        EpochCause(String tag) { this.tag = tag; }
++    }
++
++    public enum OperationResult {
++        SUCCESS("success"), CONFLICT("conflict"), REJECTED("rejected");
++        private final String tag;
++        OperationResult(String tag) { this.tag = tag; }
++    }
++
++    private final MeterRegistry registry;
++
++    @Autowired
++    public PassengerAuthMetrics(MeterRegistry registry) {
++        this.registry = Objects.requireNonNull(registry, "registry must not be null");
++    }
++
++    public PassengerAuthMetrics() {
++        this(Metrics.globalRegistry);
++    }
++
++    public void otpConsume(OtpPurpose purpose, OtpConsumeResult result) {
++        Counter.builder("passenger.auth.otp.consume")
++                .tag("purpose", purposeTag(purpose)).tag("result", result.name().toLowerCase(Locale.ROOT))
++                .register(registry).increment();
++    }
++
++    public void epochBump(EpochCause cause, OperationResult result) {
++        Counter.builder("passenger.auth.epoch.bump")
++                .tag("cause", cause.tag).tag("result", result.tag).register(registry).increment();
++    }
++
++    public void lifecycleCasConflict(LifecycleOperationType operationType) {
++        Counter.builder("passenger.lifecycle.cas.conflict")
++                .tag("operationType", operationTypeTag(operationType)).register(registry).increment();
++    }
++
++    private static String purposeTag(OtpPurpose purpose) {
++        return switch (purpose) {
++            case LOGIN -> "login";
++            case PHONE_CHANGE_NEW_PHONE -> "phone_change_new_phone";
++            case ACCOUNT_CANCEL -> "account_cancel";
++        };
++    }
++
++    private static String operationTypeTag(LifecycleOperationType type) {
++        return switch (type) {
++            case PHONE_CHANGE -> "phone_change";
++            case ACCOUNT_CANCEL -> "account_cancel";
++        };
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/otp/AtomicOtpService.java b/passenger/src/main/java/com/sx/passenger/auth/otp/AtomicOtpService.java
+index e07ad51..492e578 100644
+--- a/passenger/src/main/java/com/sx/passenger/auth/otp/AtomicOtpService.java
++++ b/passenger/src/main/java/com/sx/passenger/auth/otp/AtomicOtpService.java
+@@ -1,12 +1,14 @@
+ package com.sx.passenger.auth.otp;
+ 
++import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
++import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.data.redis.core.script.DefaultRedisScript;
+ import org.springframework.stereotype.Service;
+ 
+ import java.time.Duration;
+ import java.util.List;
+ import java.util.Objects;
+ 
+ @Service
+ public class AtomicOtpService {
+@@ -14,42 +16,52 @@ public class AtomicOtpService {
+     private static final DefaultRedisScript<Long> CONSUME = new DefaultRedisScript<>("""
+             local current = redis.call('GET', KEYS[1])
+             if not current then return 0 end
+             if current ~= ARGV[1] then return 1 end
+             redis.call('DEL', KEYS[1])
+             return 2
+             """, Long.class);
+ 
+     private final StringRedisTemplate redis;
+     private final OtpKeyFactory keys;
++    private final PassengerAuthMetrics metrics;
+ 
+-    public AtomicOtpService(StringRedisTemplate redis, OtpKeyFactory keys) {
++    @Autowired
++    public AtomicOtpService(StringRedisTemplate redis, OtpKeyFactory keys, PassengerAuthMetrics metrics) {
+         this.redis = Objects.requireNonNull(redis, "redis must not be null");
+         this.keys = Objects.requireNonNull(keys, "keys must not be null");
++        this.metrics = Objects.requireNonNull(metrics, "metrics must not be null");
++    }
++
++    public AtomicOtpService(StringRedisTemplate redis, OtpKeyFactory keys) {
++        this(redis, keys, new PassengerAuthMetrics());
+     }
+ 
+     public void store(OtpPurpose purpose, OtpSubject subject, String code, Duration ttl) {
+         if (code == null || code.isBlank()) {
+             throw new IllegalArgumentException("OTP code must not be blank");
+         }
+         if (ttl == null || ttl.isNegative() || ttl.isZero()) {
+             throw new IllegalArgumentException("OTP ttl must be positive");
+         }
+         redis.opsForValue().set(keys.key(purpose, subject), code, ttl);
+     }
+ 
+     public OtpConsumeResult consume(OtpPurpose purpose, OtpSubject subject, String submittedCode) {
+         if (submittedCode == null || submittedCode.isBlank()) {
++            metrics.otpConsume(purpose, OtpConsumeResult.MISMATCH);
+             return OtpConsumeResult.MISMATCH;
+         }
+         Long result = redis.execute(CONSUME, List.of(keys.key(purpose, subject)), submittedCode.trim());
+         if (result == null) {
+             throw new IllegalStateException("OTP store unavailable");
+         }
+-        return switch (result.intValue()) {
++        OtpConsumeResult mapped = switch (result.intValue()) {
+             case 0 -> OtpConsumeResult.MISSING;
+             case 1 -> OtpConsumeResult.MISMATCH;
+             case 2 -> OtpConsumeResult.CONSUMED;
+             default -> throw new IllegalStateException("Unknown OTP consume result: " + result);
+         };
++        metrics.otpConsume(purpose, mapped);
++        return mapped;
+     }
+ }
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/session/PassengerAuthEpochService.java b/passenger/src/main/java/com/sx/passenger/auth/session/PassengerAuthEpochService.java
+index f5d8a64..bb24ff2 100644
+--- a/passenger/src/main/java/com/sx/passenger/auth/session/PassengerAuthEpochService.java
++++ b/passenger/src/main/java/com/sx/passenger/auth/session/PassengerAuthEpochService.java
+@@ -1,67 +1,84 @@
+ package com.sx.passenger.auth.session;
+ 
+ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+ import com.sx.passenger.app.dto.AppAuthCustomerBrief;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
+ import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
+ import com.sx.passenger.model.Customer;
++import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+ import java.time.LocalDateTime;
+ import java.time.ZoneOffset;
+ import java.util.Set;
+ 
+ @Service
+ public class PassengerAuthEpochService {
+ 
+     private static final String ACTIVE = "ACTIVE";
+     private static final String CANCELLING = "CANCELLING";
+     private static final Set<String> ACTIVE_OPERATION_STATUSES = Set.of(
+             "REQUESTED", "FENCED", "VALIDATING", "BLOCKED", "EXECUTING", "RETRY_PENDING", "MANUAL_REVIEW");
+ 
+     private final CustomerEntityMapper customers;
+     private final LifecycleOperationMapper operations;
++    private final PassengerAuthMetrics metrics;
+ 
+-    public PassengerAuthEpochService(CustomerEntityMapper customers, LifecycleOperationMapper operations) {
++    public PassengerAuthEpochService(CustomerEntityMapper customers, LifecycleOperationMapper operations,
++                                     PassengerAuthMetrics metrics) {
+         this.customers = customers;
+         this.operations = operations;
++        this.metrics = metrics;
+     }
+ 
+     @Transactional
+     public AppAuthCustomerBrief completeAuthentication(long customerId) {
+         requirePositiveCustomerId(customerId);
+         if (customers.bumpAuthEpochForAuthentication(customerId) != 1) {
++            metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGIN,
++                    PassengerAuthMetrics.OperationResult.REJECTED);
+             throw new AuthStateRejectedException();
+         }
+         Customer current = customers.selectById(customerId);
+         AuthSessionScope scope = scopeOf(current);
+         if (scope == AuthSessionScope.LIFECYCLE_RESTRICTED
+                 && operations.updateRestrictedAuthEpoch(customerId, current.getCurrentLifecycleOperationNo(),
+                 current.getAuthEpoch(), LocalDateTime.now(ZoneOffset.UTC)) != 1) {
++            metrics.epochBump(PassengerAuthMetrics.EpochCause.REAUTHENTICATION,
++                    PassengerAuthMetrics.OperationResult.REJECTED);
+             throw new AuthStateRejectedException();
+         }
++        metrics.epochBump(scope == AuthSessionScope.NORMAL
++                        ? PassengerAuthMetrics.EpochCause.LOGIN : PassengerAuthMetrics.EpochCause.REAUTHENTICATION,
++                PassengerAuthMetrics.OperationResult.SUCCESS);
+         return AppAuthCustomerBrief.from(current, scope.name());
+     }
+ 
+     @Transactional
+     public long logout(long customerId, long expectedAuthEpoch) {
+         requirePositiveCustomerId(customerId);
+         if (expectedAuthEpoch < 0 || customers.bumpAuthEpochForLogout(customerId, expectedAuthEpoch) != 1) {
++            metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
++                    PassengerAuthMetrics.OperationResult.CONFLICT);
+             throw new AuthEpochConflictException();
+         }
+         Customer current = customers.selectById(customerId);
+         if (current == null || current.getAuthEpoch() == null) {
++            metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
++                    PassengerAuthMetrics.OperationResult.CONFLICT);
+             throw new AuthEpochConflictException();
+         }
++        metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGOUT,
++                PassengerAuthMetrics.OperationResult.SUCCESS);
+         return current.getAuthEpoch();
+     }
+ 
+     @Transactional(readOnly = true)
+     public AuthoritativeAuthState loadState(long customerId) {
+         requirePositiveCustomerId(customerId);
+         Customer current = customers.selectById(customerId);
+         if (current == null) {
+             return new AuthoritativeAuthState(customerId, null, null, 0L, null, null, false);
+         }
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceService.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceService.java
+index 7d5917f..6cf3485 100644
+--- a/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceService.java
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceService.java
+@@ -1,16 +1,17 @@
+ package com.sx.passenger.lifecycle.application.cancel;
+ 
+ import com.sx.passenger.auth.otp.AtomicOtpService;
+ import com.sx.passenger.auth.otp.OtpConsumeResult;
+ import com.sx.passenger.auth.otp.OtpPurpose;
+ import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.lifecycle.application.CreateLifecycleSnapshotCommand;
+ import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
+ import com.sx.passenger.lifecycle.application.LifecycleJson;
+ import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
+ import com.sx.passenger.lifecycle.application.LifecycleRequestHasher;
+ import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshot;
+ import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshotFactory;
+ import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
+ import com.sx.passenger.lifecycle.application.UuidLifecycleIdentifierGenerator;
+@@ -36,41 +37,44 @@ public class AccountCancellationFenceService {
+     private final AtomicOtpService otp;
+     private final LifecycleSnapshotStore snapshots;
+     private final CustomerEntityMapper customers;
+     private final LifecycleOperationMapper operations;
+     private final LifecycleEventMapper events;
+     private final TransactionTemplate withoutTransaction;
+     private final TransactionTemplate databaseTransaction;
+     private final LifecycleRequestHasher hasher;
+     private final LifecycleRuntimeSnapshotFactory snapshotFactory;
+     private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
++    private final PassengerAuthMetrics metrics;
+ 
+     public AccountCancellationFenceService(AtomicOtpService otp,
+                                             LifecycleSnapshotStore snapshots,
+                                             CustomerEntityMapper customers,
+                                             LifecycleOperationMapper operations,
+                                             LifecycleEventMapper events,
+                                             PlatformTransactionManager transactionManager,
+                                             LifecycleRequestHasher hasher,
+-                                            LifecyclePlanRegistry plans) {
++                                            LifecyclePlanRegistry plans,
++                                            PassengerAuthMetrics metrics) {
+         this.otp = otp;
+         this.snapshots = snapshots;
+         this.customers = customers;
+         this.operations = operations;
+         this.events = events;
+         this.withoutTransaction = new TransactionTemplate(transactionManager);
+         this.withoutTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
+         this.databaseTransaction = new TransactionTemplate(transactionManager);
+         this.databaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
+         this.hasher = hasher;
+         this.snapshotFactory = new LifecycleRuntimeSnapshotFactory(
+                 plans, new UuidLifecycleIdentifierGenerator(), new LifecycleJson());
++        this.metrics = metrics;
+     }
+ 
+     public AccountCancellationFenceResult fence(FenceAccountCancellationCommand command) {
+         Objects.requireNonNull(command, "command must not be null");
+         AccountCancellationFenceResult result = withoutTransaction.execute(
+                 status -> fenceOutsideTransaction(command));
+         return Objects.requireNonNull(result, "cancellation fence execution returned no result");
+     }
+ 
+     private AccountCancellationFenceResult fenceOutsideTransaction(FenceAccountCancellationCommand command) {
+@@ -97,44 +101,50 @@ public class AccountCancellationFenceService {
+                                                         String requestHash) {
+         LifecycleRuntimeSnapshot snapshot = snapshotFactory.create(new CreateLifecycleSnapshotCommand(
+                 command.customerId(), LifecycleOperationType.ACCOUNT_CANCEL, command.idempotencyKey(), requestHash,
+                 command.expectedLifecycleVersion(), LifecycleActorType.CUSTOMER, command.actorId(), command.traceId(),
+                 command.sanitizedRequestContextJson(), command.requestedAt()));
+         LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
+         String operationNo = snapshot.operation().getOperationNo();
+         int customerUpdated = customers.fenceAccountCancellation(
+                 command.customerId(), command.expectedLifecycleVersion(), operationNo, now);
+         if (customerUpdated != 1) {
++            metrics.lifecycleCasConflict(LifecycleOperationType.ACCOUNT_CANCEL);
++            metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
++                    PassengerAuthMetrics.OperationResult.CONFLICT);
+             throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
+         }
+         Customer fencedCustomer = customers.selectById(command.customerId());
+         if (fencedCustomer == null) {
+             throw new LifecycleOperationConflictException("Customer disappeared while creating cancellation fence");
+         }
+ 
+         snapshots.persistNew(snapshot);
+         LifecycleOperationEntity operation = snapshot.operation();
+         int operationUpdated = operations.fenceRequestedCas(operation.getId(), 0L,
+                 fencedCustomer.getAuthEpoch(), fencedCustomer.getLifecycleVersion(), now);
+         if (operationUpdated != 1) {
++            metrics.lifecycleCasConflict(LifecycleOperationType.ACCOUNT_CANCEL);
+             throw new LifecycleOperationConflictException("Lifecycle operation changed while creating fence");
+         }
+         LifecycleEventEntity fencedEvent = new LifecycleEventEntity()
+                 .setEventId(identifiers.nextEventId()).setOperationId(operation.getId())
+                 .setCustomerId(command.customerId()).setEventType("LIFECYCLE_OPERATION_STATUS_CHANGED")
+                 .setFromStatus("REQUESTED").setToStatus("FENCED")
+                 .setActorType(LifecycleActorType.CUSTOMER.name()).setActorId(command.actorId())
+                 .setReasonCode("ACCOUNT_CANCEL_FENCED").setTraceId(command.traceId())
+                 .setPayloadSnapshot("{}").setCreatedAt(now);
+         if (events.insert(fencedEvent) != 1) {
+             throw new IllegalStateException("Failed to insert lifecycle fence event");
+         }
++        metrics.epochBump(PassengerAuthMetrics.EpochCause.ACCOUNT_CANCEL,
++                PassengerAuthMetrics.OperationResult.SUCCESS);
+         return new AccountCancellationFenceResult(operation.getId(), operationNo, command.customerId(),
+                 fencedCustomer.getLifecycleVersion(), fencedCustomer.getAuthEpoch(), "FENCED");
+     }
+ 
+     private static AccountCancellationFenceResult replay(LifecycleOperationEntity operation, String requestHash) {
+         if (!requestHash.equals(operation.getRequestHash())) {
+             throw new LifecycleOperationConflictException("Idempotency key was used for another request");
+         }
+         if (operation.getAppliedLifecycleVersion() == null || operation.getRestrictedAuthEpoch() == null) {
+             throw new LifecycleOperationConflictException("Existing lifecycle operation is not fenced");
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeService.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeService.java
+index 72664a6..500fb6f 100644
+--- a/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeService.java
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeService.java
+@@ -1,17 +1,18 @@
+ package com.sx.passenger.lifecycle.application.phone;
+ 
+ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+ import com.sx.passenger.auth.otp.AtomicOtpService;
+ import com.sx.passenger.auth.otp.OtpConsumeResult;
+ import com.sx.passenger.auth.otp.OtpPurpose;
+ import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.lifecycle.application.CreateLifecycleSnapshotCommand;
+ import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
+ import com.sx.passenger.lifecycle.application.LifecycleJson;
+ import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
+ import com.sx.passenger.lifecycle.application.LifecycleRequestHasher;
+ import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshot;
+ import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshotFactory;
+ import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
+ import com.sx.passenger.lifecycle.application.UuidLifecycleIdentifierGenerator;
+@@ -63,49 +64,52 @@ public class CustomerPhoneChangeService {
+     private final LifecycleOutboxMapper outboxes;
+     private final PhoneBindingValueFactory bindingValues;
+     private final LifecycleRequestHasher hasher;
+     private final LifecycleRuntimeSnapshotFactory snapshotFactory;
+     private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
+     private final LifecycleJson json = new LifecycleJson();
+     private final LifecycleOperationStateMachine operationStateMachine = new LifecycleOperationStateMachine();
+     private final LifecycleStepStateMachine stepStateMachine = new LifecycleStepStateMachine();
+     private final TransactionTemplate withoutTransaction;
+     private final TransactionTemplate databaseTransaction;
++    private final PassengerAuthMetrics metrics;
+ 
+     public CustomerPhoneChangeService(AtomicOtpService otp,
+                                       LifecycleSnapshotStore snapshots,
+                                       CustomerEntityMapper customers,
+                                       CustomerPhoneBindingHistoryMapper bindings,
+                                       LifecycleOperationMapper operations,
+                                       LifecycleStepMapper steps,
+                                       LifecycleEventMapper events,
+                                       LifecycleOutboxMapper outboxes,
+                                       PhoneBindingValueFactory bindingValues,
+                                       LifecycleRequestHasher hasher,
+                                       LifecyclePlanRegistry plans,
+-                                      PlatformTransactionManager transactionManager) {
++                                      PlatformTransactionManager transactionManager,
++                                      PassengerAuthMetrics metrics) {
+         this.otp = otp;
+         this.snapshots = snapshots;
+         this.customers = customers;
+         this.bindings = bindings;
+         this.operations = operations;
+         this.steps = steps;
+         this.events = events;
+         this.outboxes = outboxes;
+         this.bindingValues = bindingValues;
+         this.hasher = hasher;
+         this.snapshotFactory = new LifecycleRuntimeSnapshotFactory(
+                 plans, new UuidLifecycleIdentifierGenerator(), new LifecycleJson());
+         this.withoutTransaction = new TransactionTemplate(transactionManager);
+         this.withoutTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
+         this.databaseTransaction = new TransactionTemplate(transactionManager);
+         this.databaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
++        this.metrics = metrics;
+     }
+ 
+     public ChangeCustomerPhoneResult change(ChangeCustomerPhoneCommand command) {
+         Objects.requireNonNull(command, "command must not be null");
+         ChangeCustomerPhoneResult result = withoutTransaction.execute(status -> changeOutsideTransaction(command));
+         return Objects.requireNonNull(result, "phone change execution returned no result");
+     }
+ 
+     private ChangeCustomerPhoneResult changeOutsideTransaction(ChangeCustomerPhoneCommand command) {
+         String requestHash = hasher.hash(command);
+@@ -140,80 +144,92 @@ public class CustomerPhoneChangeService {
+                 command.sanitizedRequestContextJson(), command.requestedAt()));
+         LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
+         LifecycleOperationEntity operation = snapshot.operation();
+ 
+         int customerUpdated;
+         try {
+             customerUpdated = customers.changePhoneCas(command.customerId(), command.newPhone(),
+                     command.expectedLifecycleVersion());
+         } catch (DuplicateKeyException ex) {
+             if (hasConstraint(ex, "uk_customer_phone_active")) {
++                metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
+                 throw new LifecycleOperationConflictException("New phone is already occupied");
+             }
+             throw ex;
+         }
+         if (customerUpdated != 1) {
++            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
++            metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
++                    PassengerAuthMetrics.OperationResult.CONFLICT);
+             throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
+         }
+         Customer changed = customers.selectById(command.customerId());
+         if (changed == null) throw new LifecycleOperationConflictException("Customer disappeared during phone change");
+ 
+         if (bindings.replaceActive(command.customerId(), operation.getOperationNo(), now) != 1) {
++            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
+             throw new LifecycleOperationConflictException("Active phone binding changed concurrently");
+         }
+         Long maxVersion = bindings.selectMaxBindingVersion(command.customerId());
+         long nextVersion = maxVersion == null ? 1L : maxVersion + 1L;
+         if (bindings.insert(bindingValues.active(command.customerId(), nextVersion, command.newPhone(),
+                 operation.getOperationNo(), now)) != 1) {
+             throw new IllegalStateException("Failed to insert active phone binding");
+         }
+ 
+         snapshots.persistNew(snapshot);
+         operationStateMachine.requireTransition(LifecycleOperationType.PHONE_CHANGE,
+                 LifecycleOperationStatus.REQUESTED, LifecycleOperationStatus.EXECUTING, false);
+         if (operations.startPhoneChangeCas(operation.getId(), 0L, now) != 1) {
++            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
+             throw new LifecycleOperationConflictException("Phone change operation could not start");
+         }
+         insertTransitionEvent(operation, "REQUESTED", "EXECUTING", "PHONE_CHANGE_STARTED", command, now);
+ 
+         stepStateMachine.requireTransition(LifecycleStepStatus.PENDING, LifecycleStepStatus.RUNNING);
+         int startedSteps = steps.update(null, Wrappers.<LifecycleStepEntity>lambdaUpdate()
+                 .eq(LifecycleStepEntity::getOperationId, operation.getId())
+                 .eq(LifecycleStepEntity::getStatus, "PENDING")
+                 .set(LifecycleStepEntity::getStatus, "RUNNING")
+                 .set(LifecycleStepEntity::getAttemptCount, 1)
+                 .set(LifecycleStepEntity::getStartedAt, now)
+                 .set(LifecycleStepEntity::getUpdatedAt, now));
+         if (startedSteps != snapshot.steps().size()) {
++            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
+             throw new LifecycleOperationConflictException("Phone change steps could not start");
+         }
+         stepStateMachine.requireTransition(LifecycleStepStatus.RUNNING, LifecycleStepStatus.SUCCEEDED);
+         int completedSteps = steps.update(null, Wrappers.<LifecycleStepEntity>lambdaUpdate()
+                 .eq(LifecycleStepEntity::getOperationId, operation.getId())
+                 .eq(LifecycleStepEntity::getStatus, "RUNNING")
+                 .set(LifecycleStepEntity::getStatus, "SUCCEEDED")
+                 .set(LifecycleStepEntity::getCompletedAt, now)
+                 .set(LifecycleStepEntity::getUpdatedAt, now));
+         if (completedSteps != snapshot.steps().size()) {
++            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
+             throw new LifecycleOperationConflictException("Phone change steps changed concurrently");
+         }
+ 
+         operationStateMachine.requireTransition(LifecycleOperationType.PHONE_CHANGE,
+                 LifecycleOperationStatus.EXECUTING, LifecycleOperationStatus.COMPLETED, false);
+         if (operations.completePhoneChangeCas(operation.getId(), 1L, changed.getLifecycleVersion(),
+                 changed.getAuthEpoch(), now) != 1) {
++            metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
+             throw new LifecycleOperationConflictException("Phone change operation could not complete");
+         }
+         String completedEventId = insertTransitionEvent(operation, "EXECUTING", "COMPLETED",
+                 "PHONE_CHANGE_COMPLETED", command, now);
+         insertCompletedOutbox(operation, changed, completedEventId, command, now);
+ 
++        metrics.epochBump(PassengerAuthMetrics.EpochCause.PHONE_CHANGE,
++                PassengerAuthMetrics.OperationResult.SUCCESS);
++
+         return new ChangeCustomerPhoneResult(operation.getId(), operation.getOperationNo(), command.customerId(),
+                 changed.getLifecycleVersion(), changed.getAuthEpoch(), true);
+     }
+ 
+     private String insertTransitionEvent(LifecycleOperationEntity operation, String from, String to, String reason,
+                                          ChangeCustomerPhoneCommand command, LocalDateTime now) {
+         String eventId = identifiers.nextEventId();
+         LifecycleEventEntity event = new LifecycleEventEntity().setEventId(eventId)
+                 .setOperationId(operation.getId()).setCustomerId(command.customerId())
+                 .setEventType("LIFECYCLE_OPERATION_STATUS_CHANGED").setFromStatus(from).setToStatus(to)
+diff --git a/passenger/src/main/resources/sql/passenger_account_lifecycle_patch.sql b/passenger/src/main/resources/sql/passenger_account_lifecycle_patch.sql
+index c94dc68..29378dc 100644
+--- a/passenger/src/main/resources/sql/passenger_account_lifecycle_patch.sql
++++ b/passenger/src/main/resources/sql/passenger_account_lifecycle_patch.sql
+@@ -230,15 +230,15 @@ CREATE TABLE IF NOT EXISTS `customer_phone_binding_history` (
+     PRIMARY KEY (`id`),
+     UNIQUE KEY `uk_customer_phone_binding_version` (`customer_id`, `binding_version`),
+     UNIQUE KEY `uk_customer_phone_binding_active` (`active_customer_id`),
+     KEY `idx_customer_phone_identity_history` (`phone_identity_hash`, `hash_key_version`, `valid_to`),
+     KEY `idx_customer_phone_operation` (`change_operation_no`)
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='乘客手机号版本化绑定历史';
+ 
+ -- =============================================================================
+ -- 上线前必须完成但不应在本 SQL 中伪造的数据工作：
+ -- 1. 使用应用侧 KMS/密钥配置为现存 customer 回填手机号绑定历史。
+--- 2. 将 Redis passenger:tv:{customerId} 与 customer.auth_epoch 对齐，之后 Redis 降级为缓存。
++-- 2. P2 统一切换后仅以 customer.auth_epoch 为认证权威，不读取、扫描或回填旧 Redis 会话版本键。
+ -- 3. participant 服务增加 (operation_id, step_code) 唯一 Inbox，并保证 Inbox 与副作用同事务。
+ -- 4. account-lifecycle 启动时校验 YAML 计划、participant/step_code 契约与唯一 ACTIVE 版本。
+ -- 5. 灰度阶段仍保留旧 settings 接口，但内部转调新 Lifecycle Application Service。
+ -- =============================================================================
+diff --git a/passenger/src/test/java/com/sx/passenger/auth/metrics/PassengerAuthMetricsTest.java b/passenger/src/test/java/com/sx/passenger/auth/metrics/PassengerAuthMetricsTest.java
+new file mode 100644
+index 0000000..9c0af01
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/auth/metrics/PassengerAuthMetricsTest.java
+@@ -0,0 +1,32 @@
++package com.sx.passenger.auth.metrics;
++
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
++import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
++import org.junit.jupiter.api.Test;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++class PassengerAuthMetricsTest {
++
++    @Test
++    void recordsOnlyEnumBackedOtpEpochAndLifecycleTags() {
++        SimpleMeterRegistry registry = new SimpleMeterRegistry();
++        PassengerAuthMetrics metrics = new PassengerAuthMetrics(registry);
++
++        metrics.otpConsume(OtpPurpose.ACCOUNT_CANCEL, OtpConsumeResult.CONSUMED);
++        metrics.epochBump(PassengerAuthMetrics.EpochCause.LOGIN,
++                PassengerAuthMetrics.OperationResult.SUCCESS);
++        metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
++
++        assertThat(registry.get("passenger.auth.otp.consume")
++                .tag("purpose", "account_cancel").tag("result", "consumed").counter().count()).isEqualTo(1);
++        assertThat(registry.get("passenger.auth.epoch.bump")
++                .tag("cause", "login").tag("result", "success").counter().count()).isEqualTo(1);
++        assertThat(registry.get("passenger.lifecycle.cas.conflict")
++                .tag("operationType", "phone_change").counter().count()).isEqualTo(1);
++        assertThat(registry.getMeters()).allSatisfy(meter -> meter.getId().getTags().forEach(tag ->
++                assertThat(tag.getKey()).isIn("purpose", "result", "cause", "operationType")));
++    }
++}
+diff --git a/passenger/src/test/java/com/sx/passenger/internal/auth/PassengerInternalAuthControllerTest.java b/passenger/src/test/java/com/sx/passenger/internal/auth/PassengerInternalAuthControllerTest.java
+index c627df9..324c8d0 100644
+--- a/passenger/src/test/java/com/sx/passenger/internal/auth/PassengerInternalAuthControllerTest.java
++++ b/passenger/src/test/java/com/sx/passenger/internal/auth/PassengerInternalAuthControllerTest.java
+@@ -11,29 +11,31 @@ import com.sx.passenger.common.exception.GlobalExceptionHandler;
+ import com.sx.passenger.internal.security.PassengerInternalAuthFilter;
+ import com.sx.passenger.internal.security.PassengerInternalAuthProperties;
+ import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.Test;
+ import org.springframework.dao.DataAccessResourceFailureException;
+ import org.springframework.http.MediaType;
+ import org.springframework.test.web.servlet.MockMvc;
+ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+ 
+ import java.net.URI;
++import java.io.InputStream;
+ 
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.verifyNoInteractions;
+ import static org.mockito.Mockito.when;
+ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++import static org.assertj.core.api.Assertions.assertThat;
+ 
+ class PassengerInternalAuthControllerTest {
+ 
+     private static final String INTERNAL_HEADER = "X-Internal-Service-Token";
+     private static final String TOKEN = "test-passenger-internal-secret-32bytes";
+ 
+     private final PassengerAuthEpochService service = mock(PassengerAuthEpochService.class);
+     private final AppCustomerAuthService appCustomerAuthService = mock(AppCustomerAuthService.class);
+     private MockMvc mvc;
+ 
+@@ -184,11 +186,41 @@ class PassengerInternalAuthControllerTest {
+ 
+     @Test
+     void infrastructureFailureReturnsServiceUnavailable() throws Exception {
+         when(service.loadState(7L)).thenThrow(new DataAccessResourceFailureException("database unavailable"));
+ 
+         mvc.perform(get("/api/v1/internal/auth-state/7").header(INTERNAL_HEADER, TOKEN))
+                 .andExpect(status().isServiceUnavailable())
+                 .andExpect(jsonPath("$.code").value(503))
+                 .andExpect(jsonPath("$.msg").value("服务暂不可用，请稍后重试"));
+     }
++
++    @Test
++    void controllerResponsesConformToSharedAuthStateContractFixture() throws Exception {
++        ObjectMapper mapper = new ObjectMapper();
++        try (InputStream input = getClass().getResourceAsStream("/contracts/passenger-auth-state-v1.json")) {
++            assertThat(input).as("共享认证状态契约必须位于 classpath:/contracts").isNotNull();
++            var cases = mapper.readTree(input).path("cases");
++            assertThat(cases).hasSize(3);
++            for (var contractCase : cases) {
++                var expected = contractCase.path("response");
++                long customerId = expected.path("customerId").asLong();
++                AuthSessionScope scope = expected.path("allowedScope").isNull()
++                        ? null : AuthSessionScope.valueOf(expected.path("allowedScope").asText());
++                Integer businessStatus = expected.path("businessStatus").isNull()
++                        ? null : expected.path("businessStatus").asInt();
++                String lifecycleStatus = expected.path("lifecycleStatus").isNull()
++                        ? null : expected.path("lifecycleStatus").asText();
++                String operationNo = expected.path("currentLifecycleOperationNo").isNull()
++                        ? null : expected.path("currentLifecycleOperationNo").asText();
++                when(service.loadState(customerId)).thenReturn(new AuthoritativeAuthState(
++                        customerId, businessStatus, lifecycleStatus, expected.path("authEpoch").asLong(),
++                        operationNo, scope, expected.path("allowed").asBoolean()));
++
++                String response = mvc.perform(get("/api/v1/internal/auth-state/{customerId}", customerId)
++                                .header(INTERNAL_HEADER, TOKEN))
++                        .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
++                assertThat(mapper.readTree(response).path("data")).isEqualTo(expected);
++            }
++        }
++    }
+ }

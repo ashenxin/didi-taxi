@@ -19,6 +19,9 @@ spring:
       test-while-idle: true
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${ACCOUNT_LIFECYCLE_ORDER_EVENT_GROUP:order-account-lifecycle-event-v1}
+      auto-offset-reset: earliest
     producer:
       properties:
         enable.idempotence: true
@@ -50,6 +53,9 @@ mybatis-plus:
 # 派单相关定时：XXL 与下方 Spring 任务勿重复跑同一逻辑（控制台周期可与这里对齐或二选一）
 order:
   lifecycle:
+    messaging:
+      enabled: ${ACCOUNT_LIFECYCLE_KAFKA_ENABLED:true}
+      event-topic: ${ACCOUNT_LIFECYCLE_EVENT_TOPIC:account.lifecycle.event.v1}
     internal-auth:
       token: ${ORDER_LIFECYCLE_INTERNAL_TOKEN:dev-order-lifecycle-change-me}
   dispatch:

@@ -1,0 +1,1157 @@
+# Review package: 730b6c0..0eb8ee6
+
+## Commits
+0eb8ee6 功能：以数据库认证代次签发会话材料
+
+## Files changed
+ .../sx/passenger/app/AppCustomerAuthService.java   |  23 +--
+ .../passenger/app/AppCustomerSettingsService.java  |  29 ++-
+ .../sx/passenger/app/dto/AppAuthCustomerBrief.java |  42 +++++
+ .../auth/session/AuthEpochConflictException.java   |   8 +
+ .../passenger/auth/session/AuthSessionScope.java   |   6 +
+ .../auth/session/AuthStateRejectedException.java   |   8 +
+ .../auth/session/AuthoritativeAuthState.java       |  11 ++
+ .../auth/session/PassengerAuthEpochService.java    | 126 +++++++++++++
+ .../com/sx/passenger/dao/CustomerEntityMapper.java |  15 ++
+ .../mapper/LifecycleOperationMapper.java           |   5 +
+ .../main/resources/mapper/CustomerEntityMapper.xml |  45 +++++
+ .../mapper/lifecycle/LifecycleOperationMapper.xml  |  10 +
+ .../passenger/app/AppCustomerAuthServiceTest.java  |  65 ++++++-
+ .../app/AppCustomerSettingsServiceTest.java        |  44 ++++-
+ .../PassengerAuthEpochServiceIntegrationTest.java  | 209 +++++++++++++++++++++
+ 15 files changed, 614 insertions(+), 32 deletions(-)
+
+## Diff
+diff --git a/passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java b/passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java
+index 8e055aa..94dee9c 100644
+--- a/passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java
++++ b/passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java
+@@ -2,20 +2,21 @@ package com.sx.passenger.app;
+ 
+ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+ import com.sx.passenger.app.dto.AppAuthCustomerBrief;
+ import com.sx.passenger.app.dto.AppLoginPasswordRequest;
+ import com.sx.passenger.app.dto.AppSmsSendResult;
+ import com.sx.passenger.app.dto.AppSmsLoginRequest;
+ import com.sx.passenger.auth.otp.AtomicOtpService;
+ import com.sx.passenger.auth.otp.OtpConsumeResult;
+ import com.sx.passenger.auth.otp.OtpPurpose;
+ import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.auth.session.PassengerAuthEpochService;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.model.Customer;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.dao.DuplicateKeyException;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+@@ -50,30 +51,33 @@ public class AppCustomerAuthService {
+      */
+     private static final String KEY_SMS_GAP_PREFIX = "app:sms:gap:"; // 同手机号发送间隔锁（phone）
+     private static final String KEY_SMS_DAILY_PREFIX = "app:sms:daily:"; // 同手机号自然日发送次数（phone:yyyy-MM-dd）
+     private static final String KEY_LOGIN_FAIL_PREFIX = "app:login:fail:"; // 登录失败次数（phone:yyyy-MM-dd）
+     private static final String KEY_LOGIN_BAN_PREFIX = "app:login:ban:"; // 当日禁用标记（phone:yyyy-MM-dd）
+ 
+     private final CustomerEntityMapper customerMapper;
+     private final StringRedisTemplate redis;
+     private final AppCustomerAuthProperties smsProps;
+     private final AtomicOtpService otpService;
++    private final PassengerAuthEpochService authEpochService;
+ 
+     public AppCustomerAuthService(
+             CustomerEntityMapper customerMapper,
+             StringRedisTemplate redis,
+             AppCustomerAuthProperties smsProps,
+-            AtomicOtpService otpService) {
++            AtomicOtpService otpService,
++            PassengerAuthEpochService authEpochService) {
+         this.customerMapper = customerMapper;
+         this.redis = redis;
+         this.smsProps = smsProps;
+         this.otpService = otpService;
++        this.authEpochService = authEpochService;
+     }
+ 
+     public ResponseVo<AppAuthCustomerBrief> loginPassword(AppLoginPasswordRequest req) {
+         if (isLoginBannedToday(req.getPhone())) {
+             return bannedToday();
+         }
+         Customer c = findActiveByPhone(req.getPhone());
+         if (c == null) {
+             recordLoginFail(req.getPhone());
+             return unauthorized();
+@@ -82,22 +86,23 @@ public class AppCustomerAuthService {
+             return ResultUtil.forbidden("账号已冻结，请联系客服");
+         }
+         if (c.getPasswordHash() == null || c.getPasswordHash().isBlank()) {
+             recordLoginFail(req.getPhone());
+             return ResultUtil.unauthorized("请使用验证码登录");
+         }
+         if (!BCRYPT.matches(req.getPassword(), c.getPasswordHash())) {
+             recordLoginFail(req.getPhone());
+             return unauthorized();
+         }
++        AppAuthCustomerBrief authenticated = authEpochService.completeAuthentication(c.getId());
+         log.info("乘客核心服务密码登录成功 customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
+-        return ResultUtil.success(toBrief(c));
++        return ResultUtil.success(authenticated);
+     }
+ 
+     public ResponseVo<AppSmsSendResult> sendSmsCode(String phone) {
+         String gapKey = KEY_SMS_GAP_PREFIX + phone;
+         Boolean firstGap = redis.opsForValue().setIfAbsent(gapKey, "1", Duration.ofSeconds(smsProps.getMinIntervalSeconds()));
+         if (Boolean.FALSE.equals(firstGap)) {
+             return ResultUtil.error(429, "发送过于频繁，请稍后再试");
+         }
+ 
+         String day = LocalDate.now(CN_ZONE).toString();
+@@ -136,60 +141,56 @@ public class AppCustomerAuthService {
+             return unauthorizedSms();
+         }
+ 
+         Customer c = findActiveByPhone(req.getPhone());
+         if (c == null) {
+             c = new Customer();
+             c.setPhone(req.getPhone());
+             c.setPasswordHash(null);
+             c.setNickname(null);
+             c.setStatus(0);
++            c.setLifecycleStatus("ACTIVE");
++            c.setLifecycleVersion(0L);
++            c.setAuthEpoch(0L);
+             c.setIsDeleted(0);
+             try {
+                 customerMapper.insert(c);
+             } catch (DuplicateKeyException e) {
+                 c = findActiveByPhone(req.getPhone());
+                 if (c == null) {
+                     return ResultUtil.error(500, "注册失败，请重试");
+                 }
+             }
+         }
+         if (c.getStatus() != null && c.getStatus() != 0) {
+             return ResultUtil.forbidden("账号已冻结，请联系客服");
+         }
++        AppAuthCustomerBrief authenticated = authEpochService.completeAuthentication(c.getId());
+         log.info("乘客核心服务短信登录成功 customerId={} phone={}", c.getId(), maskPhone(req.getPhone()));
+-        return ResultUtil.success(toBrief(c));
++        return ResultUtil.success(authenticated);
+     }
+ 
+     private static String maskPhone(String phone) {
+         if (phone == null || phone.length() < 4) {
+             return "****";
+         }
+         return "****" + phone.substring(phone.length() - 4);
+     }
+ 
+     private Customer findActiveByPhone(String phone) {
+         return customerMapper.selectOne(
+                 Wrappers.<Customer>lambdaQuery()
+                         .eq(Customer::getPhone, phone)
+                         .eq(Customer::getIsDeleted, 0)
+                         .last("LIMIT 1"));
+     }
+ 
+-    private static AppAuthCustomerBrief toBrief(Customer c) {
+-        AppAuthCustomerBrief b = new AppAuthCustomerBrief();
+-        b.setId(c.getId());
+-        b.setPhone(c.getPhone());
+-        b.setNickname(c.getNickname());
+-        return b;
+-    }
+-
+     private static ResponseVo<AppAuthCustomerBrief> unauthorized() {
+         return ResultUtil.unauthorized("手机号或密码错误");
+     }
+ 
+     private static ResponseVo<AppAuthCustomerBrief> unauthorizedSms() {
+         return ResultUtil.unauthorized("验证码错误或已过期");
+     }
+ 
+     private boolean isLoginBannedToday(String phone) {
+         String day = LocalDate.now(CN_ZONE).toString();
+diff --git a/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java b/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
+index 0d7773e..6413fce 100644
+--- a/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
++++ b/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
+@@ -19,21 +19,23 @@ import com.sx.passenger.model.Customer;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.dao.DuplicateKeyException;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+ import java.security.SecureRandom;
+ import java.time.Duration;
+ import java.time.LocalDate;
++import java.time.LocalDateTime;
+ import java.time.ZoneId;
++import java.time.ZoneOffset;
+ import java.util.concurrent.TimeUnit;
+ 
+ @Service
+ public class AppCustomerSettingsService {
+     private static final Logger log = LoggerFactory.getLogger(AppCustomerSettingsService.class);
+     private static final SecureRandom RANDOM = new SecureRandom();
+     private static final ZoneId CN_ZONE = ZoneId.of("Asia/Shanghai");
+ 
+     private static final String KEY_PHONE_CHANGE_GAP_PREFIX = "app:settings:phone-change:sms:gap:"; // 更换手机号发送间隔锁
+     private static final String KEY_PHONE_CHANGE_DAILY_PREFIX = "app:settings:phone-change:sms:daily:"; // 更换手机号自然日发送次数
+@@ -113,31 +115,26 @@ public class AppCustomerSettingsService {
+         if (otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE, subject, req.getCode())
+                 != OtpConsumeResult.CONSUMED) {
+             return ResultUtil.unauthorized("验证码错误或已过期");
+         }
+         // 防止验证码发送后，新手机号被其他未注销账号抢先注册或绑定。
+         Customer occupied = findActiveByPhone(newPhone);
+         if (occupied != null && !occupied.getId().equals(req.getCustomerId())) {
+             return ResultUtil.error(409, "该手机号已被使用");
+         }
+ 
+-        Customer update = new Customer();
+-        update.setPhone(newPhone);
+         try {
+             // 只更新同一个 customer.id，历史订单仍通过 passenger_id 关联到原用户。
+-            int updated = customerMapper.update(
+-                    update,
+-                    Wrappers.<Customer>lambdaUpdate()
+-                            .eq(Customer::getId, req.getCustomerId())
+-                            .eq(Customer::getIsDeleted, 0));
+-            if (updated <= 0) {
+-                return ResultUtil.error(404, "账号不存在或已注销");
++            int updated = customerMapper.changePhoneCas(
++                    req.getCustomerId(), newPhone, lifecycleVersion(current));
++            if (updated != 1) {
++                return ResultUtil.error(409, "账号状态已变化，请重试");
+             }
+         } catch (DuplicateKeyException e) {
+             return ResultUtil.error(409, "该手机号已被使用");
+         }
+         AppPhoneChangeResult out = new AppPhoneChangeResult();
+         out.setChanged(true);
+         out.setRequireLogin(true);
+         out.setMaskedNewPhone(maskPhone(newPhone));
+         log.info("乘客更换手机号成功 customerId={} oldPhone={} newPhone={}",
+                 req.getCustomerId(), maskPhone(current.getPhone()), maskPhone(newPhone));
+@@ -176,30 +173,26 @@ public class AppCustomerSettingsService {
+         Customer current = findActiveById(req.getCustomerId());
+         if (current == null) {
+             return ResultUtil.error(404, "账号不存在或已注销");
+         }
+         OtpSubject subject = OtpSubject.accountCancel(current.getId(), lifecycleVersion(current));
+         if (otpService.consume(OtpPurpose.ACCOUNT_CANCEL, subject, req.getCode())
+                 != OtpConsumeResult.CONSUMED) {
+             return ResultUtil.unauthorized("验证码错误或已过期");
+         }
+ 
+-        Customer update = new Customer();
+-        update.setIsDeleted(1);
+         // 逻辑删除后 phone_active 生成列应变为 NULL，旧手机号允许重新注册成新的 customer.id。
+-        int updated = customerMapper.update(
+-                update,
+-                Wrappers.<Customer>lambdaUpdate()
+-                        .eq(Customer::getId, req.getCustomerId())
+-                        .eq(Customer::getIsDeleted, 0));
+-        if (updated <= 0) {
+-            return ResultUtil.error(404, "账号不存在或已注销");
++        LocalDateTime cancelledAt = LocalDateTime.now(ZoneOffset.UTC);
++        int updated = customerMapper.cancelAccountCas(
++                req.getCustomerId(), lifecycleVersion(current), cancelledAt);
++        if (updated != 1) {
++            return ResultUtil.error(409, "账号状态已变化，请重试");
+         }
+         AppAccountCancelResult out = new AppAccountCancelResult();
+         out.setCancelled(true);
+         out.setRequireLogin(true);
+         log.info("乘客账号已逻辑注销 customerId={} phone={}", req.getCustomerId(), maskPhone(current.getPhone()));
+         return ResultUtil.success(out);
+     }
+ 
+     /**
+      * 设置功能沿用独立发送频控 key，验证码本身由 AtomicOtpService 按用途保存。
+diff --git a/passenger/src/main/java/com/sx/passenger/app/dto/AppAuthCustomerBrief.java b/passenger/src/main/java/com/sx/passenger/app/dto/AppAuthCustomerBrief.java
+index 4ea7e56..91b16d1 100644
+--- a/passenger/src/main/java/com/sx/passenger/app/dto/AppAuthCustomerBrief.java
++++ b/passenger/src/main/java/com/sx/passenger/app/dto/AppAuthCustomerBrief.java
+@@ -1,20 +1,38 @@
+ package com.sx.passenger.app.dto;
+ 
++import com.sx.passenger.model.Customer;
++
+ import java.io.Serializable;
+ 
+ /** 登录成功后返回给 BFF 的乘客摘要（用于签发 JWT）。 */
+ public class AppAuthCustomerBrief implements Serializable {
+ 
+     private Long id;
+     private String phone;
+     private String nickname;
++    private Long authEpoch;
++    private String scope;
++    private String operationNo;
++
++    public static AppAuthCustomerBrief from(Customer customer, String scope) {
++        AppAuthCustomerBrief brief = new AppAuthCustomerBrief();
++        brief.setId(customer.getId());
++        brief.setPhone(customer.getPhone());
++        brief.setNickname(customer.getNickname());
++        brief.setAuthEpoch(customer.getAuthEpoch());
++        brief.setScope(scope);
++        if ("LIFECYCLE_RESTRICTED".equals(scope)) {
++            brief.setOperationNo(customer.getCurrentLifecycleOperationNo());
++        }
++        return brief;
++    }
+ 
+     public Long getId() {
+         return id;
+     }
+ 
+     public void setId(Long id) {
+         this.id = id;
+     }
+ 
+     public String getPhone() {
+@@ -25,11 +43,35 @@ public class AppAuthCustomerBrief implements Serializable {
+         this.phone = phone;
+     }
+ 
+     public String getNickname() {
+         return nickname;
+     }
+ 
+     public void setNickname(String nickname) {
+         this.nickname = nickname;
+     }
++
++    public Long getAuthEpoch() {
++        return authEpoch;
++    }
++
++    public void setAuthEpoch(Long authEpoch) {
++        this.authEpoch = authEpoch;
++    }
++
++    public String getScope() {
++        return scope;
++    }
++
++    public void setScope(String scope) {
++        this.scope = scope;
++    }
++
++    public String getOperationNo() {
++        return operationNo;
++    }
++
++    public void setOperationNo(String operationNo) {
++        this.operationNo = operationNo;
++    }
+ }
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/session/AuthEpochConflictException.java b/passenger/src/main/java/com/sx/passenger/auth/session/AuthEpochConflictException.java
+new file mode 100644
+index 0000000..d32a14b
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/session/AuthEpochConflictException.java
+@@ -0,0 +1,8 @@
++package com.sx.passenger.auth.session;
++
++public class AuthEpochConflictException extends RuntimeException {
++
++    public AuthEpochConflictException() {
++        super("Customer authentication epoch conflict");
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/session/AuthSessionScope.java b/passenger/src/main/java/com/sx/passenger/auth/session/AuthSessionScope.java
+new file mode 100644
+index 0000000..5b48c18
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/session/AuthSessionScope.java
+@@ -0,0 +1,6 @@
++package com.sx.passenger.auth.session;
++
++public enum AuthSessionScope {
++    NORMAL,
++    LIFECYCLE_RESTRICTED
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/session/AuthStateRejectedException.java b/passenger/src/main/java/com/sx/passenger/auth/session/AuthStateRejectedException.java
+new file mode 100644
+index 0000000..0e6c806
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/session/AuthStateRejectedException.java
+@@ -0,0 +1,8 @@
++package com.sx.passenger.auth.session;
++
++public class AuthStateRejectedException extends RuntimeException {
++
++    public AuthStateRejectedException() {
++        super("Customer authentication state is not allowed");
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/session/AuthoritativeAuthState.java b/passenger/src/main/java/com/sx/passenger/auth/session/AuthoritativeAuthState.java
+new file mode 100644
+index 0000000..148bce0
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/session/AuthoritativeAuthState.java
+@@ -0,0 +1,11 @@
++package com.sx.passenger.auth.session;
++
++public record AuthoritativeAuthState(
++        long customerId,
++        Integer businessStatus,
++        String lifecycleStatus,
++        long authEpoch,
++        String currentLifecycleOperationNo,
++        AuthSessionScope allowedScope,
++        boolean allowed) {
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/session/PassengerAuthEpochService.java b/passenger/src/main/java/com/sx/passenger/auth/session/PassengerAuthEpochService.java
+new file mode 100644
+index 0000000..f5d8a64
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/session/PassengerAuthEpochService.java
+@@ -0,0 +1,126 @@
++package com.sx.passenger.auth.session;
++
++import com.baomidou.mybatisplus.core.toolkit.Wrappers;
++import com.sx.passenger.app.dto.AppAuthCustomerBrief;
++import com.sx.passenger.dao.CustomerEntityMapper;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
++import com.sx.passenger.model.Customer;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++
++import java.time.LocalDateTime;
++import java.time.ZoneOffset;
++import java.util.Set;
++
++@Service
++public class PassengerAuthEpochService {
++
++    private static final String ACTIVE = "ACTIVE";
++    private static final String CANCELLING = "CANCELLING";
++    private static final Set<String> ACTIVE_OPERATION_STATUSES = Set.of(
++            "REQUESTED", "FENCED", "VALIDATING", "BLOCKED", "EXECUTING", "RETRY_PENDING", "MANUAL_REVIEW");
++
++    private final CustomerEntityMapper customers;
++    private final LifecycleOperationMapper operations;
++
++    public PassengerAuthEpochService(CustomerEntityMapper customers, LifecycleOperationMapper operations) {
++        this.customers = customers;
++        this.operations = operations;
++    }
++
++    @Transactional
++    public AppAuthCustomerBrief completeAuthentication(long customerId) {
++        requirePositiveCustomerId(customerId);
++        if (customers.bumpAuthEpochForAuthentication(customerId) != 1) {
++            throw new AuthStateRejectedException();
++        }
++        Customer current = customers.selectById(customerId);
++        AuthSessionScope scope = scopeOf(current);
++        if (scope == AuthSessionScope.LIFECYCLE_RESTRICTED
++                && operations.updateRestrictedAuthEpoch(customerId, current.getCurrentLifecycleOperationNo(),
++                current.getAuthEpoch(), LocalDateTime.now(ZoneOffset.UTC)) != 1) {
++            throw new AuthStateRejectedException();
++        }
++        return AppAuthCustomerBrief.from(current, scope.name());
++    }
++
++    @Transactional
++    public long logout(long customerId, long expectedAuthEpoch) {
++        requirePositiveCustomerId(customerId);
++        if (expectedAuthEpoch < 0 || customers.bumpAuthEpochForLogout(customerId, expectedAuthEpoch) != 1) {
++            throw new AuthEpochConflictException();
++        }
++        Customer current = customers.selectById(customerId);
++        if (current == null || current.getAuthEpoch() == null) {
++            throw new AuthEpochConflictException();
++        }
++        return current.getAuthEpoch();
++    }
++
++    @Transactional(readOnly = true)
++    public AuthoritativeAuthState loadState(long customerId) {
++        requirePositiveCustomerId(customerId);
++        Customer current = customers.selectById(customerId);
++        if (current == null) {
++            return new AuthoritativeAuthState(customerId, null, null, 0L, null, null, false);
++        }
++        long authEpoch = current.getAuthEpoch() == null ? 0L : current.getAuthEpoch();
++        if (current.getIsDeleted() == null || current.getIsDeleted() != 0
++                || current.getStatus() == null || current.getStatus() != 0) {
++            return rejectedState(current, authEpoch);
++        }
++        AuthSessionScope scope;
++        try {
++            scope = scopeOf(current);
++        } catch (AuthStateRejectedException ignored) {
++            return rejectedState(current, authEpoch);
++        }
++        if (scope == AuthSessionScope.LIFECYCLE_RESTRICTED && !hasActiveBoundOperation(current)) {
++            return rejectedState(current, authEpoch);
++        }
++        return new AuthoritativeAuthState(current.getId(), current.getStatus(), current.getLifecycleStatus(),
++                authEpoch, operationNo(current, scope), scope, true);
++    }
++
++    private boolean hasActiveBoundOperation(Customer current) {
++        LifecycleOperationEntity operation = operations.selectOne(
++                Wrappers.<LifecycleOperationEntity>lambdaQuery()
++                        .eq(LifecycleOperationEntity::getOperationNo, current.getCurrentLifecycleOperationNo())
++                        .eq(LifecycleOperationEntity::getCustomerId, current.getId())
++                        .last("LIMIT 1"));
++        return operation != null && ACTIVE_OPERATION_STATUSES.contains(operation.getStatus());
++    }
++
++    private static AuthoritativeAuthState rejectedState(Customer current, long authEpoch) {
++        return new AuthoritativeAuthState(current.getId(), current.getStatus(), current.getLifecycleStatus(),
++                authEpoch, current.getCurrentLifecycleOperationNo(), null, false);
++    }
++
++    private static AuthSessionScope scopeOf(Customer customer) {
++        if (customer == null || customer.getAuthEpoch() == null || customer.getAuthEpoch() < 0) {
++            throw new AuthStateRejectedException();
++        }
++        if (ACTIVE.equals(customer.getLifecycleStatus())) {
++            return AuthSessionScope.NORMAL;
++        }
++        if (CANCELLING.equals(customer.getLifecycleStatus())
++                && customer.getCurrentLifecycleOperationNo() != null
++                && !customer.getCurrentLifecycleOperationNo().isBlank()) {
++            return AuthSessionScope.LIFECYCLE_RESTRICTED;
++        }
++        throw new AuthStateRejectedException();
++    }
++
++    private static String operationNo(Customer customer, AuthSessionScope scope) {
++        return scope == AuthSessionScope.LIFECYCLE_RESTRICTED
++                ? customer.getCurrentLifecycleOperationNo()
++                : null;
++    }
++
++    private static void requirePositiveCustomerId(long customerId) {
++        if (customerId <= 0) {
++            throw new IllegalArgumentException("customerId must be positive");
++        }
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/dao/CustomerEntityMapper.java b/passenger/src/main/java/com/sx/passenger/dao/CustomerEntityMapper.java
+index 124d35c..18c36dd 100644
+--- a/passenger/src/main/java/com/sx/passenger/dao/CustomerEntityMapper.java
++++ b/passenger/src/main/java/com/sx/passenger/dao/CustomerEntityMapper.java
+@@ -1,9 +1,24 @@
+ package com.sx.passenger.dao;
+ 
+ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+ import com.sx.passenger.model.Customer;
++import org.apache.ibatis.annotations.Param;
+ import org.springframework.stereotype.Repository;
+ 
++import java.time.LocalDateTime;
++
+ @Repository
+ public interface CustomerEntityMapper extends BaseMapper<Customer> {
++    int bumpAuthEpochForAuthentication(@Param("customerId") long customerId);
++
++    int bumpAuthEpochForLogout(@Param("customerId") long customerId,
++                               @Param("expectedAuthEpoch") long expectedAuthEpoch);
++
++    int changePhoneCas(@Param("customerId") long customerId,
++                       @Param("newPhone") String newPhone,
++                       @Param("expectedLifecycleVersion") long expectedLifecycleVersion);
++
++    int cancelAccountCas(@Param("customerId") long customerId,
++                         @Param("expectedLifecycleVersion") long expectedLifecycleVersion,
++                         @Param("cancelledAt") LocalDateTime cancelledAt);
+ }
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java b/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
+index 131afa6..c18007b 100644
+--- a/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
+@@ -1,15 +1,20 @@
+ package com.sx.passenger.lifecycle.persistence.mapper;
+ 
+ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+ import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
+ import org.apache.ibatis.annotations.Param;
+ 
+ import java.time.LocalDateTime;
+ 
+ public interface LifecycleOperationMapper extends BaseMapper<LifecycleOperationEntity> {
++    int updateRestrictedAuthEpoch(@Param("customerId") long customerId,
++                                  @Param("operationNo") String operationNo,
++                                  @Param("restrictedAuthEpoch") long restrictedAuthEpoch,
++                                  @Param("updatedAt") LocalDateTime updatedAt);
++
+     int updateStatusCas(@Param("id") long id,
+                         @Param("expectedStatus") String expectedStatus,
+                         @Param("expectedRowVersion") long expectedRowVersion,
+                         @Param("targetStatus") String targetStatus,
+                         @Param("updatedAt") LocalDateTime updatedAt);
+ }
+diff --git a/passenger/src/main/resources/mapper/CustomerEntityMapper.xml b/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
+index 70f329f..4115d1c 100644
+--- a/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
++++ b/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
+@@ -1,5 +1,50 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+ <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+ <mapper namespace="com.sx.passenger.dao.CustomerEntityMapper">
++    <update id="bumpAuthEpochForAuthentication">
++        UPDATE customer
++        SET auth_epoch = auth_epoch + 1,
++            updated_at = CURRENT_TIMESTAMP
++        WHERE id = #{customerId}
++          AND is_deleted = 0
++          AND status = 0
++          AND lifecycle_status IN ('ACTIVE', 'CANCELLING')
++    </update>
++
++    <update id="bumpAuthEpochForLogout">
++        UPDATE customer
++        SET auth_epoch = auth_epoch + 1,
++            updated_at = CURRENT_TIMESTAMP
++        WHERE id = #{customerId}
++          AND is_deleted = 0
++          AND auth_epoch = #{expectedAuthEpoch}
++          AND lifecycle_status IN ('ACTIVE', 'CANCELLING')
++    </update>
++
++    <update id="changePhoneCas">
++        UPDATE customer
++        SET phone = #{newPhone},
++            auth_epoch = auth_epoch + 1,
++            lifecycle_version = lifecycle_version + 1,
++            updated_at = CURRENT_TIMESTAMP
++        WHERE id = #{customerId}
++          AND is_deleted = 0
++          AND lifecycle_status = 'ACTIVE'
++          AND lifecycle_version = #{expectedLifecycleVersion}
++    </update>
++
++    <update id="cancelAccountCas">
++        UPDATE customer
++        SET is_deleted = 1,
++            auth_epoch = auth_epoch + 1,
++            lifecycle_status = 'CANCELLED',
++            lifecycle_version = lifecycle_version + 1,
++            cancelled_at = #{cancelledAt},
++            updated_at = CURRENT_TIMESTAMP
++        WHERE id = #{customerId}
++          AND is_deleted = 0
++          AND lifecycle_status = 'ACTIVE'
++          AND lifecycle_version = #{expectedLifecycleVersion}
++    </update>
+ 
+ </mapper>
+diff --git a/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml b/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
+index 243df2d..f13d858 100644
+--- a/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
++++ b/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
+@@ -1,13 +1,23 @@
+ <?xml version="1.0" encoding="UTF-8" ?>
+ <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+ <mapper namespace="com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper">
++    <update id="updateRestrictedAuthEpoch">
++        UPDATE account_lifecycle_operation
++        SET restricted_auth_epoch = #{restrictedAuthEpoch},
++            updated_at = #{updatedAt}
++        WHERE operation_no = #{operationNo}
++          AND customer_id = #{customerId}
++          AND status IN ('REQUESTED', 'FENCED', 'VALIDATING', 'BLOCKED', 'EXECUTING',
++                         'RETRY_PENDING', 'MANUAL_REVIEW')
++    </update>
++
+     <update id="updateStatusCas">
+         UPDATE account_lifecycle_operation
+         SET status = #{targetStatus},
+             row_version = row_version + 1,
+             updated_at = #{updatedAt}
+         WHERE id = #{id}
+           AND status = #{expectedStatus}
+           AND row_version = #{expectedRowVersion}
+     </update>
+ </mapper>
+diff --git a/passenger/src/test/java/com/sx/passenger/app/AppCustomerAuthServiceTest.java b/passenger/src/test/java/com/sx/passenger/app/AppCustomerAuthServiceTest.java
+index f281ec1..38c80d9 100644
+--- a/passenger/src/test/java/com/sx/passenger/app/AppCustomerAuthServiceTest.java
++++ b/passenger/src/test/java/com/sx/passenger/app/AppCustomerAuthServiceTest.java
+@@ -1,49 +1,103 @@
+ package com.sx.passenger.app;
+ 
++import com.sx.passenger.app.dto.AppAuthCustomerBrief;
++import com.sx.passenger.app.dto.AppLoginPasswordRequest;
+ import com.sx.passenger.app.dto.AppSmsLoginRequest;
+ import com.sx.passenger.auth.otp.AtomicOtpService;
+ import com.sx.passenger.auth.otp.OtpConsumeResult;
+ import com.sx.passenger.auth.otp.OtpPurpose;
+ import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.auth.session.PassengerAuthEpochService;
+ import com.sx.passenger.common.vo.ResponseVo;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.model.Customer;
+ import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.Test;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.data.redis.core.ValueOperations;
++import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+ 
+ import java.time.Duration;
+ 
+ import static org.assertj.core.api.Assertions.assertThat;
+ import static org.assertj.core.api.Assertions.assertThatThrownBy;
+ import static org.mockito.ArgumentMatchers.any;
+ import static org.mockito.ArgumentMatchers.anyString;
+ import static org.mockito.ArgumentMatchers.eq;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+ 
+ class AppCustomerAuthServiceTest {
+ 
+     private final CustomerEntityMapper customerMapper = mock(CustomerEntityMapper.class);
+     private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
+     private final ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
+     private final AtomicOtpService otpService = mock(AtomicOtpService.class);
++    private final PassengerAuthEpochService authEpochService = mock(PassengerAuthEpochService.class);
+     private AppCustomerAuthService service;
+ 
+     @BeforeEach
+     void setUp() {
+         when(redis.opsForValue()).thenReturn(valueOperations);
+-        service = new AppCustomerAuthService(customerMapper, redis, new AppCustomerAuthProperties(), otpService);
++        service = new AppCustomerAuthService(
++                customerMapper, redis, new AppCustomerAuthProperties(), otpService, authEpochService);
++    }
++
++    @Test
++    void passwordLoginReturnsDatabaseIssuedAuthenticationMaterial() {
++        Customer customer = new Customer()
++                .setId(10001L)
++                .setPhone("13800138000")
++                .setPasswordHash(new BCryptPasswordEncoder().encode("secret"))
++                .setStatus(0)
++                .setLifecycleStatus("ACTIVE")
++                .setLifecycleVersion(0L)
++                .setAuthEpoch(3L)
++                .setIsDeleted(0);
++        AppAuthCustomerBrief issued = brief(10001L, 4L, "NORMAL", null);
++        when(customerMapper.selectOne(any())).thenReturn(customer);
++        when(authEpochService.completeAuthentication(10001L)).thenReturn(issued);
++        AppLoginPasswordRequest request = new AppLoginPasswordRequest();
++        request.setPhone("13800138000");
++        request.setPassword("secret");
++
++        ResponseVo<AppAuthCustomerBrief> response = service.loginPassword(request);
++
++        assertThat(response.getCode()).isEqualTo(200);
++        assertThat(response.getData()).isSameAs(issued);
++        assertThat(response.getData().getAuthEpoch()).isEqualTo(4L);
++        verify(authEpochService).completeAuthentication(10001L);
++    }
++
++    @Test
++    void newSmsCustomerInitializesLifecycleBeforeAuthenticationCompletes() {
++        when(otpService.consume(OtpPurpose.LOGIN, OtpSubject.login("13800138000"), "111111"))
++                .thenReturn(OtpConsumeResult.CONSUMED);
++        when(customerMapper.selectOne(any())).thenReturn(null);
++        when(customerMapper.insert(any(Customer.class))).thenAnswer(invocation -> {
++            invocation.<Customer>getArgument(0).setId(10001L);
++            return 1;
++        });
++        AppAuthCustomerBrief issued = brief(10001L, 1L, "NORMAL", null);
++        when(authEpochService.completeAuthentication(10001L)).thenReturn(issued);
++
++        ResponseVo<AppAuthCustomerBrief> response = service.loginSms(request("13800138000", "111111"));
++
++        assertThat(response.getData()).isSameAs(issued);
++        verify(customerMapper).insert(org.mockito.ArgumentMatchers.<Customer>argThat(customer ->
++                "ACTIVE".equals(customer.getLifecycleStatus())
++                        && Long.valueOf(0L).equals(customer.getLifecycleVersion())
++                        && Long.valueOf(0L).equals(customer.getAuthEpoch())));
++        verify(authEpochService).completeAuthentication(10001L);
+     }
+ 
+     @Test
+     void sendSmsCodeStoresLoginOtp() {
+         when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class))).thenReturn(true);
+         when(valueOperations.increment(anyString())).thenReturn(1L);
+ 
+         ResponseVo<?> response = service.sendSmsCode("13800138000");
+ 
+         assertThat(response.getCode()).isEqualTo(200);
+@@ -79,11 +133,20 @@ class AppCustomerAuthServiceTest {
+ 
+         verify(otpService, never()).store(any(), any(), anyString(), any());
+     }
+ 
+     private static AppSmsLoginRequest request(String phone, String code) {
+         AppSmsLoginRequest request = new AppSmsLoginRequest();
+         request.setPhone(phone);
+         request.setCode(code);
+         return request;
+     }
++
++    private static AppAuthCustomerBrief brief(long customerId, long authEpoch, String scope, String operationNo) {
++        AppAuthCustomerBrief brief = new AppAuthCustomerBrief();
++        brief.setId(customerId);
++        brief.setAuthEpoch(authEpoch);
++        brief.setScope(scope);
++        brief.setOperationNo(operationNo);
++        return brief;
++    }
+ }
+diff --git a/passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java b/passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java
+index d4ca050..e4725e2 100644
+--- a/passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java
++++ b/passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java
+@@ -10,20 +10,21 @@ import com.sx.passenger.auth.otp.OtpPurpose;
+ import com.sx.passenger.auth.otp.OtpSubject;
+ import com.sx.passenger.common.vo.ResponseVo;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.model.Customer;
+ import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.Test;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.data.redis.core.ValueOperations;
+ 
+ import java.time.Duration;
++import java.time.LocalDateTime;
+ 
+ import static org.assertj.core.api.Assertions.assertThat;
+ import static org.assertj.core.api.Assertions.assertThatThrownBy;
+ import static org.mockito.ArgumentMatchers.any;
+ import static org.mockito.ArgumentMatchers.anyString;
+ import static org.mockito.ArgumentMatchers.eq;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+@@ -123,29 +124,49 @@ class AppCustomerSettingsServiceTest {
+                 eq(OtpSubject.phoneChange(10001L, "13912345678", 0L)), anyString(), eq(Duration.ofSeconds(300)));
+     }
+ 
+     @Test
+     void phoneChangeConfirmationAcceptsInitialLifecycleVersion() {
+         Customer current = customerWithLifecycleVersion(10001L, "13812345678", 0L);
+         when(customerMapper.selectOne(any())).thenReturn(current, null);
+         when(otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
+                 OtpSubject.phoneChange(10001L, "13912345678", 0L), "123456"))
+                 .thenReturn(OtpConsumeResult.CONSUMED);
+-        when(customerMapper.update(any(), any())).thenReturn(1);
++        when(customerMapper.changePhoneCas(10001L, "13912345678", 0L)).thenReturn(1);
+         AppPhoneChangeConfirmRequest request = new AppPhoneChangeConfirmRequest();
+         request.setCustomerId(10001L);
+         request.setNewPhone("13912345678");
+         request.setCode("123456");
+ 
+         ResponseVo<?> response = service.confirmPhoneChange(request);
+ 
+         assertThat(response.getCode()).isEqualTo(200);
++        verify(customerMapper).changePhoneCas(10001L, "13912345678", 0L);
++        verify(customerMapper, never()).update(any(), any());
++    }
++
++    @Test
++    void phoneChangeReturnsConflictWhenLifecycleCasLoses() {
++        Customer current = customer(10001L, "13812345678");
++        when(customerMapper.selectOne(any())).thenReturn(current, null);
++        when(otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
++                OtpSubject.phoneChange(10001L, "13912345678", 9L), "123456"))
++                .thenReturn(OtpConsumeResult.CONSUMED);
++        when(customerMapper.changePhoneCas(10001L, "13912345678", 9L)).thenReturn(0);
++        AppPhoneChangeConfirmRequest request = new AppPhoneChangeConfirmRequest();
++        request.setCustomerId(10001L);
++        request.setNewPhone("13912345678");
++        request.setCode("123456");
++
++        ResponseVo<?> response = service.confirmPhoneChange(request);
++
++        assertThat(response.getCode()).isEqualTo(409);
+     }
+ 
+     @Test
+     void accountCancelSmsStoresOtpUnderPurposeAndLifecycleVersion() {
+         Customer current = customer(10001L, "13812345678");
+         when(customerMapper.selectOne(any())).thenReturn(current);
+         when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class))).thenReturn(true);
+         when(valueOperations.increment(anyString())).thenReturn(1L);
+ 
+         ResponseVo<?> response = service.sendAccountCancelSms(10001L);
+@@ -154,33 +175,52 @@ class AppCustomerSettingsServiceTest {
+         verify(otpService).store(eq(OtpPurpose.ACCOUNT_CANCEL), eq(OtpSubject.accountCancel(10001L, 9L)),
+                 anyString(), eq(Duration.ofSeconds(300)));
+     }
+ 
+     @Test
+     void databaseFailureAfterConsumedAccountCancelDoesNotRestoreOtp() {
+         Customer current = customer(10001L, "13812345678");
+         when(customerMapper.selectOne(any())).thenReturn(current);
+         when(otpService.consume(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(10001L, 9L), "123456"))
+                 .thenReturn(OtpConsumeResult.CONSUMED);
+-        when(customerMapper.update(any(), any())).thenThrow(new RuntimeException("database unavailable"));
++        when(customerMapper.cancelAccountCas(eq(10001L), eq(9L), any(LocalDateTime.class)))
++                .thenThrow(new RuntimeException("database unavailable"));
+         AppAccountCancelConfirmRequest request = new AppAccountCancelConfirmRequest();
+         request.setCustomerId(10001L);
+         request.setCode("123456");
+         request.setConfirm(true);
+ 
+         assertThatThrownBy(() -> service.confirmAccountCancel(request))
+                 .isInstanceOf(RuntimeException.class)
+                 .hasMessage("database unavailable");
+ 
+         verify(otpService, never()).store(any(), any(), anyString(), any());
+     }
+ 
++    @Test
++    void accountCancellationUsesLifecycleCasAndReturnsConflictWhenItLoses() {
++        Customer current = customer(10001L, "13812345678");
++        when(customerMapper.selectOne(any())).thenReturn(current);
++        when(otpService.consume(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(10001L, 9L), "123456"))
++                .thenReturn(OtpConsumeResult.CONSUMED);
++        when(customerMapper.cancelAccountCas(eq(10001L), eq(9L), any(LocalDateTime.class))).thenReturn(0);
++        AppAccountCancelConfirmRequest request = new AppAccountCancelConfirmRequest();
++        request.setCustomerId(10001L);
++        request.setCode("123456");
++        request.setConfirm(true);
++
++        ResponseVo<?> response = service.confirmAccountCancel(request);
++
++        assertThat(response.getCode()).isEqualTo(409);
++        verify(customerMapper, never()).update(any(), any());
++    }
++
+     private static Customer customer(Long id, String phone) {
+         return customerWithLifecycleVersion(id, phone, 9L);
+     }
+ 
+     private static Customer customerWithLifecycleVersion(Long id, String phone, Long lifecycleVersion) {
+         return new Customer()
+                 .setId(id)
+                 .setPhone(phone)
+                 .setStatus(0)
+                 .setLifecycleVersion(lifecycleVersion)
+diff --git a/passenger/src/test/java/com/sx/passenger/auth/session/PassengerAuthEpochServiceIntegrationTest.java b/passenger/src/test/java/com/sx/passenger/auth/session/PassengerAuthEpochServiceIntegrationTest.java
+new file mode 100644
+index 0000000..fc47e1c
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/auth/session/PassengerAuthEpochServiceIntegrationTest.java
+@@ -0,0 +1,209 @@
++package com.sx.passenger.auth.session;
++
++import com.sx.passenger.app.dto.AppAuthCustomerBrief;
++import com.sx.passenger.dao.CustomerEntityMapper;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.test.context.ActiveProfiles;
++import org.springframework.transaction.annotation.Propagation;
++import org.springframework.transaction.annotation.Transactional;
++
++import java.time.LocalDateTime;
++import java.util.Map;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++
++@SpringBootTest
++@ActiveProfiles("test")
++@Transactional
++class PassengerAuthEpochServiceIntegrationTest {
++
++    private static final long ACTIVE_CUSTOMER_ID = 21_001L;
++    private static final long CANCELLING_CUSTOMER_ID = 21_002L;
++    private static final long CANCELLED_CUSTOMER_ID = 21_003L;
++    private static final long DELETED_CUSTOMER_ID = 21_004L;
++
++    @Autowired
++    private PassengerAuthEpochService service;
++
++    @Autowired
++    private JdbcTemplate jdbcTemplate;
++
++    @Autowired
++    private CustomerEntityMapper customerMapper;
++
++    @BeforeEach
++    void setUp() {
++        insertCustomer(ACTIVE_CUSTOMER_ID, "13800021001", "ACTIVE", 1L, null, 0);
++        insertCustomer(CANCELLING_CUSTOMER_ID, "13800021002", "CANCELLING", 5L, "op-cancel-1", 0);
++        insertCustomer(CANCELLED_CUSTOMER_ID, "13800021003", "CANCELLED", 8L, null, 0);
++        insertCustomer(DELETED_CUSTOMER_ID, "13800021004", "ACTIVE", 4L, null, 1);
++        jdbcTemplate.update("""
++                INSERT INTO account_lifecycle_operation (
++                    operation_no, customer_id, operation_type, status, idempotency_key, request_hash,
++                    expected_lifecycle_version, plan_code, plan_version, plan_digest, requested_at
++                ) VALUES (?, ?, 'ACCOUNT_CANCEL', 'FENCED', 'idem-cancel-1', ?, 3,
++                          'cancel-plan', 1, ?, CURRENT_TIMESTAMP)
++                """, "op-cancel-1", CANCELLING_CUSTOMER_ID, "a".repeat(64), "b".repeat(64));
++    }
++
++    @AfterEach
++    void tearDown() {
++        jdbcTemplate.update("DELETE FROM account_lifecycle_operation WHERE customer_id BETWEEN ? AND ?",
++                ACTIVE_CUSTOMER_ID, DELETED_CUSTOMER_ID);
++        jdbcTemplate.update("DELETE FROM customer WHERE id BETWEEN ? AND ?",
++                ACTIVE_CUSTOMER_ID, DELETED_CUSTOMER_ID);
++    }
++
++    @Test
++    void activeAuthenticationBumpsEpochAndReturnsNormal() {
++        AppAuthCustomerBrief out = service.completeAuthentication(ACTIVE_CUSTOMER_ID);
++
++        assertThat(out.getAuthEpoch()).isEqualTo(2L);
++        assertThat(out.getScope()).isEqualTo("NORMAL");
++        assertThat(out.getOperationNo()).isNull();
++    }
++
++    @Test
++    void cancellingAuthenticationBumpsBothCustomerAndOperationEpoch() {
++        AppAuthCustomerBrief out = service.completeAuthentication(CANCELLING_CUSTOMER_ID);
++
++        assertThat(out.getAuthEpoch()).isEqualTo(6L);
++        assertThat(out.getScope()).isEqualTo("LIFECYCLE_RESTRICTED");
++        assertThat(out.getOperationNo()).isEqualTo("op-cancel-1");
++        assertThat(jdbcTemplate.queryForObject("""
++                SELECT restricted_auth_epoch
++                FROM account_lifecycle_operation
++                WHERE operation_no = 'op-cancel-1'
++                """, Long.class)).isEqualTo(out.getAuthEpoch());
++    }
++
++    @Test
++    void cancelledCustomerCannotAuthenticate() {
++        assertThatThrownBy(() -> service.completeAuthentication(CANCELLED_CUSTOMER_ID))
++                .isInstanceOf(AuthStateRejectedException.class);
++    }
++
++    @Test
++    void staleLogoutCannotInvalidateNewerLogin() {
++        long loginEpoch = service.completeAuthentication(ACTIVE_CUSTOMER_ID).getAuthEpoch();
++        long newerEpoch = service.completeAuthentication(ACTIVE_CUSTOMER_ID).getAuthEpoch();
++
++        assertThatThrownBy(() -> service.logout(ACTIVE_CUSTOMER_ID, loginEpoch))
++                .isInstanceOf(AuthEpochConflictException.class);
++        assertThat(service.loadState(ACTIVE_CUSTOMER_ID).authEpoch()).isEqualTo(newerEpoch);
++    }
++
++    @Test
++    void phoneChangeCasBumpsEpochAndLifecycleVersionInSameUpdate() {
++        int updated = customerMapper.changePhoneCas(
++                ACTIVE_CUSTOMER_ID, "13900021001", 3L);
++
++        assertThat(updated).isEqualTo(1);
++        assertThat(customerRow(ACTIVE_CUSTOMER_ID))
++                .containsEntry("phone", "13900021001")
++                .containsEntry("auth_epoch", 2L)
++                .containsEntry("lifecycle_version", 4L);
++        assertThat(customerMapper.changePhoneCas(
++                ACTIVE_CUSTOMER_ID, "13700021001", 3L)).isZero();
++    }
++
++    @Test
++    void accountCancelCasBumpsEpochAndLifecycleVersionInSameUpdate() {
++        LocalDateTime cancelledAt = LocalDateTime.of(2026, 7, 22, 2, 0);
++
++        int updated = customerMapper.cancelAccountCas(ACTIVE_CUSTOMER_ID, 3L, cancelledAt);
++
++        assertThat(updated).isEqualTo(1);
++        assertThat(customerRow(ACTIVE_CUSTOMER_ID))
++                .containsEntry("is_deleted", 1)
++                .containsEntry("lifecycle_status", "CANCELLED")
++                .containsEntry("auth_epoch", 2L)
++                .containsEntry("lifecycle_version", 4L);
++        assertThat(jdbcTemplate.queryForObject(
++                "SELECT cancelled_at FROM customer WHERE id = ?", LocalDateTime.class, ACTIVE_CUSTOMER_ID))
++                .isEqualTo(cancelledAt);
++    }
++
++    @Test
++    void loadStateRejectsCancellingCustomerWhenBoundOperationIsTerminal() {
++        jdbcTemplate.update("""
++                UPDATE account_lifecycle_operation
++                SET status = 'COMPLETED'
++                WHERE operation_no = 'op-cancel-1'
++                """);
++
++        AuthoritativeAuthState state = service.loadState(CANCELLING_CUSTOMER_ID);
++
++        assertThat(state.allowed()).isFalse();
++        assertThat(state.allowedScope()).isNull();
++    }
++
++    @Test
++    void loadStateRejectsCancellingCustomerWhenBoundOperationStatusIsUnknown() {
++        jdbcTemplate.update("""
++                UPDATE account_lifecycle_operation
++                SET status = 'UNKNOWN'
++                WHERE operation_no = 'op-cancel-1'
++                """);
++
++        AuthoritativeAuthState state = service.loadState(CANCELLING_CUSTOMER_ID);
++
++        assertThat(state.allowed()).isFalse();
++        assertThat(state.allowedScope()).isNull();
++    }
++
++    @Test
++    @Transactional(propagation = Propagation.NOT_SUPPORTED)
++    void cancellingAuthenticationRollsBackEpochWhenOperationUpdateConflicts() {
++        jdbcTemplate.update("""
++                UPDATE account_lifecycle_operation
++                SET status = 'COMPLETED'
++                WHERE operation_no = 'op-cancel-1'
++                """);
++
++        assertThatThrownBy(() -> service.completeAuthentication(CANCELLING_CUSTOMER_ID))
++                .isInstanceOf(AuthStateRejectedException.class);
++        assertThat(jdbcTemplate.queryForObject(
++                "SELECT auth_epoch FROM customer WHERE id = ?", Long.class, CANCELLING_CUSTOMER_ID))
++                .isEqualTo(5L);
++    }
++
++    @Test
++    void loadStateMapsMissingDeletedAndCancelledCustomersToRejected() {
++        assertThat(service.loadState(99_999L).allowed()).isFalse();
++        assertThat(service.loadState(DELETED_CUSTOMER_ID).allowed()).isFalse();
++        assertThat(service.loadState(CANCELLED_CUSTOMER_ID).allowed()).isFalse();
++    }
++
++    @Test
++    void matchingLogoutBumpsEpochOnce() {
++        long loggedOutEpoch = service.logout(ACTIVE_CUSTOMER_ID, 1L);
++
++        assertThat(loggedOutEpoch).isEqualTo(2L);
++        assertThat(service.loadState(ACTIVE_CUSTOMER_ID).authEpoch()).isEqualTo(2L);
++    }
++
++    private Map<String, Object> customerRow(long customerId) {
++        return jdbcTemplate.queryForMap("""
++                SELECT phone, is_deleted, lifecycle_status, lifecycle_version, auth_epoch
++                FROM customer
++                WHERE id = ?
++                """, customerId);
++    }
++
++    private void insertCustomer(long id, String phone, String lifecycleStatus, long authEpoch,
++                                String operationNo, int deleted) {
++        jdbcTemplate.update("""
++                INSERT INTO customer (
++                    id, phone, status, lifecycle_status, lifecycle_version, auth_epoch,
++                    current_lifecycle_operation_no, is_deleted
++                ) VALUES (?, ?, 0, ?, 3, ?, ?, ?)
++                """, id, phone, lifecycleStatus, authEpoch, operationNo, deleted);
++    }
++}

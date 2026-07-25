@@ -1,0 +1,946 @@
+# Review package: cb32a21..53a96de
+
+## Commits
+53a96de 功能：建立乘客同身份换号事务
+
+## Files changed
+ .../application/LifecycleRequestHasher.java        |  11 +
+ .../phone/ChangeCustomerPhoneCommand.java          |  38 +++
+ .../phone/ChangeCustomerPhoneResult.java           |   9 +
+ .../phone/CustomerPhoneChangeService.java          | 262 ++++++++++++++
+ .../phone/PhoneBindingValueFactory.java            |  34 ++
+ .../mapper/CustomerPhoneBindingHistoryMapper.java  |  20 +-
+ .../mapper/LifecycleOperationMapper.java           |  10 +
+ .../main/resources/mapper/CustomerEntityMapper.xml |   1 +
+ .../mapper/lifecycle/LifecycleOperationMapper.xml  |  17 +
+ .../CustomerPhoneChangeServiceIntegrationTest.java | 377 +++++++++++++++++++++
+ 10 files changed, 778 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/LifecycleRequestHasher.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/LifecycleRequestHasher.java
+index 391f01a..1d5cbdb 100644
+--- a/passenger/src/main/java/com/sx/passenger/lifecycle/application/LifecycleRequestHasher.java
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/LifecycleRequestHasher.java
+@@ -1,46 +1,57 @@
+ package com.sx.passenger.lifecycle.application;
+ 
+ import com.fasterxml.jackson.core.JsonProcessingException;
+ import com.fasterxml.jackson.databind.DeserializationFeature;
+ import com.fasterxml.jackson.databind.JsonNode;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.fasterxml.jackson.databind.node.ArrayNode;
+ import com.fasterxml.jackson.databind.node.ObjectNode;
+ import com.sx.passenger.lifecycle.application.cancel.FenceAccountCancellationCommand;
++import com.sx.passenger.lifecycle.application.phone.ChangeCustomerPhoneCommand;
+ import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
+ import org.springframework.stereotype.Component;
+ 
+ import java.nio.charset.StandardCharsets;
+ import java.security.MessageDigest;
+ import java.security.NoSuchAlgorithmException;
+ import java.util.HexFormat;
+ import java.util.Map;
+ import java.util.TreeMap;
+ 
+ @Component
+ public final class LifecycleRequestHasher {
+     private final ObjectMapper json = new ObjectMapper()
+             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+ 
+     public String hash(FenceAccountCancellationCommand command) {
+         return hash(LifecycleOperationType.ACCOUNT_CANCEL, command.customerId(),
+                 command.expectedLifecycleVersion(), command.sanitizedRequestContextJson());
+     }
+ 
++    public String hash(ChangeCustomerPhoneCommand command) {
++        return digest(LifecycleOperationType.PHONE_CHANGE.name() + "\n" + command.customerId() + "\n"
++                + command.expectedLifecycleVersion() + "\n" + command.newPhone() + "\n"
++                + canonicalJson(command.sanitizedRequestContextJson()));
++    }
++
+     public String hash(LifecycleOperationType operationType, long customerId,
+                        long expectedLifecycleVersion, String sanitizedRequestContextJson) {
+         if (operationType == null) {
+             throw new IllegalArgumentException("operationType must not be null");
+         }
+         String canonical = operationType.name() + "\n" + customerId + "\n" + expectedLifecycleVersion
+                 + "\n" + canonicalJson(sanitizedRequestContextJson);
++        return digest(canonical);
++    }
++
++    private static String digest(String canonical) {
+         try {
+             MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+             return HexFormat.of().formatHex(sha256.digest(canonical.getBytes(StandardCharsets.UTF_8)));
+         } catch (NoSuchAlgorithmException impossible) {
+             throw new IllegalStateException("SHA-256 is unavailable", impossible);
+         }
+     }
+ 
+     private String canonicalJson(String value) {
+         if (value == null || value.isBlank()) {
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/ChangeCustomerPhoneCommand.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/ChangeCustomerPhoneCommand.java
+new file mode 100644
+index 0000000..08644e7
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/ChangeCustomerPhoneCommand.java
+@@ -0,0 +1,38 @@
++package com.sx.passenger.lifecycle.application.phone;
++
++import java.time.Instant;
++
++public record ChangeCustomerPhoneCommand(long customerId,
++                                         long expectedLifecycleVersion,
++                                         String newPhone,
++                                         String otpCode,
++                                         String idempotencyKey,
++                                         String actorId,
++                                         String traceId,
++                                         String sanitizedRequestContextJson,
++                                         Instant requestedAt) {
++    public ChangeCustomerPhoneCommand {
++        if (customerId <= 0) throw new IllegalArgumentException("customerId must be positive");
++        if (expectedLifecycleVersion < 0) {
++            throw new IllegalArgumentException("expectedLifecycleVersion must not be negative");
++        }
++        if (newPhone == null || !newPhone.matches("1\\d{10}")) {
++            throw new IllegalArgumentException("newPhone must be a valid mobile phone");
++        }
++        if (idempotencyKey == null || idempotencyKey.isBlank()) {
++            throw new IllegalArgumentException("idempotencyKey must not be blank");
++        }
++        if (idempotencyKey.length() > 128) {
++            throw new IllegalArgumentException("idempotencyKey must not exceed 128 characters");
++        }
++        if (actorId == null || actorId.isBlank()) throw new IllegalArgumentException("actorId must not be blank");
++        if (actorId.length() > 64) throw new IllegalArgumentException("actorId must not exceed 64 characters");
++        if (traceId != null && traceId.length() > 64) {
++            throw new IllegalArgumentException("traceId must not exceed 64 characters");
++        }
++        if (sanitizedRequestContextJson == null || sanitizedRequestContextJson.isBlank()) {
++            throw new IllegalArgumentException("sanitizedRequestContextJson must not be blank");
++        }
++        if (requestedAt == null) throw new IllegalArgumentException("requestedAt must not be null");
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/ChangeCustomerPhoneResult.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/ChangeCustomerPhoneResult.java
+new file mode 100644
+index 0000000..7bdc767
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/ChangeCustomerPhoneResult.java
+@@ -0,0 +1,9 @@
++package com.sx.passenger.lifecycle.application.phone;
++
++public record ChangeCustomerPhoneResult(long operationId,
++                                        String operationNo,
++                                        long customerId,
++                                        long appliedLifecycleVersion,
++                                        long newAuthEpoch,
++                                        boolean requireLogin) {
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeService.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeService.java
+new file mode 100644
+index 0000000..aa09f1d
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeService.java
+@@ -0,0 +1,262 @@
++package com.sx.passenger.lifecycle.application.phone;
++
++import com.baomidou.mybatisplus.core.toolkit.Wrappers;
++import com.sx.passenger.auth.otp.AtomicOtpService;
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.dao.CustomerEntityMapper;
++import com.sx.passenger.lifecycle.application.CreateLifecycleSnapshotCommand;
++import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
++import com.sx.passenger.lifecycle.application.LifecycleJson;
++import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
++import com.sx.passenger.lifecycle.application.LifecycleRequestHasher;
++import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshot;
++import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshotFactory;
++import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
++import com.sx.passenger.lifecycle.application.UuidLifecycleIdentifierGenerator;
++import com.sx.passenger.lifecycle.domain.LifecycleActorType;
++import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
++import com.sx.passenger.lifecycle.domain.LifecycleOperationStateMachine;
++import com.sx.passenger.lifecycle.domain.LifecycleOperationStatus;
++import com.sx.passenger.lifecycle.domain.LifecycleStepStateMachine;
++import com.sx.passenger.lifecycle.domain.LifecycleStepStatus;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleEventEntity;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleOutboxEntity;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleStepEntity;
++import com.sx.passenger.lifecycle.persistence.mapper.CustomerPhoneBindingHistoryMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
++import com.sx.passenger.lifecycle.plan.LifecyclePlanRegistry;
++import com.sx.passenger.model.Customer;
++import org.springframework.dao.DuplicateKeyException;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++
++import java.time.LocalDateTime;
++import java.time.ZoneOffset;
++import java.util.LinkedHashMap;
++import java.util.Map;
++import java.util.Objects;
++
++@Service
++public class CustomerPhoneChangeService {
++    private final AtomicOtpService otp;
++    private final LifecycleSnapshotStore snapshots;
++    private final CustomerEntityMapper customers;
++    private final CustomerPhoneBindingHistoryMapper bindings;
++    private final LifecycleOperationMapper operations;
++    private final LifecycleStepMapper steps;
++    private final LifecycleEventMapper events;
++    private final LifecycleOutboxMapper outboxes;
++    private final PhoneBindingValueFactory bindingValues;
++    private final LifecycleRequestHasher hasher;
++    private final LifecycleRuntimeSnapshotFactory snapshotFactory;
++    private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
++    private final LifecycleJson json = new LifecycleJson();
++    private final LifecycleOperationStateMachine operationStateMachine = new LifecycleOperationStateMachine();
++    private final LifecycleStepStateMachine stepStateMachine = new LifecycleStepStateMachine();
++    private final TransactionTemplate withoutTransaction;
++    private final TransactionTemplate databaseTransaction;
++
++    public CustomerPhoneChangeService(AtomicOtpService otp,
++                                      LifecycleSnapshotStore snapshots,
++                                      CustomerEntityMapper customers,
++                                      CustomerPhoneBindingHistoryMapper bindings,
++                                      LifecycleOperationMapper operations,
++                                      LifecycleStepMapper steps,
++                                      LifecycleEventMapper events,
++                                      LifecycleOutboxMapper outboxes,
++                                      PhoneBindingValueFactory bindingValues,
++                                      LifecycleRequestHasher hasher,
++                                      LifecyclePlanRegistry plans,
++                                      PlatformTransactionManager transactionManager) {
++        this.otp = otp;
++        this.snapshots = snapshots;
++        this.customers = customers;
++        this.bindings = bindings;
++        this.operations = operations;
++        this.steps = steps;
++        this.events = events;
++        this.outboxes = outboxes;
++        this.bindingValues = bindingValues;
++        this.hasher = hasher;
++        this.snapshotFactory = new LifecycleRuntimeSnapshotFactory(
++                plans, new UuidLifecycleIdentifierGenerator(), new LifecycleJson());
++        this.withoutTransaction = new TransactionTemplate(transactionManager);
++        this.withoutTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
++        this.databaseTransaction = new TransactionTemplate(transactionManager);
++        this.databaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
++    }
++
++    public ChangeCustomerPhoneResult change(ChangeCustomerPhoneCommand command) {
++        Objects.requireNonNull(command, "command must not be null");
++        ChangeCustomerPhoneResult result = withoutTransaction.execute(status -> changeOutsideTransaction(command));
++        return Objects.requireNonNull(result, "phone change execution returned no result");
++    }
++
++    private ChangeCustomerPhoneResult changeOutsideTransaction(ChangeCustomerPhoneCommand command) {
++        String requestHash = hasher.hash(command);
++        var prior = snapshots.findByIdempotency(
++                command.customerId(), LifecycleOperationType.PHONE_CHANGE, command.idempotencyKey());
++        if (prior.isPresent()) return replay(prior.get(), requestHash);
++
++        Customer current = customers.selectById(command.customerId());
++        requireChangeAllowed(current, command);
++        Customer occupied = customers.selectOne(Wrappers.<Customer>lambdaQuery()
++                .eq(Customer::getPhone, command.newPhone()).eq(Customer::getIsDeleted, 0).last("LIMIT 1"));
++        if (occupied != null && !occupied.getId().equals(command.customerId())) {
++            throw new LifecycleOperationConflictException("New phone is already occupied");
++        }
++
++        OtpConsumeResult consumed = otp.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
++                OtpSubject.phoneChange(command.customerId(), command.newPhone(),
++                        command.expectedLifecycleVersion()), command.otpCode());
++        if (consumed != OtpConsumeResult.CONSUMED) {
++            throw new IllegalArgumentException("OTP is invalid or expired");
++        }
++
++        try {
++            ChangeCustomerPhoneResult result = databaseTransaction.execute(
++                    status -> applyChange(command, requestHash));
++            return Objects.requireNonNull(result, "phone change transaction returned no result");
++        } catch (DuplicateKeyException ex) {
++            throw new LifecycleOperationConflictException("New phone is already occupied");
++        }
++    }
++
++    private ChangeCustomerPhoneResult applyChange(ChangeCustomerPhoneCommand command, String requestHash) {
++        LifecycleRuntimeSnapshot snapshot = snapshotFactory.create(new CreateLifecycleSnapshotCommand(
++                command.customerId(), LifecycleOperationType.PHONE_CHANGE, command.idempotencyKey(), requestHash,
++                command.expectedLifecycleVersion(), LifecycleActorType.CUSTOMER, command.actorId(), command.traceId(),
++                command.sanitizedRequestContextJson(), command.requestedAt()));
++        LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
++        LifecycleOperationEntity operation = snapshot.operation();
++
++        if (customers.changePhoneCas(command.customerId(), command.newPhone(),
++                command.expectedLifecycleVersion()) != 1) {
++            throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
++        }
++        Customer changed = customers.selectById(command.customerId());
++        if (changed == null) throw new LifecycleOperationConflictException("Customer disappeared during phone change");
++
++        if (bindings.replaceActive(command.customerId(), operation.getOperationNo(), now) != 1) {
++            throw new LifecycleOperationConflictException("Active phone binding changed concurrently");
++        }
++        Long maxVersion = bindings.selectMaxBindingVersion(command.customerId());
++        long nextVersion = maxVersion == null ? 1L : maxVersion + 1L;
++        if (bindings.insert(bindingValues.active(command.customerId(), nextVersion, command.newPhone(),
++                operation.getOperationNo(), now)) != 1) {
++            throw new IllegalStateException("Failed to insert active phone binding");
++        }
++
++        snapshots.persistNew(snapshot);
++        operationStateMachine.requireTransition(LifecycleOperationType.PHONE_CHANGE,
++                LifecycleOperationStatus.REQUESTED, LifecycleOperationStatus.EXECUTING, false);
++        if (operations.startPhoneChangeCas(operation.getId(), 0L, now) != 1) {
++            throw new LifecycleOperationConflictException("Phone change operation could not start");
++        }
++        insertTransitionEvent(operation, "REQUESTED", "EXECUTING", "PHONE_CHANGE_STARTED", command, now);
++
++        stepStateMachine.requireTransition(LifecycleStepStatus.PENDING, LifecycleStepStatus.RUNNING);
++        int startedSteps = steps.update(null, Wrappers.<LifecycleStepEntity>lambdaUpdate()
++                .eq(LifecycleStepEntity::getOperationId, operation.getId())
++                .eq(LifecycleStepEntity::getStatus, "PENDING")
++                .set(LifecycleStepEntity::getStatus, "RUNNING")
++                .set(LifecycleStepEntity::getAttemptCount, 1)
++                .set(LifecycleStepEntity::getStartedAt, now)
++                .set(LifecycleStepEntity::getUpdatedAt, now));
++        if (startedSteps != snapshot.steps().size()) {
++            throw new LifecycleOperationConflictException("Phone change steps could not start");
++        }
++        stepStateMachine.requireTransition(LifecycleStepStatus.RUNNING, LifecycleStepStatus.SUCCEEDED);
++        int completedSteps = steps.update(null, Wrappers.<LifecycleStepEntity>lambdaUpdate()
++                .eq(LifecycleStepEntity::getOperationId, operation.getId())
++                .eq(LifecycleStepEntity::getStatus, "RUNNING")
++                .set(LifecycleStepEntity::getStatus, "SUCCEEDED")
++                .set(LifecycleStepEntity::getCompletedAt, now)
++                .set(LifecycleStepEntity::getUpdatedAt, now));
++        if (completedSteps != snapshot.steps().size()) {
++            throw new LifecycleOperationConflictException("Phone change steps changed concurrently");
++        }
++
++        operationStateMachine.requireTransition(LifecycleOperationType.PHONE_CHANGE,
++                LifecycleOperationStatus.EXECUTING, LifecycleOperationStatus.COMPLETED, false);
++        if (operations.completePhoneChangeCas(operation.getId(), 1L, changed.getLifecycleVersion(),
++                changed.getAuthEpoch(), now) != 1) {
++            throw new LifecycleOperationConflictException("Phone change operation could not complete");
++        }
++        String completedEventId = insertTransitionEvent(operation, "EXECUTING", "COMPLETED",
++                "PHONE_CHANGE_COMPLETED", command, now);
++        insertCompletedOutbox(operation, changed, completedEventId, command, now);
++
++        return new ChangeCustomerPhoneResult(operation.getId(), operation.getOperationNo(), command.customerId(),
++                changed.getLifecycleVersion(), changed.getAuthEpoch(), true);
++    }
++
++    private String insertTransitionEvent(LifecycleOperationEntity operation, String from, String to, String reason,
++                                         ChangeCustomerPhoneCommand command, LocalDateTime now) {
++        String eventId = identifiers.nextEventId();
++        LifecycleEventEntity event = new LifecycleEventEntity().setEventId(eventId)
++                .setOperationId(operation.getId()).setCustomerId(command.customerId())
++                .setEventType("LIFECYCLE_OPERATION_STATUS_CHANGED").setFromStatus(from).setToStatus(to)
++                .setActorType(LifecycleActorType.CUSTOMER.name()).setActorId(command.actorId())
++                .setReasonCode(reason).setTraceId(command.traceId()).setPayloadSnapshot("{}").setCreatedAt(now);
++        if (events.insert(event) != 1) throw new IllegalStateException("Failed to insert phone change event");
++        return eventId;
++    }
++
++    private void insertCompletedOutbox(LifecycleOperationEntity operation, Customer changed, String causationEventId,
++                                       ChangeCustomerPhoneCommand command, LocalDateTime now) {
++        String eventId = identifiers.nextEventId();
++        Map<String, Object> payload = new LinkedHashMap<>();
++        payload.put("eventId", eventId);
++        payload.put("operationNo", operation.getOperationNo());
++        payload.put("operationType", LifecycleOperationType.PHONE_CHANGE.name());
++        payload.put("customerId", command.customerId());
++        payload.put("appliedLifecycleVersion", changed.getLifecycleVersion());
++        payload.put("authEpoch", changed.getAuthEpoch());
++        payload.put("occurredAt", command.requestedAt().toString());
++        LifecycleOutboxEntity outbox = new LifecycleOutboxEntity().setEventId(eventId)
++                .setOperationId(operation.getId()).setAggregateType("ACCOUNT_LIFECYCLE")
++                .setAggregateId(operation.getOperationNo()).setEventType("LIFECYCLE_PHONE_CHANGED")
++                .setCausationEventId(causationEventId).setTraceId(command.traceId())
++                .setTopic("account.lifecycle.phone-changed.v1").setPartitionKey(Long.toString(command.customerId()))
++                .setPayload(json.write(payload)).setStatus("PENDING").setRetryCount(0).setMaxRetryCount(10)
++                .setNextRetryAt(now).setCreatedAt(now).setUpdatedAt(now);
++        if (outboxes.insert(outbox) != 1) throw new IllegalStateException("Failed to insert phone changed outbox");
++    }
++
++    private static void requireChangeAllowed(Customer current, ChangeCustomerPhoneCommand command) {
++        if (current == null || !Integer.valueOf(0).equals(current.getIsDeleted())
++                || !"ACTIVE".equals(current.getLifecycleStatus())) {
++            throw new LifecycleOperationConflictException("Customer is not active");
++        }
++        if (command.newPhone().equals(current.getPhone())) {
++            throw new IllegalArgumentException("New phone must not be the same as current phone");
++        }
++        if (!Long.valueOf(command.expectedLifecycleVersion()).equals(current.getLifecycleVersion())) {
++            throw new LifecycleOperationConflictException("Customer lifecycle version changed");
++        }
++        if (current.getCurrentLifecycleOperationNo() != null) {
++            throw new LifecycleOperationConflictException("Customer already has an active lifecycle operation");
++        }
++    }
++
++    private static ChangeCustomerPhoneResult replay(LifecycleOperationEntity operation, String requestHash) {
++        if (!requestHash.equals(operation.getRequestHash())) {
++            throw new LifecycleOperationConflictException("Idempotency key was used for another request");
++        }
++        if (!"COMPLETED".equals(operation.getStatus()) || operation.getAppliedLifecycleVersion() == null
++                || operation.getRestrictedAuthEpoch() == null) {
++            throw new LifecycleOperationConflictException("Existing phone change operation is not completed");
++        }
++        return new ChangeCustomerPhoneResult(operation.getId(), operation.getOperationNo(), operation.getCustomerId(),
++                operation.getAppliedLifecycleVersion(), operation.getRestrictedAuthEpoch(), true);
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/PhoneBindingValueFactory.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/PhoneBindingValueFactory.java
+new file mode 100644
+index 0000000..9d97ddf
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/phone/PhoneBindingValueFactory.java
+@@ -0,0 +1,34 @@
++package com.sx.passenger.lifecycle.application.phone;
++
++import com.sx.passenger.lifecycle.persistence.entity.CustomerPhoneBindingHistoryEntity;
++import org.springframework.stereotype.Component;
++
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++import java.security.NoSuchAlgorithmException;
++import java.time.LocalDateTime;
++import java.util.HexFormat;
++
++@Component
++public final class PhoneBindingValueFactory {
++    private static final String CURRENT_HASH_KEY_VERSION = "legacy-v1";
++
++    public CustomerPhoneBindingHistoryEntity active(long customerId, long bindingVersion, String phone,
++                                                     String operationNo, LocalDateTime now) {
++        return new CustomerPhoneBindingHistoryEntity()
++                .setCustomerId(customerId).setBindingVersion(bindingVersion).setStatus("ACTIVE")
++                .setPhoneCiphertext(phone.getBytes(StandardCharsets.UTF_8))
++                .setPhoneIdentityHash(identityHash(phone)).setHashKeyVersion(CURRENT_HASH_KEY_VERSION)
++                .setChangeOperationNo(operationNo).setChangeReason("PHONE_CHANGE")
++                .setValidFrom(now).setCreatedAt(now).setUpdatedAt(now);
++    }
++
++    String identityHash(String phone) {
++        try {
++            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
++                    .digest(phone.getBytes(StandardCharsets.UTF_8)));
++        } catch (NoSuchAlgorithmException impossible) {
++            throw new IllegalStateException("SHA-256 is unavailable", impossible);
++        }
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/CustomerPhoneBindingHistoryMapper.java b/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/CustomerPhoneBindingHistoryMapper.java
+index e9f14af..c8103dd 100644
+--- a/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/CustomerPhoneBindingHistoryMapper.java
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/CustomerPhoneBindingHistoryMapper.java
+@@ -1,6 +1,24 @@
+ package com.sx.passenger.lifecycle.persistence.mapper;
+ 
+ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+ import com.sx.passenger.lifecycle.persistence.entity.CustomerPhoneBindingHistoryEntity;
++import org.apache.ibatis.annotations.Param;
++import org.apache.ibatis.annotations.Select;
++import org.apache.ibatis.annotations.Update;
+ 
+-public interface CustomerPhoneBindingHistoryMapper extends BaseMapper<CustomerPhoneBindingHistoryEntity> {}
++import java.time.LocalDateTime;
++
++public interface CustomerPhoneBindingHistoryMapper extends BaseMapper<CustomerPhoneBindingHistoryEntity> {
++    @Update("""
++            UPDATE customer_phone_binding_history
++            SET status = 'REPLACED', valid_to = #{now}, change_operation_no = #{operationNo},
++                updated_at = #{now}
++            WHERE customer_id = #{customerId} AND status = 'ACTIVE'
++            """)
++    int replaceActive(@Param("customerId") long customerId,
++                      @Param("operationNo") String operationNo,
++                      @Param("now") LocalDateTime now);
++
++    @Select("SELECT MAX(binding_version) FROM customer_phone_binding_history WHERE customer_id = #{customerId}")
++    Long selectMaxBindingVersion(@Param("customerId") long customerId);
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java b/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
+index c787491..ec051c9 100644
+--- a/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
+@@ -16,11 +16,21 @@ public interface LifecycleOperationMapper extends BaseMapper<LifecycleOperationE
+                         @Param("expectedStatus") String expectedStatus,
+                         @Param("expectedRowVersion") long expectedRowVersion,
+                         @Param("targetStatus") String targetStatus,
+                         @Param("updatedAt") LocalDateTime updatedAt);
+ 
+     int fenceRequestedCas(@Param("id") long id,
+                           @Param("expectedRowVersion") long expectedRowVersion,
+                           @Param("restrictedAuthEpoch") long restrictedAuthEpoch,
+                           @Param("appliedLifecycleVersion") long appliedLifecycleVersion,
+                           @Param("fencedAt") LocalDateTime fencedAt);
++
++    int startPhoneChangeCas(@Param("id") long id,
++                            @Param("expectedRowVersion") long expectedRowVersion,
++                            @Param("startedAt") LocalDateTime startedAt);
++
++    int completePhoneChangeCas(@Param("id") long id,
++                               @Param("expectedRowVersion") long expectedRowVersion,
++                               @Param("appliedLifecycleVersion") long appliedLifecycleVersion,
++                               @Param("newAuthEpoch") long newAuthEpoch,
++                               @Param("completedAt") LocalDateTime completedAt);
+ }
+diff --git a/passenger/src/main/resources/mapper/CustomerEntityMapper.xml b/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
+index 2f4021d..06aadef 100644
+--- a/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
++++ b/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
+@@ -38,20 +38,21 @@
+     <update id="changePhoneCas">
+         UPDATE customer
+         SET phone = #{newPhone},
+             auth_epoch = auth_epoch + 1,
+             lifecycle_version = lifecycle_version + 1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = #{customerId}
+           AND is_deleted = 0
+           AND lifecycle_status = 'ACTIVE'
+           AND lifecycle_version = #{expectedLifecycleVersion}
++          AND current_lifecycle_operation_no IS NULL
+     </update>
+ 
+     <update id="cancelAccountCas">
+         UPDATE customer
+         SET is_deleted = 1,
+             auth_epoch = auth_epoch + 1,
+             lifecycle_status = 'CANCELLED',
+             lifecycle_version = lifecycle_version + 1,
+             cancelled_at = #{cancelledAt},
+             updated_at = CURRENT_TIMESTAMP
+diff --git a/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml b/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
+index be195fd..b005f92 100644
+--- a/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
++++ b/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
+@@ -26,11 +26,28 @@
+         SET status = 'FENCED',
+             restricted_auth_epoch = #{restrictedAuthEpoch},
+             applied_lifecycle_version = #{appliedLifecycleVersion},
+             fenced_at = #{fencedAt},
+             row_version = row_version + 1,
+             updated_at = #{fencedAt}
+         WHERE id = #{id}
+           AND status = 'REQUESTED'
+           AND row_version = #{expectedRowVersion}
+     </update>
++
++    <update id="startPhoneChangeCas">
++        UPDATE account_lifecycle_operation
++        SET status = 'EXECUTING', execution_started_at = #{startedAt},
++            row_version = row_version + 1, updated_at = #{startedAt}
++        WHERE id = #{id} AND operation_type = 'PHONE_CHANGE'
++          AND status = 'REQUESTED' AND row_version = #{expectedRowVersion}
++    </update>
++
++    <update id="completePhoneChangeCas">
++        UPDATE account_lifecycle_operation
++        SET status = 'COMPLETED', applied_lifecycle_version = #{appliedLifecycleVersion},
++            restricted_auth_epoch = #{newAuthEpoch},
++            completed_at = #{completedAt}, row_version = row_version + 1, updated_at = #{completedAt}
++        WHERE id = #{id} AND operation_type = 'PHONE_CHANGE'
++          AND status = 'EXECUTING' AND row_version = #{expectedRowVersion}
++    </update>
+ </mapper>
+diff --git a/passenger/src/test/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeServiceIntegrationTest.java b/passenger/src/test/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeServiceIntegrationTest.java
+new file mode 100644
+index 0000000..5cb2d2f
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/lifecycle/application/phone/CustomerPhoneChangeServiceIntegrationTest.java
+@@ -0,0 +1,377 @@
++package com.sx.passenger.lifecycle.application.phone;
++
++import com.baomidou.mybatisplus.core.toolkit.Wrappers;
++import com.sx.passenger.auth.otp.AtomicOtpService;
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.dao.CustomerEntityMapper;
++import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
++import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
++import com.sx.passenger.lifecycle.application.cancel.AccountCancellationFenceService;
++import com.sx.passenger.lifecycle.application.cancel.FenceAccountCancellationCommand;
++import com.sx.passenger.lifecycle.persistence.entity.CustomerPhoneBindingHistoryEntity;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleEventEntity;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleOutboxEntity;
++import com.sx.passenger.lifecycle.persistence.mapper.CustomerPhoneBindingHistoryMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
++import com.sx.passenger.model.Customer;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.boot.test.mock.mockito.MockBean;
++import org.springframework.boot.test.mock.mockito.SpyBean;
++import org.springframework.dao.DuplicateKeyException;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.test.context.ActiveProfiles;
++import org.springframework.transaction.support.TransactionSynchronizationManager;
++import org.springframework.transaction.support.TransactionTemplate;
++
++import java.nio.charset.StandardCharsets;
++import java.time.Instant;
++import java.time.LocalDateTime;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.atomic.AtomicBoolean;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++import static org.assertj.core.groups.Tuple.tuple;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyLong;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.doAnswer;
++import static org.mockito.Mockito.doThrow;
++import static org.mockito.Mockito.reset;
++import static org.mockito.Mockito.times;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoInteractions;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.when;
++
++@SpringBootTest
++@ActiveProfiles("test")
++class CustomerPhoneChangeServiceIntegrationTest {
++    private static final long CUSTOMER_ID = 27_001L;
++    private static final String OLD_PHONE = "13800270001";
++    private static final String NEW_PHONE = "13900270001";
++
++    @Autowired CustomerPhoneChangeService service;
++    @Autowired AccountCancellationFenceService cancellation;
++    @Autowired CustomerEntityMapper customers;
++    @SpyBean LifecycleSnapshotStore snapshots;
++    @SpyBean CustomerPhoneBindingHistoryMapper histories;
++    @Autowired LifecycleOperationMapper operations;
++    @Autowired LifecycleStepMapper steps;
++    @SpyBean LifecycleEventMapper events;
++    @SpyBean LifecycleOutboxMapper outboxes;
++    @Autowired JdbcTemplate jdbc;
++    @Autowired TransactionTemplate outerTransactions;
++    @MockBean AtomicOtpService otp;
++
++    @BeforeEach
++    void setUp() {
++        reset(otp, snapshots, histories, events, outboxes);
++        cleanRows();
++        insertCustomer(CUSTOMER_ID, OLD_PHONE, 3L, 5L);
++        insertActiveBinding(CUSTOMER_ID, 1L, OLD_PHONE);
++        when(otp.consume(any(), any(), any())).thenReturn(OtpConsumeResult.CONSUMED);
++    }
++
++    @AfterEach
++    void tearDown() {
++        reset(snapshots, histories, events, outboxes);
++        cleanRows();
++    }
++
++    @Test
++    void changesPhoneWithoutChangingCustomerIdentity() {
++        ChangeCustomerPhoneResult out = service.change(command("idem-success", NEW_PHONE, "{}"));
++
++        Customer current = customers.selectById(CUSTOMER_ID);
++        assertThat(current.getId()).isEqualTo(CUSTOMER_ID);
++        assertThat(current.getPhone()).isEqualTo(NEW_PHONE);
++        assertThat(current.getLifecycleVersion()).isEqualTo(4L);
++        assertThat(current.getAuthEpoch()).isEqualTo(6L);
++        assertThat(out.customerId()).isEqualTo(CUSTOMER_ID);
++        assertThat(out.newAuthEpoch()).isEqualTo(6L);
++        assertThat(out.requireLogin()).isTrue();
++    }
++
++    @Test
++    void replacesOldBindingAndCreatesNextActiveBinding() {
++        ChangeCustomerPhoneResult out = service.change(command("idem-binding", NEW_PHONE, "{}"));
++
++        List<CustomerPhoneBindingHistoryEntity> bindingRows = bindings(CUSTOMER_ID);
++        assertThat(bindingRows).extracting("bindingVersion", "status")
++                .containsExactly(tuple(1L, "REPLACED"), tuple(2L, "ACTIVE"));
++        assertThat(bindingRows.get(0).getValidTo()).isNotNull();
++        assertThat(bindingRows.get(1).getChangeOperationNo()).isEqualTo(out.operationNo());
++        assertThat(bindingRows.get(1).getPhoneCiphertext()).containsExactly(NEW_PHONE.getBytes(StandardCharsets.UTF_8));
++        assertThat(bindingRows.get(1).getPhoneIdentityHash()).hasSize(64);
++    }
++
++    @Test
++    void createsCompletedOperationStepsEventsAndOutboxes() {
++        ChangeCustomerPhoneResult out = service.change(command("idem-runtime", NEW_PHONE, "{}"));
++
++        Map<String, Object> operation = jdbc.queryForMap("""
++                SELECT status, applied_lifecycle_version, completed_at, row_version
++                FROM account_lifecycle_operation WHERE operation_no = ?
++                """, out.operationNo());
++        assertThat(operation).containsEntry("status", "COMPLETED")
++                .containsEntry("applied_lifecycle_version", 4L)
++                .containsEntry("row_version", 2L);
++        assertThat(operation.get("completed_at")).isNotNull();
++        assertThat(jdbc.queryForList("SELECT status FROM account_lifecycle_step WHERE operation_id = ?",
++                out.operationId())).allSatisfy(row -> assertThat(row).containsEntry("status", "SUCCEEDED"));
++        assertThat(count("SELECT COUNT(*) FROM account_lifecycle_event WHERE operation_id = ?", out.operationId()))
++                .isEqualTo(3L);
++        assertThat(count("SELECT COUNT(*) FROM account_lifecycle_outbox WHERE operation_id = ?", out.operationId()))
++                .isEqualTo(2L);
++        assertThat(jdbc.queryForObject("""
++                SELECT COUNT(*) FROM account_lifecycle_outbox
++                WHERE operation_id = ? AND topic = 'account.lifecycle.phone-changed.v1'
++                """, Long.class, out.operationId())).isEqualTo(1L);
++    }
++
++    @Test
++    void replayReturnsCompletedResultBeforeCustomerAndOtpChecks() {
++        ChangeCustomerPhoneResult first = service.change(command("idem-replay", NEW_PHONE, "{\"source\":\"app\"}"));
++        ChangeCustomerPhoneResult replay = service.change(command("idem-replay", NEW_PHONE, "{\"source\":\"app\"}"));
++
++        assertThat(replay).isEqualTo(first);
++        verify(otp, times(1)).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
++    }
++
++    @Test
++    void sameKeyDifferentHashConflictsBeforeOtp() {
++        service.change(command("idem-conflict", NEW_PHONE, "{\"reason\":\"a\"}"));
++
++        assertThatThrownBy(() -> service.change(command("idem-conflict", "13900270002", "{\"reason\":\"b\"}")))
++                .isInstanceOf(LifecycleOperationConflictException.class);
++        verify(otp, times(1)).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
++    }
++
++    @Test
++    void requestHashIncludesNewPhoneButExcludesOtpTraceAndTime() {
++        ChangeCustomerPhoneCommand first = command("idem-hash", NEW_PHONE, "{\"z\":2,\"a\":1}");
++        ChangeCustomerPhoneCommand replay = new ChangeCustomerPhoneCommand(CUSTOMER_ID, 3L, NEW_PHONE, "expired",
++                "idem-hash", Long.toString(CUSTOMER_ID), "other-trace", " { \"a\" : 1, \"z\" : 2 } ",
++                Instant.parse("2030-01-01T00:00:00Z"));
++        ChangeCustomerPhoneCommand anotherPhone = new ChangeCustomerPhoneCommand(CUSTOMER_ID, 3L,
++                "13900270002", "expired", "idem-hash", Long.toString(CUSTOMER_ID), "other-trace",
++                "{\"a\":1,\"z\":2}", replay.requestedAt());
++
++        assertThat(serviceRequestHash(first)).isEqualTo(serviceRequestHash(replay)).hasSize(64);
++        assertThat(serviceRequestHash(anotherPhone)).isNotEqualTo(serviceRequestHash(first));
++    }
++
++    @Test
++    void rejectsInvalidJsonAndSchemaLengthOverflowBeforeOtp() {
++        assertThatThrownBy(() -> service.change(command("idem-json", NEW_PHONE, "{} {}")))
++                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("valid JSON");
++        assertThatThrownBy(() -> new ChangeCustomerPhoneCommand(CUSTOMER_ID, 3L, NEW_PHONE, "111111",
++                "i".repeat(129), "actor", "trace", "{}", requestedAt()))
++                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("idempotencyKey");
++        assertThatThrownBy(() -> new ChangeCustomerPhoneCommand(CUSTOMER_ID, 3L, NEW_PHONE, "111111",
++                "idem", "a".repeat(65), "trace", "{}", requestedAt()))
++                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("actorId");
++        assertThatThrownBy(() -> new ChangeCustomerPhoneCommand(CUSTOMER_ID, 3L, NEW_PHONE, "111111",
++                "idem", "actor", "t".repeat(65), "{}", requestedAt()))
++                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("traceId");
++        verifyNoInteractions(otp);
++    }
++
++    @Test
++    void rejectsSamePhoneAndOccupiedPhoneBeforeOtp() {
++        insertCustomer(CUSTOMER_ID + 1, NEW_PHONE, 0L, 0L);
++
++        assertThatThrownBy(() -> service.change(command("idem-same", OLD_PHONE, "{}")))
++                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("same");
++        assertThatThrownBy(() -> service.change(command("idem-occupied", NEW_PHONE, "{}")))
++                .isInstanceOf(LifecycleOperationConflictException.class).hasMessageContaining("phone");
++        verifyNoInteractions(otp);
++    }
++
++    @Test
++    void lifecycleVersionZeroIsValid() {
++        cleanRows();
++        insertCustomer(CUSTOMER_ID, OLD_PHONE, 0L, 5L);
++        insertActiveBinding(CUSTOMER_ID, 1L, OLD_PHONE);
++
++        assertThat(service.change(new ChangeCustomerPhoneCommand(CUSTOMER_ID, 0L, NEW_PHONE, "111111",
++                "idem-zero", Long.toString(CUSTOMER_ID), "trace", "{}", requestedAt())).appliedLifecycleVersion())
++                .isEqualTo(1L);
++    }
++
++    @Test
++    void suspendsAmbientTransactionForReadsAndOtpThenStartsDatabaseTransaction() {
++        AtomicBoolean lookupOutside = new AtomicBoolean();
++        AtomicBoolean otpOutside = new AtomicBoolean();
++        AtomicBoolean casInside = new AtomicBoolean();
++        doAnswer(invocation -> {
++            lookupOutside.set(!TransactionSynchronizationManager.isActualTransactionActive());
++            return java.util.Optional.empty();
++        }).when(snapshots).findByIdempotency(anyLong(), any(), any());
++        when(otp.consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any())).thenAnswer(invocation -> {
++            otpOutside.set(!TransactionSynchronizationManager.isActualTransactionActive());
++            return OtpConsumeResult.CONSUMED;
++        });
++        doAnswer(invocation -> {
++            casInside.set(TransactionSynchronizationManager.isActualTransactionActive());
++            return jdbc.update("""
++                    UPDATE customer_phone_binding_history
++                    SET status = 'REPLACED', valid_to = ?, change_operation_no = ?, updated_at = ?
++                    WHERE customer_id = ? AND status = 'ACTIVE'
++                    """, invocation.getArgument(2), invocation.getArgument(1), invocation.getArgument(2),
++                    invocation.getArgument(0));
++        }).when(histories).replaceActive(anyLong(), any(), any());
++
++        outerTransactions.executeWithoutResult(status -> service.change(command("idem-ambient", NEW_PHONE, "{}")));
++
++        assertThat(lookupOutside).isTrue();
++        assertThat(otpOutside).isTrue();
++        assertThat(casInside).isTrue();
++    }
++
++    @Test
++    void duplicatePhoneRaceMapsToDomainConflictAndRollsBackButOtpStaysConsumed() {
++        doThrow(new DuplicateKeyException("uk_customer_phone_active"))
++                .when(histories).replaceActive(anyLong(), any(), any());
++
++        assertThatThrownBy(() -> service.change(command("idem-duplicate", NEW_PHONE, "{}")))
++                .isInstanceOf(LifecycleOperationConflictException.class).hasMessageContaining("phone");
++        assertEverythingRolledBack();
++        verify(otp).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
++    }
++
++    @Test
++    void historyEventAndOutboxFailuresEachRollbackAllMysqlButNeverRestoreOtp() {
++        assertRollbackOn("idem-history-fail", () -> doThrow(new IllegalStateException("history unavailable"))
++                .when(histories).replaceActive(anyLong(), any(), any()));
++        assertRollbackOn("idem-event-fail", () -> doThrow(new IllegalStateException("event unavailable"))
++                .when(events).insert(any(LifecycleEventEntity.class)));
++        assertRollbackOn("idem-outbox-fail", () -> doThrow(new IllegalStateException("outbox unavailable"))
++                .when(outboxes).insert(any(LifecycleOutboxEntity.class)));
++        verify(otp, times(3)).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
++        verify(otp, never()).store(any(), any(), any(), any());
++    }
++
++    @Test
++    void phoneChangeAndCancellationUsingSameExpectedVersionAllowOnlyOneSuccess() throws Exception {
++        CountDownLatch ready = new CountDownLatch(2);
++        CountDownLatch start = new CountDownLatch(1);
++        ExecutorService executor = Executors.newFixedThreadPool(2);
++        try {
++            Future<Object> phoneChange = executor.submit(() -> runAfter(start, ready,
++                    () -> service.change(command("idem-cross-change", NEW_PHONE, "{}"))));
++            Future<Object> cancel = executor.submit(() -> runAfter(start, ready,
++                    () -> cancellation.fence(new FenceAccountCancellationCommand(CUSTOMER_ID, 3L, "111111",
++                            "idem-cross-cancel", Long.toString(CUSTOMER_ID), "trace", "{}", requestedAt()))));
++            ready.await();
++            start.countDown();
++            List<Object> results = List.of(phoneChange.get(), cancel.get());
++
++            assertThat(results.stream().filter(result -> !(result instanceof RuntimeException))).hasSize(1);
++            assertThat(results.stream().filter(LifecycleOperationConflictException.class::isInstance)).hasSize(1);
++            assertThat(customers.selectById(CUSTOMER_ID).getLifecycleVersion()).isEqualTo(4L);
++            assertThat(count("SELECT COUNT(*) FROM account_lifecycle_operation WHERE customer_id = ?", CUSTOMER_ID))
++                    .isEqualTo(1L);
++        } finally {
++            executor.shutdownNow();
++        }
++    }
++
++    private void assertRollbackOn(String key, Runnable failure) {
++        failure.run();
++        assertThatThrownBy(() -> service.change(command(key, NEW_PHONE, "{}")))
++                .isInstanceOf(RuntimeException.class);
++        assertEverythingRolledBack();
++        reset(histories, events, outboxes, snapshots);
++    }
++
++    private void assertEverythingRolledBack() {
++        Customer customer = customers.selectById(CUSTOMER_ID);
++        assertThat(customer.getPhone()).isEqualTo(OLD_PHONE);
++        assertThat(customer.getLifecycleVersion()).isEqualTo(3L);
++        assertThat(customer.getAuthEpoch()).isEqualTo(5L);
++        assertThat(bindings(CUSTOMER_ID)).extracting("bindingVersion", "status")
++                .containsExactly(tuple(1L, "ACTIVE"));
++        assertThat(count("SELECT COUNT(*) FROM account_lifecycle_operation WHERE customer_id = ?", CUSTOMER_ID))
++                .isZero();
++    }
++
++    private ChangeCustomerPhoneCommand command(String key, String phone, String context) {
++        return new ChangeCustomerPhoneCommand(CUSTOMER_ID, 3L, phone, "111111", key,
++                Long.toString(CUSTOMER_ID), "trace-27001", context, requestedAt());
++    }
++
++    private String serviceRequestHash(ChangeCustomerPhoneCommand command) {
++        return new com.sx.passenger.lifecycle.application.LifecycleRequestHasher().hash(command);
++    }
++
++    private Instant requestedAt() {
++        return Instant.parse("2026-07-22T09:00:00Z");
++    }
++
++    private Object runAfter(CountDownLatch start, CountDownLatch ready, java.util.concurrent.Callable<Object> call)
++            throws InterruptedException {
++        ready.countDown();
++        start.await();
++        try {
++            return call.call();
++        } catch (RuntimeException ex) {
++            return ex;
++        } catch (Exception ex) {
++            throw new IllegalStateException(ex);
++        }
++    }
++
++    private List<CustomerPhoneBindingHistoryEntity> bindings(long customerId) {
++        return histories.selectList(Wrappers.<CustomerPhoneBindingHistoryEntity>lambdaQuery()
++                .eq(CustomerPhoneBindingHistoryEntity::getCustomerId, customerId)
++                .orderByAsc(CustomerPhoneBindingHistoryEntity::getBindingVersion));
++    }
++
++    private void insertCustomer(long id, String phone, long lifecycleVersion, long authEpoch) {
++        jdbc.update("""
++                INSERT INTO customer (id, phone, status, lifecycle_status, lifecycle_version, auth_epoch, is_deleted)
++                VALUES (?, ?, 0, 'ACTIVE', ?, ?, 0)
++                """, id, phone, lifecycleVersion, authEpoch);
++    }
++
++    private void insertActiveBinding(long id, long version, String phone) {
++        jdbc.update("""
++                INSERT INTO customer_phone_binding_history
++                    (customer_id, binding_version, status, phone_ciphertext, phone_identity_hash,
++                     hash_key_version, change_reason, valid_from, created_at, updated_at)
++                VALUES (?, ?, 'ACTIVE', ?, ?, 'legacy-v1', 'REGISTER', ?, ?, ?)
++                """, id, version, phone.getBytes(StandardCharsets.UTF_8), "a".repeat(64),
++                LocalDateTime.of(2026, 1, 1, 0, 0), LocalDateTime.of(2026, 1, 1, 0, 0),
++                LocalDateTime.of(2026, 1, 1, 0, 0));
++    }
++
++    private long count(String sql, Object argument) {
++        return jdbc.queryForObject(sql, Long.class, argument);
++    }
++
++    private void cleanRows() {
++        jdbc.update("DELETE FROM account_lifecycle_outbox WHERE operation_id IN (SELECT id FROM account_lifecycle_operation WHERE customer_id = ?)", CUSTOMER_ID);
++        jdbc.update("DELETE FROM account_lifecycle_event WHERE customer_id = ?", CUSTOMER_ID);
++        jdbc.update("DELETE FROM account_lifecycle_step WHERE operation_id IN (SELECT id FROM account_lifecycle_operation WHERE customer_id = ?)", CUSTOMER_ID);
++        jdbc.update("DELETE FROM account_lifecycle_operation WHERE customer_id = ?", CUSTOMER_ID);
++        jdbc.update("DELETE FROM customer_phone_binding_history WHERE customer_id = ?", CUSTOMER_ID);
++        jdbc.update("DELETE FROM customer WHERE id IN (?, ?)", CUSTOMER_ID, CUSTOMER_ID + 1);
++    }
++}

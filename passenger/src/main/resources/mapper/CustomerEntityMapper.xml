@@ -68,4 +68,20 @@
           AND lifecycle_version = #{expectedLifecycleVersion}
     </update>
 
+    <update id="finalizeAccountCancellation">
+        UPDATE customer
+        SET is_deleted = 1,
+            auth_epoch = auth_epoch + 1,
+            lifecycle_status = 'CANCELLED',
+            lifecycle_version = lifecycle_version + 1,
+            current_lifecycle_operation_no = NULL,
+            cancelled_at = #{cancelledAt},
+            updated_at = #{cancelledAt}
+        WHERE id = #{customerId}
+          AND is_deleted = 0
+          AND lifecycle_status = 'CANCELLING'
+          AND lifecycle_version = #{expectedLifecycleVersion}
+          AND current_lifecycle_operation_no = #{operationNo}
+    </update>
+
 </mapper>

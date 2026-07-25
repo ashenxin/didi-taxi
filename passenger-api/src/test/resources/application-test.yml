@@ -8,6 +8,9 @@ app:
 passenger:
   internal-auth:
     token: test-passenger-internal-secret-32bytes
+  account-lifecycle:
+    messaging:
+      enabled: false
 
 order:
   lifecycle:

@@ -2,6 +2,7 @@ package com.sx.wallet.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.wallet.dao.WalletAutoPayAgreementMapper;
+import com.sx.wallet.lifecycle.service.WalletAccountWriteFence;
 import com.sx.wallet.model.WalletAutoPayAgreement;
 import com.sx.wallet.model.dto.AutoPayAgreementVO;
 import com.sx.wallet.model.dto.AutoPayRequest;
@@ -26,13 +27,16 @@ public class WalletService {
     private final WalletAutoPayAgreementMapper agreementMapper;
     private final boolean mockEnabled;
     private final PaymentAttemptService paymentAttemptService;
+    private final WalletAccountWriteFence accountWriteFence;
 
     public WalletService(WalletAutoPayAgreementMapper agreementMapper,
                          @Value("${wallet.payment.mock.enabled:true}") boolean mockEnabled,
-                         PaymentAttemptService paymentAttemptService) {
+                         PaymentAttemptService paymentAttemptService,
+                         WalletAccountWriteFence accountWriteFence) {
         this.agreementMapper = agreementMapper;
         this.mockEnabled = mockEnabled;
         this.paymentAttemptService = paymentAttemptService;
+        this.accountWriteFence = accountWriteFence;
     }
 
     public List<AutoPayAgreementVO> listAgreements(Long passengerId) {
@@ -63,6 +67,7 @@ public class WalletService {
 
     @Transactional
     public AutoPaySignResult sign(Long passengerId, AutoPaySignRequest request) {
+        accountWriteFence.lockAndRequireActive(passengerId, "AUTO_PAY_SIGN");
         String channel = normalizeChannel(request.getChannel());
         LocalDateTime now = LocalDateTime.now();
         WalletAutoPayAgreement agreement = agreementMapper.selectOne(Wrappers.<WalletAutoPayAgreement>lambdaQuery()
@@ -110,6 +115,7 @@ public class WalletService {
 
     @Transactional
     public AutoPayAgreementVO setDefault(Long passengerId, Long agreementId) {
+        accountWriteFence.lockAndRequireActive(passengerId, "AUTO_PAY_MANAGE");
         WalletAutoPayAgreement agreement = getOwnedAgreement(passengerId, agreementId);
         if (agreement == null) {
             return null;
@@ -130,6 +136,7 @@ public class WalletService {
 
     @Transactional
     public AutoPayAgreementVO close(Long passengerId, Long agreementId) {
+        accountWriteFence.lockAndRequireResolvable(passengerId, "AUTO_PAY_CLOSE");
         WalletAutoPayAgreement agreement = getOwnedAgreement(passengerId, agreementId);
         if (agreement == null) {
             return null;

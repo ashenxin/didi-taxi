@@ -1,0 +1,80 @@
+<h2>换号 / 销号统一收口：三种架构路径</h2>
+<p class="subtitle">点击一种方案作为后续详细设计基线；建议重点比较“崩溃后能否恢复”和“新增业务是否只需注册参与者”。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a-sync-chain" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A · BFF 同步责任链</div>
+        <div class="mockup-body">
+          <div class="mock-nav">H5 → passenger-api</div>
+          <div class="mock-content">订单检查 → 结算检查 → 钱包检查 → 券/积分清理 → 删除账号</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>最小重构</h3>
+      <p>把现有 if/Feign 调用改为 AccountGuard 链和策略列表。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优势</h4><ul><li>改动小、上线快</li><li>能先拆小大方法</li></ul></div>
+        <div class="cons"><h4>局限</h4><ul><li>崩溃后无法恢复</li><li>成功未知与重复副作用</li><li>BFF 继续成为业务权威</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b-orchestrated-saga" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B · 乘客域持久化编排 Saga（推荐）</div>
+        <div class="mockup-body">
+          <div class="mock-nav">H5 → BFF → Account Lifecycle</div>
+          <div class="mock-content">状态机 + Operation/Step + Outbox</div>
+          <div class="mock-content">Order ｜ Wallet ｜ Calculate ｜ Session/WS ｜ Future Domains</div>
+          <div class="mock-button">回执 · 重试 · 对账 · 人工处理</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>统一控制面，领域自治</h3>
+      <p>passenger 拥有生命周期状态和进度，各业务只实现标准参与者契约。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优势</h4><ul><li>可查询、可重试、可审计</li><li>新增业务只注册参与者</li><li>复用现有 Outbox/Kafka/XXL</li></ul></div>
+        <div class="cons"><h4>成本</h4><ul><li>需增加状态表与事件契约</li><li>参与者必须真正幂等</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c-event-choreography" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C · 纯 Kafka 事件编舞</div>
+        <div class="mockup-body">
+          <div class="mock-nav">passenger 发布 AccountCancellationRequested</div>
+          <div class="mock-content">↙ Order　↓ Wallet　↘ Calculate　→ Future</div>
+          <div class="mock-content">各服务独立消费和清理</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>低耦合扇出</h3>
+      <p>各服务自由订阅事件，中心不直接编排步骤。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优势</h4><ul><li>参与服务耦合较低</li><li>扇出扩展容易</li></ul></div>
+        <div class="cons"><h4>局限</h4><ul><li>没有统一完成判定</li><li>失败定位与合规证明困难</li><li>补偿链条复杂</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>推荐组合的职责切面</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+      <div class="mock-nav">Filter / Interceptor：身份、生命周期状态门禁、Request-ID、审计上下文</div>
+      <div class="mock-content">责任链：只读资格校验，返回结构化 blockers</div>
+      <div class="mock-content">策略注册表：按 CHANGE_PHONE / CANCEL_ACCOUNT 解析参与步骤</div>
+      <div class="mock-content">Saga：状态推进、幂等、超时、重试、死信、人工处理</div>
+      <div class="mock-content">各领域：保留自己的订单、支付、券、积分与流水裁决权</div>
+    </div>
+  </div>
+</div>

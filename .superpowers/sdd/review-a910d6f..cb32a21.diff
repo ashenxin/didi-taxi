@@ -1,0 +1,792 @@
+# Review package: a910d6f..cb32a21
+
+## Commits
+cb32a21 修复：隔离注销栅栏验证码事务边界
+45d4153 功能：建立乘客账号注销栅栏事务
+
+## Files changed
+ .../com/sx/passenger/dao/CustomerEntityMapper.java |   5 +
+ .../application/LifecycleRequestHasher.java        |  71 ++++
+ .../cancel/AccountCancellationFenceResult.java     |   9 +
+ .../cancel/AccountCancellationFenceService.java    | 146 +++++++++
+ .../cancel/FenceAccountCancellationCommand.java    |  38 +++
+ .../mapper/LifecycleOperationMapper.java           |   6 +
+ .../main/resources/mapper/CustomerEntityMapper.xml |  14 +
+ .../mapper/lifecycle/LifecycleOperationMapper.xml  |  13 +
+ ...untCancellationFenceServiceIntegrationTest.java | 361 +++++++++++++++++++++
+ 9 files changed, 663 insertions(+)
+
+## Diff
+diff --git a/passenger/src/main/java/com/sx/passenger/dao/CustomerEntityMapper.java b/passenger/src/main/java/com/sx/passenger/dao/CustomerEntityMapper.java
+index 18c36dd..735d217 100644
+--- a/passenger/src/main/java/com/sx/passenger/dao/CustomerEntityMapper.java
++++ b/passenger/src/main/java/com/sx/passenger/dao/CustomerEntityMapper.java
+@@ -7,18 +7,23 @@ import org.springframework.stereotype.Repository;
+ 
+ import java.time.LocalDateTime;
+ 
+ @Repository
+ public interface CustomerEntityMapper extends BaseMapper<Customer> {
+     int bumpAuthEpochForAuthentication(@Param("customerId") long customerId);
+ 
+     int bumpAuthEpochForLogout(@Param("customerId") long customerId,
+                                @Param("expectedAuthEpoch") long expectedAuthEpoch);
+ 
++    int fenceAccountCancellation(@Param("customerId") long customerId,
++                                 @Param("expectedLifecycleVersion") long expectedLifecycleVersion,
++                                 @Param("operationNo") String operationNo,
++                                 @Param("updatedAt") LocalDateTime updatedAt);
++
+     int changePhoneCas(@Param("customerId") long customerId,
+                        @Param("newPhone") String newPhone,
+                        @Param("expectedLifecycleVersion") long expectedLifecycleVersion);
+ 
+     int cancelAccountCas(@Param("customerId") long customerId,
+                          @Param("expectedLifecycleVersion") long expectedLifecycleVersion,
+                          @Param("cancelledAt") LocalDateTime cancelledAt);
+ }
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/LifecycleRequestHasher.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/LifecycleRequestHasher.java
+new file mode 100644
+index 0000000..391f01a
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/LifecycleRequestHasher.java
+@@ -0,0 +1,71 @@
++package com.sx.passenger.lifecycle.application;
++
++import com.fasterxml.jackson.core.JsonProcessingException;
++import com.fasterxml.jackson.databind.DeserializationFeature;
++import com.fasterxml.jackson.databind.JsonNode;
++import com.fasterxml.jackson.databind.ObjectMapper;
++import com.fasterxml.jackson.databind.node.ArrayNode;
++import com.fasterxml.jackson.databind.node.ObjectNode;
++import com.sx.passenger.lifecycle.application.cancel.FenceAccountCancellationCommand;
++import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
++import org.springframework.stereotype.Component;
++
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++import java.security.NoSuchAlgorithmException;
++import java.util.HexFormat;
++import java.util.Map;
++import java.util.TreeMap;
++
++@Component
++public final class LifecycleRequestHasher {
++    private final ObjectMapper json = new ObjectMapper()
++            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
++
++    public String hash(FenceAccountCancellationCommand command) {
++        return hash(LifecycleOperationType.ACCOUNT_CANCEL, command.customerId(),
++                command.expectedLifecycleVersion(), command.sanitizedRequestContextJson());
++    }
++
++    public String hash(LifecycleOperationType operationType, long customerId,
++                       long expectedLifecycleVersion, String sanitizedRequestContextJson) {
++        if (operationType == null) {
++            throw new IllegalArgumentException("operationType must not be null");
++        }
++        String canonical = operationType.name() + "\n" + customerId + "\n" + expectedLifecycleVersion
++                + "\n" + canonicalJson(sanitizedRequestContextJson);
++        try {
++            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
++            return HexFormat.of().formatHex(sha256.digest(canonical.getBytes(StandardCharsets.UTF_8)));
++        } catch (NoSuchAlgorithmException impossible) {
++            throw new IllegalStateException("SHA-256 is unavailable", impossible);
++        }
++    }
++
++    private String canonicalJson(String value) {
++        if (value == null || value.isBlank()) {
++            throw new IllegalArgumentException("sanitizedRequestContextJson must not be blank");
++        }
++        try {
++            return json.writeValueAsString(sort(json.readTree(value)));
++        } catch (JsonProcessingException ex) {
++            throw new IllegalArgumentException("sanitizedRequestContextJson must be valid JSON", ex);
++        }
++    }
++
++    private JsonNode sort(JsonNode node) {
++        if (node.isObject()) {
++            ObjectNode sorted = json.createObjectNode();
++            Map<String, JsonNode> fields = new TreeMap<>();
++            node.fields().forEachRemaining(entry -> fields.put(entry.getKey(), entry.getValue()));
++            fields.forEach((name, value) -> sorted.set(name, sort(value)));
++            return sorted;
++        }
++        if (node.isArray()) {
++            ArrayNode sorted = json.createArrayNode();
++            node.forEach(child -> sorted.add(sort(child)));
++            return sorted;
++        }
++        return node;
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceResult.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceResult.java
+new file mode 100644
+index 0000000..ba58823
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceResult.java
+@@ -0,0 +1,9 @@
++package com.sx.passenger.lifecycle.application.cancel;
++
++public record AccountCancellationFenceResult(long operationId,
++                                             String operationNo,
++                                             long customerId,
++                                             long appliedLifecycleVersion,
++                                             long restrictedAuthEpoch,
++                                             String status) {
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceService.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceService.java
+new file mode 100644
+index 0000000..7d5917f
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceService.java
+@@ -0,0 +1,146 @@
++package com.sx.passenger.lifecycle.application.cancel;
++
++import com.sx.passenger.auth.otp.AtomicOtpService;
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.dao.CustomerEntityMapper;
++import com.sx.passenger.lifecycle.application.CreateLifecycleSnapshotCommand;
++import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
++import com.sx.passenger.lifecycle.application.LifecycleJson;
++import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
++import com.sx.passenger.lifecycle.application.LifecycleRequestHasher;
++import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshot;
++import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshotFactory;
++import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
++import com.sx.passenger.lifecycle.application.UuidLifecycleIdentifierGenerator;
++import com.sx.passenger.lifecycle.domain.LifecycleActorType;
++import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleEventEntity;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
++import com.sx.passenger.lifecycle.plan.LifecyclePlanRegistry;
++import com.sx.passenger.model.Customer;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.support.TransactionTemplate;
++
++import java.time.LocalDateTime;
++import java.time.ZoneOffset;
++import java.util.Objects;
++
++@Service
++public class AccountCancellationFenceService {
++    private final AtomicOtpService otp;
++    private final LifecycleSnapshotStore snapshots;
++    private final CustomerEntityMapper customers;
++    private final LifecycleOperationMapper operations;
++    private final LifecycleEventMapper events;
++    private final TransactionTemplate withoutTransaction;
++    private final TransactionTemplate databaseTransaction;
++    private final LifecycleRequestHasher hasher;
++    private final LifecycleRuntimeSnapshotFactory snapshotFactory;
++    private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
++
++    public AccountCancellationFenceService(AtomicOtpService otp,
++                                            LifecycleSnapshotStore snapshots,
++                                            CustomerEntityMapper customers,
++                                            LifecycleOperationMapper operations,
++                                            LifecycleEventMapper events,
++                                            PlatformTransactionManager transactionManager,
++                                            LifecycleRequestHasher hasher,
++                                            LifecyclePlanRegistry plans) {
++        this.otp = otp;
++        this.snapshots = snapshots;
++        this.customers = customers;
++        this.operations = operations;
++        this.events = events;
++        this.withoutTransaction = new TransactionTemplate(transactionManager);
++        this.withoutTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
++        this.databaseTransaction = new TransactionTemplate(transactionManager);
++        this.databaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
++        this.hasher = hasher;
++        this.snapshotFactory = new LifecycleRuntimeSnapshotFactory(
++                plans, new UuidLifecycleIdentifierGenerator(), new LifecycleJson());
++    }
++
++    public AccountCancellationFenceResult fence(FenceAccountCancellationCommand command) {
++        Objects.requireNonNull(command, "command must not be null");
++        AccountCancellationFenceResult result = withoutTransaction.execute(
++                status -> fenceOutsideTransaction(command));
++        return Objects.requireNonNull(result, "cancellation fence execution returned no result");
++    }
++
++    private AccountCancellationFenceResult fenceOutsideTransaction(FenceAccountCancellationCommand command) {
++        String requestHash = hasher.hash(command);
++        var prior = snapshots.findByIdempotency(
++                command.customerId(), LifecycleOperationType.ACCOUNT_CANCEL, command.idempotencyKey());
++        if (prior.isPresent()) {
++            return replay(prior.get(), requestHash);
++        }
++
++        OtpConsumeResult consumed = otp.consume(OtpPurpose.ACCOUNT_CANCEL,
++                OtpSubject.accountCancel(command.customerId(), command.expectedLifecycleVersion()),
++                command.otpCode());
++        if (consumed != OtpConsumeResult.CONSUMED) {
++            throw new IllegalArgumentException("OTP is invalid or expired");
++        }
++
++        AccountCancellationFenceResult result = databaseTransaction.execute(
++                status -> createFence(command, requestHash));
++        return Objects.requireNonNull(result, "cancellation fence transaction returned no result");
++    }
++
++    private AccountCancellationFenceResult createFence(FenceAccountCancellationCommand command,
++                                                        String requestHash) {
++        LifecycleRuntimeSnapshot snapshot = snapshotFactory.create(new CreateLifecycleSnapshotCommand(
++                command.customerId(), LifecycleOperationType.ACCOUNT_CANCEL, command.idempotencyKey(), requestHash,
++                command.expectedLifecycleVersion(), LifecycleActorType.CUSTOMER, command.actorId(), command.traceId(),
++                command.sanitizedRequestContextJson(), command.requestedAt()));
++        LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
++        String operationNo = snapshot.operation().getOperationNo();
++        int customerUpdated = customers.fenceAccountCancellation(
++                command.customerId(), command.expectedLifecycleVersion(), operationNo, now);
++        if (customerUpdated != 1) {
++            throw new LifecycleOperationConflictException("Customer lifecycle changed concurrently");
++        }
++        Customer fencedCustomer = customers.selectById(command.customerId());
++        if (fencedCustomer == null) {
++            throw new LifecycleOperationConflictException("Customer disappeared while creating cancellation fence");
++        }
++
++        snapshots.persistNew(snapshot);
++        LifecycleOperationEntity operation = snapshot.operation();
++        int operationUpdated = operations.fenceRequestedCas(operation.getId(), 0L,
++                fencedCustomer.getAuthEpoch(), fencedCustomer.getLifecycleVersion(), now);
++        if (operationUpdated != 1) {
++            throw new LifecycleOperationConflictException("Lifecycle operation changed while creating fence");
++        }
++        LifecycleEventEntity fencedEvent = new LifecycleEventEntity()
++                .setEventId(identifiers.nextEventId()).setOperationId(operation.getId())
++                .setCustomerId(command.customerId()).setEventType("LIFECYCLE_OPERATION_STATUS_CHANGED")
++                .setFromStatus("REQUESTED").setToStatus("FENCED")
++                .setActorType(LifecycleActorType.CUSTOMER.name()).setActorId(command.actorId())
++                .setReasonCode("ACCOUNT_CANCEL_FENCED").setTraceId(command.traceId())
++                .setPayloadSnapshot("{}").setCreatedAt(now);
++        if (events.insert(fencedEvent) != 1) {
++            throw new IllegalStateException("Failed to insert lifecycle fence event");
++        }
++        return new AccountCancellationFenceResult(operation.getId(), operationNo, command.customerId(),
++                fencedCustomer.getLifecycleVersion(), fencedCustomer.getAuthEpoch(), "FENCED");
++    }
++
++    private static AccountCancellationFenceResult replay(LifecycleOperationEntity operation, String requestHash) {
++        if (!requestHash.equals(operation.getRequestHash())) {
++            throw new LifecycleOperationConflictException("Idempotency key was used for another request");
++        }
++        if (operation.getAppliedLifecycleVersion() == null || operation.getRestrictedAuthEpoch() == null) {
++            throw new LifecycleOperationConflictException("Existing lifecycle operation is not fenced");
++        }
++        return new AccountCancellationFenceResult(operation.getId(), operation.getOperationNo(),
++                operation.getCustomerId(), operation.getAppliedLifecycleVersion(),
++                operation.getRestrictedAuthEpoch(), operation.getStatus());
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/FenceAccountCancellationCommand.java b/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/FenceAccountCancellationCommand.java
+new file mode 100644
+index 0000000..6b7dff1
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/application/cancel/FenceAccountCancellationCommand.java
+@@ -0,0 +1,38 @@
++package com.sx.passenger.lifecycle.application.cancel;
++
++import java.time.Instant;
++
++public record FenceAccountCancellationCommand(long customerId,
++                                              long expectedLifecycleVersion,
++                                              String otpCode,
++                                              String idempotencyKey,
++                                              String actorId,
++                                              String traceId,
++                                              String sanitizedRequestContextJson,
++                                              Instant requestedAt) {
++    public FenceAccountCancellationCommand {
++        if (customerId <= 0) throw new IllegalArgumentException("customerId must be positive");
++        if (expectedLifecycleVersion < 0) {
++            throw new IllegalArgumentException("expectedLifecycleVersion must not be negative");
++        }
++        if (idempotencyKey == null || idempotencyKey.isBlank()) {
++            throw new IllegalArgumentException("idempotencyKey must not be blank");
++        }
++        if (idempotencyKey.length() > 128) {
++            throw new IllegalArgumentException("idempotencyKey must not exceed 128 characters");
++        }
++        if (actorId == null || actorId.isBlank()) {
++            throw new IllegalArgumentException("actorId must not be blank");
++        }
++        if (actorId.length() > 64) {
++            throw new IllegalArgumentException("actorId must not exceed 64 characters");
++        }
++        if (traceId != null && traceId.length() > 64) {
++            throw new IllegalArgumentException("traceId must not exceed 64 characters");
++        }
++        if (sanitizedRequestContextJson == null || sanitizedRequestContextJson.isBlank()) {
++            throw new IllegalArgumentException("sanitizedRequestContextJson must not be blank");
++        }
++        if (requestedAt == null) throw new IllegalArgumentException("requestedAt must not be null");
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java b/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
+index c18007b..c787491 100644
+--- a/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
++++ b/passenger/src/main/java/com/sx/passenger/lifecycle/persistence/mapper/LifecycleOperationMapper.java
+@@ -10,11 +10,17 @@ public interface LifecycleOperationMapper extends BaseMapper<LifecycleOperationE
+     int updateRestrictedAuthEpoch(@Param("customerId") long customerId,
+                                   @Param("operationNo") String operationNo,
+                                   @Param("restrictedAuthEpoch") long restrictedAuthEpoch,
+                                   @Param("updatedAt") LocalDateTime updatedAt);
+ 
+     int updateStatusCas(@Param("id") long id,
+                         @Param("expectedStatus") String expectedStatus,
+                         @Param("expectedRowVersion") long expectedRowVersion,
+                         @Param("targetStatus") String targetStatus,
+                         @Param("updatedAt") LocalDateTime updatedAt);
++
++    int fenceRequestedCas(@Param("id") long id,
++                          @Param("expectedRowVersion") long expectedRowVersion,
++                          @Param("restrictedAuthEpoch") long restrictedAuthEpoch,
++                          @Param("appliedLifecycleVersion") long appliedLifecycleVersion,
++                          @Param("fencedAt") LocalDateTime fencedAt);
+ }
+diff --git a/passenger/src/main/resources/mapper/CustomerEntityMapper.xml b/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
+index 4115d1c..2f4021d 100644
+--- a/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
++++ b/passenger/src/main/resources/mapper/CustomerEntityMapper.xml
+@@ -14,20 +14,34 @@
+     <update id="bumpAuthEpochForLogout">
+         UPDATE customer
+         SET auth_epoch = auth_epoch + 1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = #{customerId}
+           AND is_deleted = 0
+           AND auth_epoch = #{expectedAuthEpoch}
+           AND lifecycle_status IN ('ACTIVE', 'CANCELLING')
+     </update>
+ 
++    <update id="fenceAccountCancellation">
++        UPDATE customer
++        SET lifecycle_status = 'CANCELLING',
++            lifecycle_version = lifecycle_version + 1,
++            auth_epoch = auth_epoch + 1,
++            current_lifecycle_operation_no = #{operationNo},
++            updated_at = #{updatedAt}
++        WHERE id = #{customerId}
++          AND is_deleted = 0
++          AND lifecycle_status = 'ACTIVE'
++          AND lifecycle_version = #{expectedLifecycleVersion}
++          AND current_lifecycle_operation_no IS NULL
++    </update>
++
+     <update id="changePhoneCas">
+         UPDATE customer
+         SET phone = #{newPhone},
+             auth_epoch = auth_epoch + 1,
+             lifecycle_version = lifecycle_version + 1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = #{customerId}
+           AND is_deleted = 0
+           AND lifecycle_status = 'ACTIVE'
+           AND lifecycle_version = #{expectedLifecycleVersion}
+diff --git a/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml b/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
+index f13d858..be195fd 100644
+--- a/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
++++ b/passenger/src/main/resources/mapper/lifecycle/LifecycleOperationMapper.xml
+@@ -13,11 +13,24 @@
+ 
+     <update id="updateStatusCas">
+         UPDATE account_lifecycle_operation
+         SET status = #{targetStatus},
+             row_version = row_version + 1,
+             updated_at = #{updatedAt}
+         WHERE id = #{id}
+           AND status = #{expectedStatus}
+           AND row_version = #{expectedRowVersion}
+     </update>
++
++    <update id="fenceRequestedCas">
++        UPDATE account_lifecycle_operation
++        SET status = 'FENCED',
++            restricted_auth_epoch = #{restrictedAuthEpoch},
++            applied_lifecycle_version = #{appliedLifecycleVersion},
++            fenced_at = #{fencedAt},
++            row_version = row_version + 1,
++            updated_at = #{fencedAt}
++        WHERE id = #{id}
++          AND status = 'REQUESTED'
++          AND row_version = #{expectedRowVersion}
++    </update>
+ </mapper>
+diff --git a/passenger/src/test/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceServiceIntegrationTest.java b/passenger/src/test/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceServiceIntegrationTest.java
+new file mode 100644
+index 0000000..57f3fa3
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/lifecycle/application/cancel/AccountCancellationFenceServiceIntegrationTest.java
+@@ -0,0 +1,361 @@
++package com.sx.passenger.lifecycle.application.cancel;
++
++import com.sx.passenger.auth.otp.AtomicOtpService;
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.dao.CustomerEntityMapper;
++import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
++import com.sx.passenger.lifecycle.application.LifecycleRequestHasher;
++import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleEventEntity;
++import com.sx.passenger.lifecycle.persistence.entity.LifecycleOutboxEntity;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
++import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
++import com.sx.passenger.model.Customer;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.boot.test.mock.mockito.MockBean;
++import org.springframework.boot.test.mock.mockito.SpyBean;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.test.context.ActiveProfiles;
++import org.springframework.transaction.support.TransactionSynchronizationManager;
++import org.springframework.transaction.support.TransactionTemplate;
++
++import java.time.Instant;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.atomic.AtomicBoolean;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyLong;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.doThrow;
++import static org.mockito.Mockito.reset;
++import static org.mockito.Mockito.times;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoInteractions;
++import static org.mockito.Mockito.when;
++
++@SpringBootTest
++@ActiveProfiles("test")
++class AccountCancellationFenceServiceIntegrationTest {
++    private static final long CUSTOMER_ID = 26_001L;
++    private long baselineStepCount;
++    private long baselineOutboxCount;
++
++    @Autowired AccountCancellationFenceService service;
++    @Autowired LifecycleRequestHasher hasher;
++    @Autowired CustomerEntityMapper customers;
++    @SpyBean LifecycleOperationMapper operations;
++    @SpyBean LifecycleSnapshotStore snapshots;
++    @Autowired LifecycleStepMapper steps;
++    @SpyBean LifecycleEventMapper events;
++    @SpyBean LifecycleOutboxMapper outboxes;
++    @Autowired JdbcTemplate jdbc;
++    @Autowired TransactionTemplate outerTransactions;
++    @MockBean AtomicOtpService otp;
++
++    @BeforeEach
++    void setUp() {
++        reset(otp, operations, snapshots, events, outboxes);
++        cleanRows();
++        baselineStepCount = steps.selectCount(null);
++        baselineOutboxCount = outboxes.selectCount(null);
++        insertCustomer(CUSTOMER_ID, "13800260001", 0L, 7L);
++        when(otp.consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any()))
++                .thenReturn(OtpConsumeResult.CONSUMED);
++    }
++
++    @AfterEach
++    void tearDown() {
++        reset(operations, snapshots, events, outboxes);
++        cleanRows();
++    }
++
++    @Test
++    void requestHashIsStableAndExcludesOtpTraceAndTime() {
++        FenceAccountCancellationCommand first = command("idem-hash", "111111", "{\"z\":2,\"a\":1}");
++        FenceAccountCancellationCommand replay = new FenceAccountCancellationCommand(
++                first.customerId(), first.expectedLifecycleVersion(), "expired", first.idempotencyKey(),
++                first.actorId(), "another-trace", " { \"a\" : 1, \"z\" : 2 } ",
++                Instant.parse("2030-01-01T00:00:00Z"));
++
++        assertThat(hasher.hash(first)).isEqualTo(hasher.hash(replay)).hasSize(64);
++    }
++
++    @Test
++    void rejectsTrailingJsonTokensBeforeOtp() {
++        assertThatThrownBy(() -> service.fence(command("idem-invalid-json", "111111", "{} {}")))
++                .isInstanceOf(IllegalArgumentException.class)
++                .hasMessageContaining("valid JSON");
++
++        verifyNoInteractions(otp);
++    }
++
++    @Test
++    void commandAcceptsSchemaLengthBoundariesAndRejectsOverflowBeforeOtp() {
++        FenceAccountCancellationCommand boundary = new FenceAccountCancellationCommand(
++                CUSTOMER_ID, 0L, "111111", "i".repeat(128), "a".repeat(64), "t".repeat(64),
++                "{}", Instant.parse("2026-07-22T08:00:00Z"));
++        assertThat(boundary.idempotencyKey()).hasSize(128);
++
++        assertThatThrownBy(() -> new FenceAccountCancellationCommand(
++                CUSTOMER_ID, 0L, "111111", "i".repeat(129), "actor", "trace", "{}", boundary.requestedAt()))
++                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("idempotencyKey");
++        assertThatThrownBy(() -> new FenceAccountCancellationCommand(
++                CUSTOMER_ID, 0L, "111111", "idem", "a".repeat(65), "trace", "{}", boundary.requestedAt()))
++                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("actorId");
++        assertThatThrownBy(() -> new FenceAccountCancellationCommand(
++                CUSTOMER_ID, 0L, "111111", "idem", "actor", "t".repeat(65), "{}", boundary.requestedAt()))
++                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("traceId");
++        verifyNoInteractions(otp);
++    }
++
++    @Test
++    void suspendsCallingTransactionForIdempotencyAndOtpThenStartsTransactionForDatabaseWrites() {
++        AtomicBoolean idempotencyOutsideTransaction = new AtomicBoolean();
++        AtomicBoolean otpOutsideTransaction = new AtomicBoolean();
++        AtomicBoolean casInsideTransaction = new AtomicBoolean();
++        org.mockito.Mockito.doAnswer(invocation -> {
++            idempotencyOutsideTransaction.set(!TransactionSynchronizationManager.isActualTransactionActive());
++            return java.util.Optional.empty();
++        }).when(snapshots).findByIdempotency(anyLong(), any(), any());
++        when(otp.consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any()))
++                .thenAnswer(invocation -> {
++                    otpOutsideTransaction.set(!TransactionSynchronizationManager.isActualTransactionActive());
++                    return OtpConsumeResult.CONSUMED;
++                });
++        org.mockito.Mockito.doAnswer(invocation -> {
++            casInsideTransaction.set(TransactionSynchronizationManager.isActualTransactionActive());
++            return jdbc.update("""
++                    UPDATE account_lifecycle_operation
++                    SET status = 'FENCED', restricted_auth_epoch = ?, applied_lifecycle_version = ?,
++                        fenced_at = ?, row_version = row_version + 1, updated_at = ?
++                    WHERE id = ? AND status = 'REQUESTED' AND row_version = ?
++                    """, invocation.getArgument(2), invocation.getArgument(3), invocation.getArgument(4),
++                    invocation.getArgument(4), invocation.getArgument(0), invocation.getArgument(1));
++        }).when(operations).fenceRequestedCas(anyLong(), anyLong(), anyLong(), anyLong(), any());
++
++        outerTransactions.executeWithoutResult(status -> {
++            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
++            service.fence(command("idem-ambient-tx", "111111", "{}"));
++            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
++        });
++
++        assertThat(idempotencyOutsideTransaction).isTrue();
++        assertThat(otpOutsideTransaction).isTrue();
++        assertThat(casInsideTransaction).isTrue();
++    }
++
++    @Test
++    void lifecycleVersionZeroIsAValidInitialVersion() {
++        AccountCancellationFenceResult result = service.fence(command("idem-zero", "111111", "{}"));
++
++        assertThat(result.appliedLifecycleVersion()).isEqualTo(1L);
++    }
++
++    @Test
++    void sameIdempotencyAndHashReturnsExistingWithoutConsumingOtp() {
++        AccountCancellationFenceResult first = service.fence(command("idem-replay", "111111", "{\"source\":\"app\"}"));
++        AccountCancellationFenceResult replay = service.fence(command("idem-replay", "expired", "{\"source\":\"app\"}"));
++
++        assertThat(replay).isEqualTo(first);
++        verify(otp, times(1)).consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any());
++    }
++
++    @Test
++    void sameKeyDifferentHashConflictsBeforeOtp() {
++        service.fence(command("idem-conflict", "111111", "{\"reason\":\"a\"}"));
++
++        assertThatThrownBy(() -> service.fence(command("idem-conflict", "222222", "{\"reason\":\"b\"}")))
++                .isInstanceOf(LifecycleOperationConflictException.class);
++        verify(otp, times(1)).consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any());
++    }
++
++    @Test
++    void createsCompleteFenceSnapshotAtomically() {
++        AccountCancellationFenceResult result = service.fence(command("idem-success", "111111", "{}"));
++
++        Customer customer = customers.selectById(CUSTOMER_ID);
++        LifecycleOperationEntity operation = operations.selectById(result.operationId());
++        assertThat(customer.getLifecycleStatus()).isEqualTo("CANCELLING");
++        assertThat(customer.getLifecycleVersion()).isEqualTo(1L);
++        assertThat(customer.getAuthEpoch()).isEqualTo(8L);
++        assertThat(customer.getCurrentLifecycleOperationNo()).isEqualTo(result.operationNo());
++        assertThat(operation.getStatus()).isEqualTo("FENCED");
++        assertThat(operation.getRestrictedAuthEpoch()).isEqualTo(8L);
++        assertThat(operation.getAppliedLifecycleVersion()).isEqualTo(1L);
++        assertThat(operation.getRowVersion()).isEqualTo(1L);
++        assertThat(operation.getFencedAt()).isNotNull();
++        assertThat(count("SELECT COUNT(*) FROM account_lifecycle_step WHERE operation_id = ?", result.operationId()))
++                .isEqualTo(12L);
++        assertThat(count("SELECT COUNT(*) FROM account_lifecycle_event WHERE operation_id = ?", result.operationId()))
++                .isEqualTo(2L);
++        assertThat(count("SELECT COUNT(*) FROM account_lifecycle_outbox WHERE operation_id = ?", result.operationId()))
++                .isEqualTo(1L);
++    }
++
++    @Test
++    void eventInsertFailureRollsBackMysqlButOtpRemainsConsumed() {
++        doThrow(new IllegalStateException("event unavailable")).when(events).insert(any(LifecycleEventEntity.class));
++
++        assertThatThrownBy(() -> service.fence(command("idem-event-fail", "111111", "{}")))
++                .isInstanceOf(IllegalStateException.class);
++
++        assertEverythingRolledBack();
++        verify(otp, times(1)).consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any());
++    }
++
++    @Test
++    void outboxInsertFailureRollsBackMysqlButOtpRemainsConsumed() {
++        doThrow(new IllegalStateException("outbox unavailable")).when(outboxes).insert(any(LifecycleOutboxEntity.class));
++
++        assertThatThrownBy(() -> service.fence(command("idem-outbox-fail", "111111", "{}")))
++                .isInstanceOf(IllegalStateException.class);
++
++        assertEverythingRolledBack();
++        verify(otp, times(1)).consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any());
++    }
++
++    @Test
++    void operationFenceCasCountMismatchRollsBackMysqlButOtpRemainsConsumed() {
++        org.mockito.Mockito.doReturn(0).when(operations).fenceRequestedCas(
++                anyLong(), anyLong(), anyLong(), anyLong(), any());
++
++        assertThatThrownBy(() -> service.fence(command("idem-operation-fail", "111111", "{}")))
++                .isInstanceOf(LifecycleOperationConflictException.class);
++
++        assertEverythingRolledBack();
++        verify(otp, times(1)).consume(eq(OtpPurpose.ACCOUNT_CANCEL), any(OtpSubject.class), any());
++    }
++
++    @Test
++    void competingLifecycleCommandsWithSameExpectedVersionAllowOnlyOneFence() throws Exception {
++        CountDownLatch ready = new CountDownLatch(2);
++        CountDownLatch start = new CountDownLatch(1);
++        ExecutorService executor = Executors.newFixedThreadPool(2);
++        try {
++            List<Future<Object>> futures = new ArrayList<>();
++            for (String key : List.of("idem-race-a", "idem-race-b")) {
++                futures.add(executor.submit(() -> {
++                    ready.countDown();
++                    start.await();
++                    try {
++                        return service.fence(command(key, "111111", "{\"key\":\"" + key + "\"}"));
++                    } catch (RuntimeException ex) {
++                        return ex;
++                    }
++                }));
++            }
++            ready.await();
++            start.countDown();
++            List<Object> outcomes = List.of(futures.get(0).get(), futures.get(1).get());
++
++            assertThat(outcomes.stream().filter(AccountCancellationFenceResult.class::isInstance)).hasSize(1);
++            assertThat(outcomes.stream().filter(LifecycleOperationConflictException.class::isInstance)).hasSize(1);
++            assertThat(operationCount()).isEqualTo(1L);
++            assertThat(customers.selectById(CUSTOMER_ID).getLifecycleVersion()).isEqualTo(1L);
++        } finally {
++            executor.shutdownNow();
++        }
++    }
++
++    @Test
++    void phoneChangeAndCancellationWithSameExpectedVersionAllowOnlyOneCustomerCas() throws Exception {
++        CountDownLatch ready = new CountDownLatch(2);
++        CountDownLatch start = new CountDownLatch(1);
++        ExecutorService executor = Executors.newFixedThreadPool(2);
++        try {
++            Future<Object> cancellation = executor.submit(() -> {
++                ready.countDown();
++                start.await();
++                try {
++                    return service.fence(command("idem-cross-race", "111111", "{}"));
++                } catch (RuntimeException ex) {
++                    return ex;
++                }
++            });
++            Future<Integer> phoneChange = executor.submit(() -> {
++                ready.countDown();
++                start.await();
++                return customers.changePhoneCas(CUSTOMER_ID, "13900260001", 0L);
++            });
++            ready.await();
++            start.countDown();
++
++            Object cancellationOutcome = cancellation.get();
++            int phoneChangeCount = phoneChange.get();
++            int successCount = (cancellationOutcome instanceof AccountCancellationFenceResult ? 1 : 0)
++                    + phoneChangeCount;
++            assertThat(successCount).isEqualTo(1);
++            if (phoneChangeCount == 1) {
++                assertThat(cancellationOutcome).isInstanceOf(LifecycleOperationConflictException.class);
++                assertThat(operationCount()).isZero();
++            } else {
++                assertThat(cancellationOutcome).isInstanceOf(AccountCancellationFenceResult.class);
++                assertThat(operationCount()).isEqualTo(1L);
++            }
++            assertThat(customers.selectById(CUSTOMER_ID).getLifecycleVersion()).isEqualTo(1L);
++        } finally {
++            executor.shutdownNow();
++        }
++    }
++
++    private FenceAccountCancellationCommand command(String idempotencyKey, String code, String context) {
++        return new FenceAccountCancellationCommand(CUSTOMER_ID, 0L, code, idempotencyKey,
++                Long.toString(CUSTOMER_ID), "trace-26001", context,
++                Instant.parse("2026-07-22T08:00:00Z"));
++    }
++
++    private void assertEverythingRolledBack() {
++        Map<String, Object> customer = jdbc.queryForMap("""
++                SELECT lifecycle_status, lifecycle_version, auth_epoch, current_lifecycle_operation_no
++                FROM customer WHERE id = ?
++                """, CUSTOMER_ID);
++        assertThat(customer).containsEntry("lifecycle_status", "ACTIVE")
++                .containsEntry("lifecycle_version", 0L)
++                .containsEntry("auth_epoch", 7L);
++        assertThat(customer.get("current_lifecycle_operation_no")).isNull();
++        assertThat(operationCount()).isZero();
++        assertThat(steps.selectCount(null)).isEqualTo(baselineStepCount);
++        assertThat(count("SELECT COUNT(*) FROM account_lifecycle_event WHERE customer_id = ?", CUSTOMER_ID)).isZero();
++        assertThat(outboxes.selectCount(null)).isEqualTo(baselineOutboxCount);
++    }
++
++    private void insertCustomer(long id, String phone, long lifecycleVersion, long authEpoch) {
++        jdbc.update("""
++                INSERT INTO customer (id, phone, status, lifecycle_status, lifecycle_version, auth_epoch, is_deleted)
++                VALUES (?, ?, 0, 'ACTIVE', ?, ?, 0)
++                """, id, phone, lifecycleVersion, authEpoch);
++    }
++
++    private long operationCount() {
++        return count("SELECT COUNT(*) FROM account_lifecycle_operation WHERE customer_id = ?", CUSTOMER_ID);
++    }
++
++    private long count(String sql, Object argument) {
++        return jdbc.queryForObject(sql, Long.class, argument);
++    }
++
++    private void cleanRows() {
++        jdbc.update("DELETE FROM account_lifecycle_outbox WHERE operation_id IN (SELECT id FROM account_lifecycle_operation WHERE customer_id = ?)", CUSTOMER_ID);
++        jdbc.update("DELETE FROM account_lifecycle_event WHERE customer_id = ?", CUSTOMER_ID);
++        jdbc.update("DELETE FROM account_lifecycle_step WHERE operation_id IN (SELECT id FROM account_lifecycle_operation WHERE customer_id = ?)", CUSTOMER_ID);
++        jdbc.update("DELETE FROM account_lifecycle_operation WHERE customer_id = ?", CUSTOMER_ID);
++        jdbc.update("DELETE FROM customer WHERE id = ?", CUSTOMER_ID);
++    }
++}

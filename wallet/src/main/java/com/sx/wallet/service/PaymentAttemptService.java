@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.wallet.dao.WalletAutoPayAgreementMapper;
 import com.sx.wallet.dao.WalletPaymentOrderMapper;
 import com.sx.wallet.config.MockPaymentProperties;
+import com.sx.wallet.lifecycle.service.WalletAccountWriteFence;
 import com.sx.wallet.model.WalletAutoPayAgreement;
 import com.sx.wallet.model.WalletPaymentOrder;
 import com.sx.wallet.model.dto.CreatePaymentAttemptRequest;
@@ -40,6 +41,7 @@ public class PaymentAttemptService {
     private final MockPaymentProperties mockPaymentProperties;
     private final int checkoutMinutes;
     private final byte[] checkoutTokenSecret;
+    private final WalletAccountWriteFence accountWriteFence;
 
     public PaymentAttemptService(WalletAutoPayAgreementMapper agreementMapper,
                                  WalletPaymentOrderMapper paymentMapper,
@@ -47,7 +49,8 @@ public class PaymentAttemptService {
                                  MockPaymentProperties mockPaymentProperties,
                                  @Value("${wallet.payment.checkout-minutes:10}") int checkoutMinutes,
                                  @Value("${wallet.payment.checkout-token-secret:local-dev-only-change-me}")
-                                 String checkoutTokenSecret) {
+                                 String checkoutTokenSecret,
+                                 WalletAccountWriteFence accountWriteFence) {
         this.agreementMapper = agreementMapper;
         this.paymentMapper = paymentMapper;
         this.paymentChannel = paymentChannel;
@@ -57,6 +60,7 @@ public class PaymentAttemptService {
             throw new IllegalArgumentException("checkout-token-secret长度不能少于16位");
         }
         this.checkoutTokenSecret = checkoutTokenSecret.getBytes(StandardCharsets.UTF_8);
+        this.accountWriteFence = accountWriteFence;
     }
 
     public PaymentResult create(CreatePaymentAttemptRequest request) {
@@ -70,6 +74,7 @@ public class PaymentAttemptService {
             expirePayingCheckout(idempotent);
             return idempotentResult(request, idempotent);
         }
+        accountWriteFence.lockAndRequirePaymentAttemptAllowed(request.getPassengerId());
         WalletPaymentOrder success = findByOrderAndStatus(request.getOrderNo(), "SUCCESS");
         if (success != null) {
             return toResult(success, true);

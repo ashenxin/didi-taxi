@@ -1,0 +1,27 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:wallet_lifecycle;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  sql:
+    init:
+      mode: always
+
+wallet:
+  payment:
+    mock:
+      enabled: true
+      allowed-profiles: local,dev,test
+    checkout-token-secret: unit-test-checkout-secret
+  lifecycle:
+    messaging:
+      enabled: false
+    internal-auth:
+      token: dev-wallet-lifecycle-change-me
+    write-fence:
+      mode: SHADOW
+
+xxl:
+  job:
+    enabled: false

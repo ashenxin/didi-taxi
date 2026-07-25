@@ -19,6 +19,16 @@ public interface CustomerPhoneBindingHistoryMapper extends BaseMapper<CustomerPh
                       @Param("operationNo") String operationNo,
                       @Param("now") LocalDateTime now);
 
+    @Update("""
+            UPDATE customer_phone_binding_history
+            SET status = 'RELEASED', valid_to = #{now}, change_operation_no = #{operationNo},
+                change_reason = 'ACCOUNT_CANCEL', updated_at = #{now}
+            WHERE customer_id = #{customerId} AND status = 'ACTIVE'
+            """)
+    int releaseActive(@Param("customerId") long customerId,
+                      @Param("operationNo") String operationNo,
+                      @Param("now") LocalDateTime now);
+
     @Select("SELECT MAX(binding_version) FROM customer_phone_binding_history WHERE customer_id = #{customerId}")
     Long selectMaxBindingVersion(@Param("customerId") long customerId);
 }

@@ -45,7 +45,8 @@ class PaymentResultNotificationTest {
         MockPaymentProperties properties = new MockPaymentProperties();
         properties.setEnabled(true);
         service = new PaymentAttemptService(agreementMapper, paymentMapper, channel, properties,
-                10, "unit-test-checkout-secret");
+                10, "unit-test-checkout-secret",
+                mock(com.sx.wallet.lifecycle.service.WalletAccountWriteFence.class));
         when(paymentMapper.updateById(any(WalletPaymentOrder.class))).thenReturn(1);
         when(paymentMapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
         when(orderClient.notifyPaymentResult(any())).thenReturn("PAID");

@@ -1,0 +1,1066 @@
+# Review package: 442ee32..730b6c0
+
+## Commits
+730b6c0 修复：允许初始生命周期版本参与验证码隔离
+de11f72 功能：统一乘客原子验证码消费
+
+## Files changed
+ .../2026-07-21-乘客认证代次原子OTP与受限会话.md    |   9 +-
+ .../sx/passenger/app/AppCustomerAuthService.java   |  26 +++--
+ .../passenger/app/AppCustomerSettingsService.java  |  57 ++++++-----
+ .../sx/passenger/auth/otp/AtomicOtpService.java    |  55 ++++++++++
+ .../sx/passenger/auth/otp/OtpConsumeResult.java    |   7 ++
+ .../com/sx/passenger/auth/otp/OtpKeyFactory.java   |  56 ++++++++++
+ .../java/com/sx/passenger/auth/otp/OtpPurpose.java |   7 ++
+ .../java/com/sx/passenger/auth/otp/OtpSubject.java |  16 +++
+ .../passenger/app/AppCustomerAuthServiceTest.java  |  89 ++++++++++++++++
+ .../app/AppCustomerSettingsServiceTest.java        | 114 +++++++++++++++++++--
+ .../passenger/auth/otp/AtomicOtpServiceTest.java   |  45 ++++++++
+ .../sx/passenger/auth/otp/OtpKeyFactoryTest.java   |  37 +++++++
+ 12 files changed, 471 insertions(+), 47 deletions(-)
+
+## Diff
+diff --git a/docs/superpowers/plans/2026-07-21-乘客认证代次原子OTP与受限会话.md b/docs/superpowers/plans/2026-07-21-乘客认证代次原子OTP与受限会话.md
+index 0873b30..ed22230 100644
+--- a/docs/superpowers/plans/2026-07-21-乘客认证代次原子OTP与受限会话.md
++++ b/docs/superpowers/plans/2026-07-21-乘客认证代次原子OTP与受限会话.md
+@@ -54,21 +54,20 @@ passenger-api
+ - 新建：`passenger/src/main/java/com/sx/passenger/auth/otp/OtpConsumeResult.java`
+ - 新建：`passenger/src/main/java/com/sx/passenger/auth/otp/OtpSubject.java`
+ - 新建：`passenger/src/main/java/com/sx/passenger/auth/otp/OtpKeyFactory.java`
+ - 新建：`passenger/src/main/java/com/sx/passenger/auth/otp/AtomicOtpService.java`
+ - 新建：`passenger/src/test/java/com/sx/passenger/auth/otp/OtpKeyFactoryTest.java`
+ - 新建：`passenger/src/test/java/com/sx/passenger/auth/otp/AtomicOtpServiceTest.java`
+ - 修改：`passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java`
+ - 修改：`passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java`
+ - 修改：`passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java`
+ - 新建：`passenger/src/test/java/com/sx/passenger/app/AppCustomerAuthServiceTest.java`
+-- 修改：`passenger/pom.xml`
+ 
+ **接口：**
+ - 使用：`StringRedisTemplate.execute(DefaultRedisScript<Long>, List<String>, Object...)`。
+ - 产出：`String OtpKeyFactory.key(OtpPurpose purpose, OtpSubject subject)`；`OtpConsumeResult AtomicOtpService.consume(OtpPurpose purpose, OtpSubject subject, String submittedCode)`；`void AtomicOtpService.store(..., String code, Duration ttl)`。
+ 
+ - [ ] **步骤 1：写 Key/用途契约失败测试**
+ 
+ ```java
+ class OtpKeyFactoryTest {
+     private final OtpKeyFactory keys = new OtpKeyFactory();
+@@ -114,21 +113,21 @@ public record OtpSubject(String phone, Long customerId, Long lifecycleVersion) {
+ public final class OtpKeyFactory {
+     public String key(OtpPurpose purpose, OtpSubject subject) {
+         return switch (purpose) {
+             case LOGIN -> "app:otp:v2:LOGIN:" + requiredPhoneOnly(subject);
+             case PHONE_CHANGE_NEW_PHONE -> "app:otp:v2:PHONE_CHANGE_NEW_PHONE:"
+                     + requiredId(subject) + ":" + requiredPhone(subject) + ":" + requiredVersion(subject);
+             case ACCOUNT_CANCEL -> "app:otp:v2:ACCOUNT_CANCEL:"
+                     + requiredIdWithoutPhone(subject) + ":" + requiredVersion(subject);
+         };
+     }
+-    // required* 方法必须拒绝空手机号、非正 customerId/version 和多余字段。
++    // required* 方法必须拒绝空手机号、非正 customerId、负数 version 和多余字段。
+ }
+ ```
+ 
+ - [ ] **步骤 4：写 Lua 三态与并发单次消费失败测试**
+ 
+ ```java
+ @ExtendWith(MockitoExtension.class)
+ class AtomicOtpServiceTest {
+     @Mock StringRedisTemplate redis;
+     private AtomicOtpService service;
+@@ -140,21 +139,21 @@ class AtomicOtpServiceTest {
+                 .thenReturn(0L, 1L, 2L);
+         OtpSubject s = OtpSubject.login("13800138000");
+         assertThat(service.consume(OtpPurpose.LOGIN, s, "111111")).isEqualTo(OtpConsumeResult.MISSING);
+         assertThat(service.consume(OtpPurpose.LOGIN, s, "111111")).isEqualTo(OtpConsumeResult.MISMATCH);
+         assertThat(service.consume(OtpPurpose.LOGIN, s, "111111")).isEqualTo(OtpConsumeResult.CONSUMED);
+         verify(redis, never()).delete(anyString());
+     }
+ }
+ ```
+ 
+-在 `passenger/pom.xml` 增加 BOM 管理版本的 `org.testcontainers:junit-jupiter` test-scope 依赖，并以 `GenericContainer<>("redis:7.2-alpine").withExposedPorts(6379)` 运行真实 Redis 并发用例：同一 Key 启动 20 个线程同时 `consume`，断言恰好一个 `CONSUMED`、其余为 `MISSING`；不允许用 mock 冒充并发原子性。
++本阶段按项目环境约束不引入或运行 Docker/Testcontainers 真实 Redis 并发用例。原子性由单条 Lua 脚本、`0/1/2` 返回码映射以及“消费成功路径不再执行第二条 `delete` 命令”的单元契约保证；真实 Redis 多线程并发验证延期执行，并作为剩余风险记录，不得用 mock 宣称已完成真实并发验证。
+ 
+ - [ ] **步骤 5：实现单 Key Lua 消费**
+ 
+ ```java
+ public enum OtpConsumeResult { MISSING, MISMATCH, CONSUMED }
+ 
+ private static final DefaultRedisScript<Long> CONSUME = new DefaultRedisScript<>("""
+         local current = redis.call('GET', KEYS[1])
+         if not current then return 0 end
+         if current ~= ARGV[1] then return 1 end
+@@ -190,26 +189,26 @@ if (otpService.consume(OtpPurpose.LOGIN, OtpSubject.login(req.getPhone()), req.g
+     return unauthorizedSms();
+ }
+ ```
+ 
+ 换号/注销从已加载的 `Customer.getLifecycleVersion()` 构造 subject；发送频控沿用原 Key 和计数规则，仅 OTP 存储 Key 改为 v2。
+ 
+ - [ ] **步骤 8：运行 passenger 认证/设置测试确认 GREEN**
+ 
+ 运行：`mvn -pl passenger -Dtest=OtpKeyFactoryTest,AtomicOtpServiceTest,AppCustomerAuthServiceTest,AppCustomerSettingsServiceTest test`
+ 
+-预期：PASS；并发测试报告恰好一次 `CONSUMED`。
++预期：PASS；Lua 返回码、单命令消费和三个用途的旧入口迁移契约全部通过。真实 Redis 多线程并发验证不属于本阶段门禁。
+ 
+ - [ ] **步骤 9：提交任务 1**
+ 
+ ```bash
+-git add passenger/src/main passenger/src/test passenger/pom.xml
++git add passenger/src/main passenger/src/test
+ git commit -m "功能：统一乘客原子验证码消费"
+ ```
+ 
+ ### 任务 2：在 passenger 建立数据库权威认证代次与会话材料
+ 
+ **文件：**
+ - 新建： `passenger/src/main/java/com/sx/passenger/auth/session/AuthSessionScope.java`
+ - 新建： `passenger/src/main/java/com/sx/passenger/auth/session/AuthoritativeAuthState.java`
+ - 新建： `passenger/src/main/java/com/sx/passenger/auth/session/AuthStateRejectedException.java`
+ - 新建： `passenger/src/main/java/com/sx/passenger/auth/session/AuthEpochConflictException.java`
+diff --git a/passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java b/passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java
+index 89ade28..8e055aa 100644
+--- a/passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java
++++ b/passenger/src/main/java/com/sx/passenger/app/AppCustomerAuthService.java
+@@ -1,17 +1,21 @@
+ package com.sx.passenger.app;
+ 
+ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+ import com.sx.passenger.app.dto.AppAuthCustomerBrief;
+ import com.sx.passenger.app.dto.AppLoginPasswordRequest;
+ import com.sx.passenger.app.dto.AppSmsSendResult;
+ import com.sx.passenger.app.dto.AppSmsLoginRequest;
++import com.sx.passenger.auth.otp.AtomicOtpService;
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.auth.otp.OtpSubject;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.model.Customer;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.dao.DuplicateKeyException;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+@@ -33,41 +37,43 @@ public class AppCustomerAuthService {
+     private static final Logger log = LoggerFactory.getLogger(AppCustomerAuthService.class);
+     private static final BCryptPasswordEncoder BCRYPT = new BCryptPasswordEncoder();
+     private static final SecureRandom RANDOM = new SecureRandom();
+     private static final ZoneId CN_ZONE = ZoneId.of("Asia/Shanghai");
+ 
+     /**
+      * Redis key 前缀约定（App 端认证）。
+      * 命名空间说明：
+      * <ul>
+      *   <li><b>{@code app:sms:*}</b>：短信发送频控与日计数</li>
+-     *   <li><b>{@code app:otp:*}</b>：短信验证码（一次性口令）</li>
++     *   <li><b>{@code app:otp:v2:*}</b>：短信验证码（一次性口令）</li>
+      *   <li><b>{@code app:login:*}</b>：登录失败次数统计与当日禁用标记（密码+验证码合并）</li>
+      * </ul>
+      */
+     private static final String KEY_SMS_GAP_PREFIX = "app:sms:gap:"; // 同手机号发送间隔锁（phone）
+     private static final String KEY_SMS_DAILY_PREFIX = "app:sms:daily:"; // 同手机号自然日发送次数（phone:yyyy-MM-dd）
+-    private static final String KEY_OTP_PREFIX = "app:otp:"; // OTP 验证码（phone）
+     private static final String KEY_LOGIN_FAIL_PREFIX = "app:login:fail:"; // 登录失败次数（phone:yyyy-MM-dd）
+     private static final String KEY_LOGIN_BAN_PREFIX = "app:login:ban:"; // 当日禁用标记（phone:yyyy-MM-dd）
+ 
+     private final CustomerEntityMapper customerMapper;
+     private final StringRedisTemplate redis;
+     private final AppCustomerAuthProperties smsProps;
++    private final AtomicOtpService otpService;
+ 
+     public AppCustomerAuthService(
+             CustomerEntityMapper customerMapper,
+             StringRedisTemplate redis,
+-            AppCustomerAuthProperties smsProps) {
++            AppCustomerAuthProperties smsProps,
++            AtomicOtpService otpService) {
+         this.customerMapper = customerMapper;
+         this.redis = redis;
+         this.smsProps = smsProps;
++        this.otpService = otpService;
+     }
+ 
+     public ResponseVo<AppAuthCustomerBrief> loginPassword(AppLoginPasswordRequest req) {
+         if (isLoginBannedToday(req.getPhone())) {
+             return bannedToday();
+         }
+         Customer c = findActiveByPhone(req.getPhone());
+         if (c == null) {
+             recordLoginFail(req.getPhone());
+             return unauthorized();
+@@ -99,45 +105,43 @@ public class AppCustomerAuthService {
+         Long n = redis.opsForValue().increment(dailyKey);
+         if (n != null && n == 1) {
+             redis.expire(dailyKey, 2, TimeUnit.DAYS);
+         }
+         if (n != null && n > smsProps.getDailyLimitPerPhone()) {
+             redis.delete(gapKey);
+             return ResultUtil.error(429, "今日验证码发送次数已达上限，请明天再试");
+         }
+ 
+         String code = String.format("%06d", RANDOM.nextInt(1_000_000));
+-        String otpKey = KEY_OTP_PREFIX + phone;
+-        redis.opsForValue().set(otpKey, code, smsProps.getCodeTtlSeconds(), TimeUnit.SECONDS);
++        otpService.store(OtpPurpose.LOGIN, OtpSubject.login(phone), code,
++                Duration.ofSeconds(smsProps.getCodeTtlSeconds()));
+ 
+         if (smsProps.isMockSendEnabled()) {
+-            log.info("[乘客端认证] 模拟短信验证码 phone={} code={}（mockSendEnabled=true）", phone, code);
++            log.info("[乘客端认证] 已发送模拟短信验证码 phone={}（mockSendEnabled=true）", maskPhone(phone));
+             return ResultUtil.success(new AppSmsSendResult(code));
+         } else {
+             // 生产：在此调用短信网关；失败时应 delete gapKey、回滚 daily 计数（简化可接受少量误差）
+-            log.warn("[乘客端认证] mockSendEnabled=false 且未接入短信通道 phone={}", phone);
++            log.warn("[乘客端认证] mockSendEnabled=false 且未接入短信通道 phone={}", maskPhone(phone));
+         }
+         return ResultUtil.success(new AppSmsSendResult(null));
+     }
+ 
+     @Transactional
+     public ResponseVo<AppAuthCustomerBrief> loginSms(AppSmsLoginRequest req) {
+         if (isLoginBannedToday(req.getPhone())) {
+             return bannedToday();
+         }
+-        String otpKey = KEY_OTP_PREFIX + req.getPhone();
+-        String expected = redis.opsForValue().get(otpKey);
+-        if (expected == null || !expected.equals(req.getCode().trim())) {
++        if (otpService.consume(OtpPurpose.LOGIN, OtpSubject.login(req.getPhone()), req.getCode())
++                != OtpConsumeResult.CONSUMED) {
+             recordLoginFail(req.getPhone());
+             return unauthorizedSms();
+         }
+-        redis.delete(otpKey);
+ 
+         Customer c = findActiveByPhone(req.getPhone());
+         if (c == null) {
+             c = new Customer();
+             c.setPhone(req.getPhone());
+             c.setPasswordHash(null);
+             c.setNickname(null);
+             c.setStatus(0);
+             c.setIsDeleted(0);
+             try {
+diff --git a/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java b/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
+index 5a1cbe2..0d7773e 100644
+--- a/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
++++ b/passenger/src/main/java/com/sx/passenger/app/AppCustomerSettingsService.java
+@@ -1,20 +1,24 @@
+ package com.sx.passenger.app;
+ 
+ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+ import com.sx.passenger.app.dto.AppAccountCancelConfirmRequest;
+ import com.sx.passenger.app.dto.AppAccountCancelResult;
+ import com.sx.passenger.app.dto.AppAccountCancelSmsSendResult;
+ import com.sx.passenger.app.dto.AppPhoneChangeConfirmRequest;
+ import com.sx.passenger.app.dto.AppPhoneChangeResult;
+ import com.sx.passenger.app.dto.AppPhoneChangeSmsSendRequest;
+ import com.sx.passenger.app.dto.AppSettingsProfileResponse;
++import com.sx.passenger.auth.otp.AtomicOtpService;
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.auth.otp.OtpSubject;
+ import com.sx.passenger.common.util.ResultUtil;
+ import com.sx.passenger.common.vo.ResponseVo;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.model.Customer;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.dao.DuplicateKeyException;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+@@ -24,38 +28,39 @@ import java.time.Duration;
+ import java.time.LocalDate;
+ import java.time.ZoneId;
+ import java.util.concurrent.TimeUnit;
+ 
+ @Service
+ public class AppCustomerSettingsService {
+     private static final Logger log = LoggerFactory.getLogger(AppCustomerSettingsService.class);
+     private static final SecureRandom RANDOM = new SecureRandom();
+     private static final ZoneId CN_ZONE = ZoneId.of("Asia/Shanghai");
+ 
+-    private static final String KEY_PHONE_CHANGE_OTP_PREFIX = "app:settings:phone-change:new:otp:"; // 新手机号验证码（customerId:newPhone）
+     private static final String KEY_PHONE_CHANGE_GAP_PREFIX = "app:settings:phone-change:sms:gap:"; // 更换手机号发送间隔锁
+     private static final String KEY_PHONE_CHANGE_DAILY_PREFIX = "app:settings:phone-change:sms:daily:"; // 更换手机号自然日发送次数
+-    private static final String KEY_ACCOUNT_CANCEL_OTP_PREFIX = "app:settings:account-cancel:otp:"; // 注销验证码（customerId）
+     private static final String KEY_ACCOUNT_CANCEL_GAP_PREFIX = "app:settings:account-cancel:sms:gap:"; // 注销验证码发送间隔锁
+     private static final String KEY_ACCOUNT_CANCEL_DAILY_PREFIX = "app:settings:account-cancel:sms:daily:"; // 注销验证码自然日发送次数
+ 
+     private final CustomerEntityMapper customerMapper;
+     private final StringRedisTemplate redis;
+     private final AppCustomerAuthProperties smsProps;
++    private final AtomicOtpService otpService;
+ 
+     public AppCustomerSettingsService(
+             CustomerEntityMapper customerMapper,
+             StringRedisTemplate redis,
+-            AppCustomerAuthProperties smsProps) {
++            AppCustomerAuthProperties smsProps,
++            AtomicOtpService otpService) {
+         this.customerMapper = customerMapper;
+         this.redis = redis;
+         this.smsProps = smsProps;
++        this.otpService = otpService;
+     }
+ 
+     public ResponseVo<AppSettingsProfileResponse> profile(Long customerId) {
+         Customer c = findActiveById(customerId);
+         if (c == null) {
+             return ResultUtil.error(404, "账号不存在或已注销");
+         }
+         AppSettingsProfileResponse out = new AppSettingsProfileResponse();
+         out.setCustomerId(c.getId());
+         out.setMaskedPhone(maskPhone(c.getPhone()));
+@@ -72,45 +77,48 @@ public class AppCustomerSettingsService {
+         if (current == null) {
+             return ResultUtil.error(404, "账号不存在或已注销");
+         }
+         String newPhone = normalizePhone(req.getNewPhone());
+         if (newPhone.equals(current.getPhone())) {
+             return ResultUtil.requestError("新手机号不能与当前手机号相同");
+         }
+         if (findActiveByPhone(newPhone) != null) {
+             return ResultUtil.error(409, "该手机号已被使用");
+         }
++        OtpSubject subject = OtpSubject.phoneChange(current.getId(), newPhone, lifecycleVersion(current));
+         String code = createAndSaveCode(
+                 KEY_PHONE_CHANGE_GAP_PREFIX + req.getCustomerId() + ":" + newPhone,
+                 KEY_PHONE_CHANGE_DAILY_PREFIX + req.getCustomerId() + ":" + newPhone + ":" + LocalDate.now(CN_ZONE),
+-                KEY_PHONE_CHANGE_OTP_PREFIX + req.getCustomerId() + ":" + newPhone,
++                OtpPurpose.PHONE_CHANGE_NEW_PHONE,
++                subject,
+                 newPhone);
+         if (code == null) {
+             return ResultUtil.error(429, "发送过于频繁，请稍后再试");
+         }
+-        log.info("[乘客设置] 更换手机号验证码 customerId={} newPhone={} code={}",
+-                req.getCustomerId(), maskPhone(newPhone), smsProps.isMockSendEnabled() ? code : "******");
++        log.info("[乘客设置] 已发送更换手机号验证码 customerId={} newPhone={}",
++                req.getCustomerId(), maskPhone(newPhone));
+         return ResultUtil.success(new com.sx.passenger.app.dto.AppSmsSendResult(smsProps.isMockSendEnabled() ? code : null));
+     }
+ 
+     @Transactional
+     public ResponseVo<AppPhoneChangeResult> confirmPhoneChange(AppPhoneChangeConfirmRequest req) {
+         Customer current = findActiveById(req.getCustomerId());
+         if (current == null) {
+             return ResultUtil.error(404, "账号不存在或已注销");
+         }
+         String newPhone = normalizePhone(req.getNewPhone());
+         if (newPhone.equals(current.getPhone())) {
+             return ResultUtil.requestError("新手机号不能与当前手机号相同");
+         }
+-        String otpKey = KEY_PHONE_CHANGE_OTP_PREFIX + req.getCustomerId() + ":" + newPhone;
+-        if (!verifyCode(otpKey, req.getCode())) {
++        OtpSubject subject = OtpSubject.phoneChange(current.getId(), newPhone, lifecycleVersion(current));
++        if (otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE, subject, req.getCode())
++                != OtpConsumeResult.CONSUMED) {
+             return ResultUtil.unauthorized("验证码错误或已过期");
+         }
+         // 防止验证码发送后，新手机号被其他未注销账号抢先注册或绑定。
+         Customer occupied = findActiveByPhone(newPhone);
+         if (occupied != null && !occupied.getId().equals(req.getCustomerId())) {
+             return ResultUtil.error(409, "该手机号已被使用");
+         }
+ 
+         Customer update = new Customer();
+         update.setPhone(newPhone);
+@@ -120,115 +128,114 @@ public class AppCustomerSettingsService {
+                     update,
+                     Wrappers.<Customer>lambdaUpdate()
+                             .eq(Customer::getId, req.getCustomerId())
+                             .eq(Customer::getIsDeleted, 0));
+             if (updated <= 0) {
+                 return ResultUtil.error(404, "账号不存在或已注销");
+             }
+         } catch (DuplicateKeyException e) {
+             return ResultUtil.error(409, "该手机号已被使用");
+         }
+-        redis.delete(otpKey);
+-
+         AppPhoneChangeResult out = new AppPhoneChangeResult();
+         out.setChanged(true);
+         out.setRequireLogin(true);
+         out.setMaskedNewPhone(maskPhone(newPhone));
+         log.info("乘客更换手机号成功 customerId={} oldPhone={} newPhone={}",
+                 req.getCustomerId(), maskPhone(current.getPhone()), maskPhone(newPhone));
+         return ResultUtil.success(out);
+     }
+ 
+     /**
+      * 注销验证码发往当前绑定手机号，避免用户误填其他手机号后绕开账号归属确认。
+      */
+     public ResponseVo<AppAccountCancelSmsSendResult> sendAccountCancelSms(Long customerId) {
+         Customer current = findActiveById(customerId);
+         if (current == null) {
+             return ResultUtil.error(404, "账号不存在或已注销");
+         }
+         String phone = current.getPhone();
++        OtpSubject subject = OtpSubject.accountCancel(current.getId(), lifecycleVersion(current));
+         String code = createAndSaveCode(
+                 KEY_ACCOUNT_CANCEL_GAP_PREFIX + customerId,
+                 KEY_ACCOUNT_CANCEL_DAILY_PREFIX + customerId + ":" + LocalDate.now(CN_ZONE),
+-                KEY_ACCOUNT_CANCEL_OTP_PREFIX + customerId,
++                OtpPurpose.ACCOUNT_CANCEL,
++                subject,
+                 phone);
+         if (code == null) {
+             return ResultUtil.error(429, "发送过于频繁，请稍后再试");
+         }
+         AppAccountCancelSmsSendResult out = new AppAccountCancelSmsSendResult();
+         out.setMockCode(smsProps.isMockSendEnabled() ? code : null);
+         out.setMaskedPhone(maskPhone(phone));
+-        log.info("[乘客设置] 注销账号验证码 customerId={} phone={} code={}",
+-                customerId, maskPhone(phone), smsProps.isMockSendEnabled() ? code : "******");
++        log.info("[乘客设置] 已发送注销账号验证码 customerId={} phone={}",
++                customerId, maskPhone(phone));
+         return ResultUtil.success(out);
+     }
+ 
+     @Transactional
+     public ResponseVo<AppAccountCancelResult> confirmAccountCancel(AppAccountCancelConfirmRequest req) {
+         Customer current = findActiveById(req.getCustomerId());
+         if (current == null) {
+             return ResultUtil.error(404, "账号不存在或已注销");
+         }
+-        String otpKey = KEY_ACCOUNT_CANCEL_OTP_PREFIX + req.getCustomerId();
+-        if (!verifyCode(otpKey, req.getCode())) {
++        OtpSubject subject = OtpSubject.accountCancel(current.getId(), lifecycleVersion(current));
++        if (otpService.consume(OtpPurpose.ACCOUNT_CANCEL, subject, req.getCode())
++                != OtpConsumeResult.CONSUMED) {
+             return ResultUtil.unauthorized("验证码错误或已过期");
+         }
+ 
+         Customer update = new Customer();
+         update.setIsDeleted(1);
+         // 逻辑删除后 phone_active 生成列应变为 NULL，旧手机号允许重新注册成新的 customer.id。
+         int updated = customerMapper.update(
+                 update,
+                 Wrappers.<Customer>lambdaUpdate()
+                         .eq(Customer::getId, req.getCustomerId())
+                         .eq(Customer::getIsDeleted, 0));
+         if (updated <= 0) {
+             return ResultUtil.error(404, "账号不存在或已注销");
+         }
+-        redis.delete(otpKey);
+-
+         AppAccountCancelResult out = new AppAccountCancelResult();
+         out.setCancelled(true);
+         out.setRequireLogin(true);
+         log.info("乘客账号已逻辑注销 customerId={} phone={}", req.getCustomerId(), maskPhone(current.getPhone()));
+         return ResultUtil.success(out);
+     }
+ 
+     /**
+-     * 设置功能使用独立 Redis key，避免与登录验证码复用导致后续业务边界不清。
++     * 设置功能沿用独立发送频控 key，验证码本身由 AtomicOtpService 按用途保存。
+      */
+-    private String createAndSaveCode(String gapKey, String dailyKey, String otpKey, String phoneForLog) {
++    private String createAndSaveCode(String gapKey, String dailyKey, OtpPurpose purpose, OtpSubject subject,
++                                     String phoneForLog) {
+         Boolean firstGap = redis.opsForValue().setIfAbsent(gapKey, "1", Duration.ofSeconds(smsProps.getMinIntervalSeconds()));
+         if (Boolean.FALSE.equals(firstGap)) {
+             return null;
+         }
+         Long n = redis.opsForValue().increment(dailyKey);
+         if (n != null && n == 1) {
+             redis.expire(dailyKey, 2, TimeUnit.DAYS);
+         }
+         if (n != null && n > smsProps.getDailyLimitPerPhone()) {
+             redis.delete(gapKey);
+             log.info("设置验证码发送达到日上限 phone={}", maskPhone(phoneForLog));
+             return null;
+         }
+         String code = String.format("%06d", RANDOM.nextInt(1_000_000));
+-        redis.opsForValue().set(otpKey, code, smsProps.getCodeTtlSeconds(), TimeUnit.SECONDS);
++        otpService.store(purpose, subject, code, Duration.ofSeconds(smsProps.getCodeTtlSeconds()));
+         return code;
+     }
+ 
+-    private boolean verifyCode(String key, String code) {
+-        if (code == null || code.isBlank()) {
+-            return false;
++    private static long lifecycleVersion(Customer customer) {
++        if (customer.getLifecycleVersion() == null || customer.getLifecycleVersion() < 0) {
++            throw new IllegalStateException("Customer lifecycleVersion is required for OTP");
+         }
+-        String expected = redis.opsForValue().get(key);
+-        return expected != null && expected.equals(code.trim());
++        return customer.getLifecycleVersion();
+     }
+ 
+     private Customer findActiveById(Long id) {
+         if (id == null || id <= 0) {
+             return null;
+         }
+         return customerMapper.selectOne(
+                 Wrappers.<Customer>lambdaQuery()
+                         .eq(Customer::getId, id)
+                         .eq(Customer::getIsDeleted, 0)
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/otp/AtomicOtpService.java b/passenger/src/main/java/com/sx/passenger/auth/otp/AtomicOtpService.java
+new file mode 100644
+index 0000000..e07ad51
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/otp/AtomicOtpService.java
+@@ -0,0 +1,55 @@
++package com.sx.passenger.auth.otp;
++
++import org.springframework.data.redis.core.StringRedisTemplate;
++import org.springframework.data.redis.core.script.DefaultRedisScript;
++import org.springframework.stereotype.Service;
++
++import java.time.Duration;
++import java.util.List;
++import java.util.Objects;
++
++@Service
++public class AtomicOtpService {
++
++    private static final DefaultRedisScript<Long> CONSUME = new DefaultRedisScript<>("""
++            local current = redis.call('GET', KEYS[1])
++            if not current then return 0 end
++            if current ~= ARGV[1] then return 1 end
++            redis.call('DEL', KEYS[1])
++            return 2
++            """, Long.class);
++
++    private final StringRedisTemplate redis;
++    private final OtpKeyFactory keys;
++
++    public AtomicOtpService(StringRedisTemplate redis, OtpKeyFactory keys) {
++        this.redis = Objects.requireNonNull(redis, "redis must not be null");
++        this.keys = Objects.requireNonNull(keys, "keys must not be null");
++    }
++
++    public void store(OtpPurpose purpose, OtpSubject subject, String code, Duration ttl) {
++        if (code == null || code.isBlank()) {
++            throw new IllegalArgumentException("OTP code must not be blank");
++        }
++        if (ttl == null || ttl.isNegative() || ttl.isZero()) {
++            throw new IllegalArgumentException("OTP ttl must be positive");
++        }
++        redis.opsForValue().set(keys.key(purpose, subject), code, ttl);
++    }
++
++    public OtpConsumeResult consume(OtpPurpose purpose, OtpSubject subject, String submittedCode) {
++        if (submittedCode == null || submittedCode.isBlank()) {
++            return OtpConsumeResult.MISMATCH;
++        }
++        Long result = redis.execute(CONSUME, List.of(keys.key(purpose, subject)), submittedCode.trim());
++        if (result == null) {
++            throw new IllegalStateException("OTP store unavailable");
++        }
++        return switch (result.intValue()) {
++            case 0 -> OtpConsumeResult.MISSING;
++            case 1 -> OtpConsumeResult.MISMATCH;
++            case 2 -> OtpConsumeResult.CONSUMED;
++            default -> throw new IllegalStateException("Unknown OTP consume result: " + result);
++        };
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/otp/OtpConsumeResult.java b/passenger/src/main/java/com/sx/passenger/auth/otp/OtpConsumeResult.java
+new file mode 100644
+index 0000000..c3a4642
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/otp/OtpConsumeResult.java
+@@ -0,0 +1,7 @@
++package com.sx.passenger.auth.otp;
++
++public enum OtpConsumeResult {
++    MISSING,
++    MISMATCH,
++    CONSUMED
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/otp/OtpKeyFactory.java b/passenger/src/main/java/com/sx/passenger/auth/otp/OtpKeyFactory.java
+new file mode 100644
+index 0000000..06af784
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/otp/OtpKeyFactory.java
+@@ -0,0 +1,56 @@
++package com.sx.passenger.auth.otp;
++
++import java.util.Objects;
++
++import org.springframework.stereotype.Component;
++
++@Component
++public final class OtpKeyFactory {
++
++    public String key(OtpPurpose purpose, OtpSubject subject) {
++        Objects.requireNonNull(purpose, "purpose must not be null");
++        Objects.requireNonNull(subject, "subject must not be null");
++        return switch (purpose) {
++            case LOGIN -> "app:otp:v2:LOGIN:" + requiredPhoneOnly(subject);
++            case PHONE_CHANGE_NEW_PHONE -> "app:otp:v2:PHONE_CHANGE_NEW_PHONE:"
++                    + requiredId(subject) + ":" + requiredPhone(subject) + ":" + requiredVersion(subject);
++            case ACCOUNT_CANCEL -> "app:otp:v2:ACCOUNT_CANCEL:"
++                    + requiredIdWithoutPhone(subject) + ":" + requiredVersion(subject);
++        };
++    }
++
++    private static String requiredPhoneOnly(OtpSubject subject) {
++        if (subject.customerId() != null || subject.lifecycleVersion() != null) {
++            throw new IllegalArgumentException("LOGIN OTP subject may only contain phone");
++        }
++        return requiredPhone(subject);
++    }
++
++    private static String requiredPhone(OtpSubject subject) {
++        if (subject.phone() == null || subject.phone().isBlank()) {
++            throw new IllegalArgumentException("OTP subject requires phone");
++        }
++        return subject.phone();
++    }
++
++    private static Long requiredId(OtpSubject subject) {
++        if (subject.customerId() == null || subject.customerId() <= 0) {
++            throw new IllegalArgumentException("OTP subject requires positive customerId");
++        }
++        return subject.customerId();
++    }
++
++    private static Long requiredIdWithoutPhone(OtpSubject subject) {
++        if (subject.phone() != null) {
++            throw new IllegalArgumentException("ACCOUNT_CANCEL OTP subject must not contain phone");
++        }
++        return requiredId(subject);
++    }
++
++    private static Long requiredVersion(OtpSubject subject) {
++        if (subject.lifecycleVersion() == null || subject.lifecycleVersion() < 0) {
++            throw new IllegalArgumentException("OTP subject requires non-negative lifecycleVersion");
++        }
++        return subject.lifecycleVersion();
++    }
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/otp/OtpPurpose.java b/passenger/src/main/java/com/sx/passenger/auth/otp/OtpPurpose.java
+new file mode 100644
+index 0000000..c691ca1
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/otp/OtpPurpose.java
+@@ -0,0 +1,7 @@
++package com.sx.passenger.auth.otp;
++
++public enum OtpPurpose {
++    LOGIN,
++    PHONE_CHANGE_NEW_PHONE,
++    ACCOUNT_CANCEL
++}
+diff --git a/passenger/src/main/java/com/sx/passenger/auth/otp/OtpSubject.java b/passenger/src/main/java/com/sx/passenger/auth/otp/OtpSubject.java
+new file mode 100644
+index 0000000..58647cd
+--- /dev/null
++++ b/passenger/src/main/java/com/sx/passenger/auth/otp/OtpSubject.java
+@@ -0,0 +1,16 @@
++package com.sx.passenger.auth.otp;
++
++public record OtpSubject(String phone, Long customerId, Long lifecycleVersion) {
++
++    public static OtpSubject login(String phone) {
++        return new OtpSubject(phone, null, null);
++    }
++
++    public static OtpSubject phoneChange(long customerId, String phone, long lifecycleVersion) {
++        return new OtpSubject(phone, customerId, lifecycleVersion);
++    }
++
++    public static OtpSubject accountCancel(long customerId, long lifecycleVersion) {
++        return new OtpSubject(null, customerId, lifecycleVersion);
++    }
++}
+diff --git a/passenger/src/test/java/com/sx/passenger/app/AppCustomerAuthServiceTest.java b/passenger/src/test/java/com/sx/passenger/app/AppCustomerAuthServiceTest.java
+new file mode 100644
+index 0000000..f281ec1
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/app/AppCustomerAuthServiceTest.java
+@@ -0,0 +1,89 @@
++package com.sx.passenger.app;
++
++import com.sx.passenger.app.dto.AppSmsLoginRequest;
++import com.sx.passenger.auth.otp.AtomicOtpService;
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.auth.otp.OtpSubject;
++import com.sx.passenger.common.vo.ResponseVo;
++import com.sx.passenger.dao.CustomerEntityMapper;
++import com.sx.passenger.model.Customer;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.data.redis.core.StringRedisTemplate;
++import org.springframework.data.redis.core.ValueOperations;
++
++import java.time.Duration;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++class AppCustomerAuthServiceTest {
++
++    private final CustomerEntityMapper customerMapper = mock(CustomerEntityMapper.class);
++    private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
++    private final ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
++    private final AtomicOtpService otpService = mock(AtomicOtpService.class);
++    private AppCustomerAuthService service;
++
++    @BeforeEach
++    void setUp() {
++        when(redis.opsForValue()).thenReturn(valueOperations);
++        service = new AppCustomerAuthService(customerMapper, redis, new AppCustomerAuthProperties(), otpService);
++    }
++
++    @Test
++    void sendSmsCodeStoresLoginOtp() {
++        when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class))).thenReturn(true);
++        when(valueOperations.increment(anyString())).thenReturn(1L);
++
++        ResponseVo<?> response = service.sendSmsCode("13800138000");
++
++        assertThat(response.getCode()).isEqualTo(200);
++        verify(otpService).store(eq(OtpPurpose.LOGIN), eq(OtpSubject.login("13800138000")), anyString(),
++                eq(Duration.ofSeconds(300)));
++    }
++
++    @Test
++    void missingAndMismatchOtpBothReturnSameUnauthorizedResponse() {
++        AppSmsLoginRequest request = request("13800138000", "111111");
++        when(otpService.consume(OtpPurpose.LOGIN, OtpSubject.login("13800138000"), "111111"))
++                .thenReturn(OtpConsumeResult.MISSING, OtpConsumeResult.MISMATCH);
++
++        ResponseVo<?> missing = service.loginSms(request);
++        ResponseVo<?> mismatch = service.loginSms(request);
++
++        assertThat(missing.getCode()).isEqualTo(401);
++        assertThat(mismatch.getCode()).isEqualTo(401);
++        assertThat(missing.getMsg()).isEqualTo(mismatch.getMsg());
++    }
++
++    @Test
++    void databaseFailureAfterConsumedOtpDoesNotRestoreOtp() {
++        AppSmsLoginRequest request = request("13800138000", "111111");
++        when(otpService.consume(OtpPurpose.LOGIN, OtpSubject.login("13800138000"), "111111"))
++                .thenReturn(OtpConsumeResult.CONSUMED);
++        when(customerMapper.selectOne(any())).thenReturn(null);
++        when(customerMapper.insert(any(Customer.class))).thenThrow(new RuntimeException("database unavailable"));
++
++        assertThatThrownBy(() -> service.loginSms(request))
++                .isInstanceOf(RuntimeException.class)
++                .hasMessage("database unavailable");
++
++        verify(otpService, never()).store(any(), any(), anyString(), any());
++    }
++
++    private static AppSmsLoginRequest request(String phone, String code) {
++        AppSmsLoginRequest request = new AppSmsLoginRequest();
++        request.setPhone(phone);
++        request.setCode(code);
++        return request;
++    }
++}
+diff --git a/passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java b/passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java
+index d8cd009..d4ca050 100644
+--- a/passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java
++++ b/passenger/src/test/java/com/sx/passenger/app/AppCustomerSettingsServiceTest.java
+@@ -1,87 +1,189 @@
+ package com.sx.passenger.app;
+ 
+ import com.sx.passenger.app.dto.AppAccountCancelConfirmRequest;
+ import com.sx.passenger.app.dto.AppPhoneChangeConfirmRequest;
++import com.sx.passenger.app.dto.AppPhoneChangeSmsSendRequest;
+ import com.sx.passenger.app.dto.AppSettingsProfileResponse;
++import com.sx.passenger.auth.otp.AtomicOtpService;
++import com.sx.passenger.auth.otp.OtpConsumeResult;
++import com.sx.passenger.auth.otp.OtpPurpose;
++import com.sx.passenger.auth.otp.OtpSubject;
+ import com.sx.passenger.common.vo.ResponseVo;
+ import com.sx.passenger.dao.CustomerEntityMapper;
+ import com.sx.passenger.model.Customer;
+ import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.Test;
+ import org.springframework.data.redis.core.StringRedisTemplate;
+ import org.springframework.data.redis.core.ValueOperations;
+ 
++import java.time.Duration;
++
+ import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
+ import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.ArgumentMatchers.eq;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+ 
+ class AppCustomerSettingsServiceTest {
+ 
+     private final CustomerEntityMapper customerMapper = mock(CustomerEntityMapper.class);
+     private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
+     private final ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
++    private final AtomicOtpService otpService = mock(AtomicOtpService.class);
+     private AppCustomerSettingsService service;
+ 
+     @BeforeEach
+     void setUp() {
+         when(redis.opsForValue()).thenReturn(valueOperations);
+-        service = new AppCustomerSettingsService(customerMapper, redis, new AppCustomerAuthProperties());
++        service = new AppCustomerSettingsService(customerMapper, redis, new AppCustomerAuthProperties(), otpService);
+     }
+ 
+     @Test
+     void profileReturnsMaskedPhoneForActiveCustomer() {
+         when(customerMapper.selectOne(any())).thenReturn(customer(10001L, "13812345678"));
+ 
+         ResponseVo<AppSettingsProfileResponse> response = service.profile(10001L);
+ 
+         assertThat(response.getCode()).isEqualTo(200);
+         assertThat(response.getData().getMaskedPhone()).isEqualTo("138****5678");
+         assertThat(response.getData().getCustomerId()).isEqualTo(10001L);
+     }
+ 
+     @Test
+     void phoneChangeRejectsNumberOccupiedAfterOtpWasIssued() {
+         Customer current = customer(10001L, "13812345678");
+         Customer occupied = customer(10002L, "13912345678");
+         when(customerMapper.selectOne(any())).thenReturn(current, occupied);
+-        when(valueOperations.get("app:settings:phone-change:new:otp:10001:13912345678"))
+-                .thenReturn("123456");
++        when(otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
++                OtpSubject.phoneChange(10001L, "13912345678", 9L), "123456"))
++                .thenReturn(OtpConsumeResult.CONSUMED);
+         AppPhoneChangeConfirmRequest request = new AppPhoneChangeConfirmRequest();
+         request.setCustomerId(10001L);
+         request.setNewPhone("13912345678");
+         request.setCode("123456");
+ 
+         ResponseVo<?> response = service.confirmPhoneChange(request);
+ 
+         assertThat(response.getCode()).isEqualTo(409);
+         verify(customerMapper, never()).update(any(), any());
+-        verify(redis, never()).delete(any(String.class));
++        verify(otpService, never()).store(any(), any(), anyString(), any());
+     }
+ 
+     @Test
+     void accountCancellationRequiresMatchingOtpBeforeDeletingCustomer() {
+         when(customerMapper.selectOne(any())).thenReturn(customer(10001L, "13812345678"));
+-        when(valueOperations.get("app:settings:account-cancel:otp:10001")).thenReturn("654321");
++        when(otpService.consume(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(10001L, 9L), "123456"))
++                .thenReturn(OtpConsumeResult.MISMATCH);
+         AppAccountCancelConfirmRequest request = new AppAccountCancelConfirmRequest();
+         request.setCustomerId(10001L);
+         request.setCode("123456");
+         request.setConfirm(true);
+ 
+         ResponseVo<?> response = service.confirmAccountCancel(request);
+ 
+         assertThat(response.getCode()).isEqualTo(401);
+         verify(customerMapper, never()).update(any(), any());
+-        verify(redis, never()).delete(any(String.class));
++    }
++
++    @Test
++    void phoneChangeSmsStoresOtpUnderPurposeAndLifecycleVersion() {
++        Customer current = customer(10001L, "13812345678");
++        when(customerMapper.selectOne(any())).thenReturn(current, null);
++        when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class))).thenReturn(true);
++        when(valueOperations.increment(anyString())).thenReturn(1L);
++        AppPhoneChangeSmsSendRequest request = new AppPhoneChangeSmsSendRequest();
++        request.setCustomerId(10001L);
++        request.setNewPhone("13912345678");
++
++        ResponseVo<?> response = service.sendPhoneChangeSms(request);
++
++        assertThat(response.getCode()).isEqualTo(200);
++        verify(otpService).store(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE),
++                eq(OtpSubject.phoneChange(10001L, "13912345678", 9L)), anyString(), eq(Duration.ofSeconds(300)));
++    }
++
++    @Test
++    void phoneChangeSmsAcceptsInitialLifecycleVersion() {
++        Customer current = customerWithLifecycleVersion(10001L, "13812345678", 0L);
++        when(customerMapper.selectOne(any())).thenReturn(current, null);
++        when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class))).thenReturn(true);
++        when(valueOperations.increment(anyString())).thenReturn(1L);
++        AppPhoneChangeSmsSendRequest request = new AppPhoneChangeSmsSendRequest();
++        request.setCustomerId(10001L);
++        request.setNewPhone("13912345678");
++
++        ResponseVo<?> response = service.sendPhoneChangeSms(request);
++
++        assertThat(response.getCode()).isEqualTo(200);
++        verify(otpService).store(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE),
++                eq(OtpSubject.phoneChange(10001L, "13912345678", 0L)), anyString(), eq(Duration.ofSeconds(300)));
++    }
++
++    @Test
++    void phoneChangeConfirmationAcceptsInitialLifecycleVersion() {
++        Customer current = customerWithLifecycleVersion(10001L, "13812345678", 0L);
++        when(customerMapper.selectOne(any())).thenReturn(current, null);
++        when(otpService.consume(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
++                OtpSubject.phoneChange(10001L, "13912345678", 0L), "123456"))
++                .thenReturn(OtpConsumeResult.CONSUMED);
++        when(customerMapper.update(any(), any())).thenReturn(1);
++        AppPhoneChangeConfirmRequest request = new AppPhoneChangeConfirmRequest();
++        request.setCustomerId(10001L);
++        request.setNewPhone("13912345678");
++        request.setCode("123456");
++
++        ResponseVo<?> response = service.confirmPhoneChange(request);
++
++        assertThat(response.getCode()).isEqualTo(200);
++    }
++
++    @Test
++    void accountCancelSmsStoresOtpUnderPurposeAndLifecycleVersion() {
++        Customer current = customer(10001L, "13812345678");
++        when(customerMapper.selectOne(any())).thenReturn(current);
++        when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class))).thenReturn(true);
++        when(valueOperations.increment(anyString())).thenReturn(1L);
++
++        ResponseVo<?> response = service.sendAccountCancelSms(10001L);
++
++        assertThat(response.getCode()).isEqualTo(200);
++        verify(otpService).store(eq(OtpPurpose.ACCOUNT_CANCEL), eq(OtpSubject.accountCancel(10001L, 9L)),
++                anyString(), eq(Duration.ofSeconds(300)));
++    }
++
++    @Test
++    void databaseFailureAfterConsumedAccountCancelDoesNotRestoreOtp() {
++        Customer current = customer(10001L, "13812345678");
++        when(customerMapper.selectOne(any())).thenReturn(current);
++        when(otpService.consume(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(10001L, 9L), "123456"))
++                .thenReturn(OtpConsumeResult.CONSUMED);
++        when(customerMapper.update(any(), any())).thenThrow(new RuntimeException("database unavailable"));
++        AppAccountCancelConfirmRequest request = new AppAccountCancelConfirmRequest();
++        request.setCustomerId(10001L);
++        request.setCode("123456");
++        request.setConfirm(true);
++
++        assertThatThrownBy(() -> service.confirmAccountCancel(request))
++                .isInstanceOf(RuntimeException.class)
++                .hasMessage("database unavailable");
++
++        verify(otpService, never()).store(any(), any(), anyString(), any());
+     }
+ 
+     private static Customer customer(Long id, String phone) {
++        return customerWithLifecycleVersion(id, phone, 9L);
++    }
++
++    private static Customer customerWithLifecycleVersion(Long id, String phone, Long lifecycleVersion) {
+         return new Customer()
+                 .setId(id)
+                 .setPhone(phone)
+                 .setStatus(0)
++                .setLifecycleVersion(lifecycleVersion)
+                 .setIsDeleted(0);
+     }
+ }
+diff --git a/passenger/src/test/java/com/sx/passenger/auth/otp/AtomicOtpServiceTest.java b/passenger/src/test/java/com/sx/passenger/auth/otp/AtomicOtpServiceTest.java
+new file mode 100644
+index 0000000..1cdf778
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/auth/otp/AtomicOtpServiceTest.java
+@@ -0,0 +1,45 @@
++package com.sx.passenger.auth.otp;
++
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.extension.ExtendWith;
++import org.mockito.Mock;
++import org.mockito.junit.jupiter.MockitoExtension;
++import org.springframework.data.redis.core.StringRedisTemplate;
++import org.springframework.data.redis.core.script.RedisScript;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++@ExtendWith(MockitoExtension.class)
++class AtomicOtpServiceTest {
++
++    @Mock
++    StringRedisTemplate redis;
++
++    private AtomicOtpService service;
++
++    @BeforeEach
++    void setUp() {
++        service = new AtomicOtpService(redis, new OtpKeyFactory());
++    }
++
++    @Test
++    void mapsLuaReturnCodesWithoutSecondRedisCommand() {
++        when(redis.execute(org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
++                org.mockito.ArgumentMatchers.<String>anyList(), eq("111111")))
++                .thenReturn(0L, 1L, 2L);
++        OtpSubject subject = OtpSubject.login("13800138000");
++
++        assertThat(service.consume(OtpPurpose.LOGIN, subject, "111111")).isEqualTo(OtpConsumeResult.MISSING);
++        assertThat(service.consume(OtpPurpose.LOGIN, subject, "111111")).isEqualTo(OtpConsumeResult.MISMATCH);
++        assertThat(service.consume(OtpPurpose.LOGIN, subject, "111111")).isEqualTo(OtpConsumeResult.CONSUMED);
++
++        verify(redis, never()).delete(anyString());
++    }
++
++}
+diff --git a/passenger/src/test/java/com/sx/passenger/auth/otp/OtpKeyFactoryTest.java b/passenger/src/test/java/com/sx/passenger/auth/otp/OtpKeyFactoryTest.java
+new file mode 100644
+index 0000000..e29da79
+--- /dev/null
++++ b/passenger/src/test/java/com/sx/passenger/auth/otp/OtpKeyFactoryTest.java
+@@ -0,0 +1,37 @@
++package com.sx.passenger.auth.otp;
++
++import org.junit.jupiter.api.Test;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++
++class OtpKeyFactoryTest {
++
++    private final OtpKeyFactory keys = new OtpKeyFactory();
++
++    @Test
++    void buildsPurposeIsolatedKeys() {
++        assertThat(keys.key(OtpPurpose.LOGIN, OtpSubject.login("13800138000")))
++                .isEqualTo("app:otp:v2:LOGIN:13800138000");
++        assertThat(keys.key(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
++                OtpSubject.phoneChange(7L, "13900139000", 12L)))
++                .isEqualTo("app:otp:v2:PHONE_CHANGE_NEW_PHONE:7:13900139000:12");
++        assertThat(keys.key(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(7L, 12L)))
++                .isEqualTo("app:otp:v2:ACCOUNT_CANCEL:7:12");
++    }
++
++    @Test
++    void rejectsSubjectThatDoesNotMatchPurpose() {
++        assertThatThrownBy(() -> keys.key(OtpPurpose.LOGIN, OtpSubject.accountCancel(7L, 1L)))
++                .isInstanceOf(IllegalArgumentException.class);
++    }
++
++    @Test
++    void acceptsInitialLifecycleVersionForSettingsPurposes() {
++        assertThat(keys.key(OtpPurpose.PHONE_CHANGE_NEW_PHONE,
++                OtpSubject.phoneChange(7L, "13900139000", 0L)))
++                .isEqualTo("app:otp:v2:PHONE_CHANGE_NEW_PHONE:7:13900139000:0");
++        assertThat(keys.key(OtpPurpose.ACCOUNT_CANCEL, OtpSubject.accountCancel(7L, 0L)))
++                .isEqualTo("app:otp:v2:ACCOUNT_CANCEL:7:0");
++    }
++}

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper">
+    <select id="findByOperationIdForUpdate"
+            resultType="com.sx.passenger.lifecycle.persistence.entity.LifecycleStepEntity">
+        SELECT *
+        FROM account_lifecycle_step
+        WHERE operation_id = #{operationId}
+        ORDER BY sequence_no, id
+        FOR UPDATE
+    </select>
+
+    <select id="findTimedOutRunning"
+            resultType="com.sx.passenger.lifecycle.persistence.entity.LifecycleStepEntity">
+        SELECT *
+        FROM account_lifecycle_step
+        WHERE status = 'RUNNING'
+          AND timeout_at IS NOT NULL
+          AND timeout_at &lt;= #{now}
+        ORDER BY timeout_at, id
+        LIMIT #{limit}
+    </select>
+</mapper>

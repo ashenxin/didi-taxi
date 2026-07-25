@@ -5,8 +5,14 @@ import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
 import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 public interface LifecycleOperationMapper extends BaseMapper<LifecycleOperationEntity> {
+    LifecycleOperationEntity findByOperationNoForUpdate(@Param("operationNo") String operationNo);
+
+    List<LifecycleOperationEntity> findDueForRecovery(
+            @Param("now") LocalDateTime now, @Param("limit") int limit);
+
     int updateRestrictedAuthEpoch(@Param("customerId") long customerId,
                                   @Param("operationNo") String operationNo,
                                   @Param("restrictedAuthEpoch") long restrictedAuthEpoch,

@@ -5,7 +5,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication(scanBasePackages = "com.sx.calculate")
-@MapperScan("com.sx.calculate.dao")
+@MapperScan({"com.sx.calculate.dao", "com.sx.calculate.lifecycle.dao"})
 public class CalculateSpringApplication {
 
     public static void main(String[] args) {

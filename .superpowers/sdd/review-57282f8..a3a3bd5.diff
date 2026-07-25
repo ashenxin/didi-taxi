@@ -1,0 +1,1600 @@
+# Review package: 57282f8..a3a3bd5
+
+## Commits
+a3a3bd5 功能：以认证代次强校验乘客HTTP与WS令牌
+
+## Files changed
+ .../com/sx/passengerapi/auth/AppJwtService.java    |  97 +++++++++--
+ .../auth/InvalidPassengerSessionException.java     |   8 +
+ .../sx/passengerapi/auth/ParsedPassengerJwt.java   |  11 +-
+ .../sx/passengerapi/auth/PassengerAuthContext.java |  20 +++
+ .../auth/PassengerAuthDecisionService.java         |  34 ++++
+ .../auth/PassengerAuthRequestWrapper.java          |  90 ++++++++--
+ .../passengerapi/auth/PassengerJwtAuthFilter.java  |  45 ++++-
+ .../passengerapi/auth/PassengerSessionScope.java   |   6 +
+ .../client/PassengerCoreAuthClient.java            |   5 +-
+ .../client/PassengerCoreAuthStateClient.java       |  24 +++
+ .../client/PassengerCoreSettingsClient.java        |   5 +-
+ .../client/dto/InternalAuthStateResponse.java      |  90 ++++++++++
+ .../client/dto/InternalLogoutRequest.java          |   4 +
+ .../client/dto/InternalLogoutResponse.java         |   4 +
+ .../passengerapi/config/AppJwtConfiguration.java   |   6 +-
+ .../sx/passengerapi/config/AppJwtProperties.java   |  10 ++
+ .../config/PassengerCoreFeignConfiguration.java    |  13 ++
+ .../config/PassengerInternalClientProperties.java  |  17 ++
+ .../ws/PassengerWsHandshakeInterceptor.java        |  44 +++--
+ passenger-api/src/main/resources/application.yml   |   2 +
+ .../sx/passengerapi/auth/AppJwtServiceTest.java    | 115 +++++++++++++
+ .../auth/PassengerJwtAuthFilterTest.java           | 188 +++++++++++++++++++++
+ .../PassengerCoreFeignConfigurationTest.java       |  55 ++++++
+ .../ws/PassengerWsHandshakeInterceptorTest.java    | 174 +++++++++++++++++++
+ 24 files changed, 1009 insertions(+), 58 deletions(-)
+
+## Diff
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/AppJwtService.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/AppJwtService.java
+index d53793b..090f4a7 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/auth/AppJwtService.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/AppJwtService.java
+@@ -4,78 +4,145 @@ import com.sx.passengerapi.config.AppJwtProperties;
+ import io.jsonwebtoken.Claims;
+ import io.jsonwebtoken.JwtException;
+ import io.jsonwebtoken.Jwts;
+ import io.jsonwebtoken.security.Keys;
+ import org.springframework.stereotype.Component;
+ 
+ import javax.crypto.SecretKey;
+ import java.nio.charset.StandardCharsets;
+ import java.util.Date;
+ 
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
++
+ @Component
+ public class AppJwtService {
+ 
+     private final AppJwtProperties props;
+ 
+     public AppJwtService(AppJwtProperties props) {
+         this.props = props;
+     }
+ 
+     /**
+      * 签发乘客 Token；{@code sub} 为 customerId。
+      *
+-     * @param audit {@code 1}=HTTP API；{@code 2}=WebSocket 握手（参见司机端）。
++     * @param audit {@code 1}=HTTP API；{@code 2}=WebSocket 握手。
+      */
+-    public String createPassengerToken(long customerId, String phone, long tokenVersion, int audit) {
++    public String createPassengerToken(long customerId,
++                                       String phone,
++                                       long authEpoch,
++                                       PassengerSessionScope scope,
++                                       int audit,
++                                       String operationNo) {
++        requireValidCombination(authEpoch, scope, audit, operationNo);
+         long now = System.currentTimeMillis();
+-        long expMs = now + props.getExpirationSeconds() * 1000L;
++        long ttl = scope == LIFECYCLE_RESTRICTED
++                ? props.getRestrictedExpirationSeconds()
++                : props.getExpirationSeconds();
++        long expMs = now + ttl * 1000L;
+         return Jwts.builder()
+                 .subject(String.valueOf(customerId))
+                 .claim("phone", phone == null ? "" : phone)
+-                .claim("tv", tokenVersion)
++                .claim("ae", authEpoch)
++                .claim("scope", scope.name())
+                 .claim("audit", audit)
++                .claim("operationNo", operationNo)
+                 .audience().add(props.getAudience()).and()
+                 .issuedAt(new Date(now))
+                 .expiration(new Date(expMs))
+                 .signWith(signingKey())
+                 .compact();
+     }
+ 
+     /**
+-     * 解析 JWT。若 JWT 缺少 {@code audit} claim，按 {@code 1} 解析以兼容存量 Token。
++     * Task 5 会把现有登录签发调用切到显式 scope；过渡期间该入口也只签发严格 ae/scope claims。
+      */
++    public String createPassengerToken(long customerId, String phone, long authEpoch, int audit) {
++        return createPassengerToken(customerId, phone, authEpoch, NORMAL, audit, null);
++    }
++
+     public ParsedPassengerJwt parseAndVerify(String token) {
+         if (token == null || token.isBlank()) {
+             throw new JwtException("missing token");
+         }
+         Claims c = Jwts.parser()
+                 .verifyWith(signingKey())
+                 .requireAudience(props.getAudience())
+                 .build()
+                 .parseSignedClaims(token.trim())
+                 .getPayload();
+-        long customerId = Long.parseLong(c.getSubject());
+-        Object tvObj = c.get("tv");
+-        if (tvObj == null) {
+-            throw new JwtException("missing tv");
++        try {
++            long customerId = Long.parseLong(c.getSubject());
++            long authEpoch = strictLong(c.get("ae"), "ae");
++            Object scopeValue = c.get("scope");
++            if (!(scopeValue instanceof String scopeName)) {
++                throw new JwtException("invalid scope");
++            }
++            PassengerSessionScope scope;
++            try {
++                scope = PassengerSessionScope.valueOf(scopeName);
++            } catch (IllegalArgumentException e) {
++                throw new JwtException("invalid scope", e);
++            }
++            int audit = strictInt(c.get("audit"), "audit");
++            Object operationValue = c.get("operationNo");
++            if (operationValue != null && !(operationValue instanceof String)) {
++                throw new JwtException("invalid operationNo");
++            }
++            String operationNo = (String) operationValue;
++            requireValidCombination(authEpoch, scope, audit, operationNo);
++            String phone = c.get("phone", String.class);
++            return new ParsedPassengerJwt(customerId, phone, authEpoch, scope, audit, operationNo);
++        } catch (JwtException e) {
++            throw e;
++        } catch (IllegalArgumentException | NullPointerException e) {
++            throw new JwtException("invalid passenger claims", e);
+         }
+-        long tv = tvObj instanceof Number ? ((Number) tvObj).longValue() : Long.parseLong(tvObj.toString());
+-        Object auditObj = c.get("audit");
+-        int audit = auditObj == null ? 1
+-                : (auditObj instanceof Number ? ((Number) auditObj).intValue() : Integer.parseInt(auditObj.toString()));
+-        String phone = c.get("phone", String.class);
+-        return new ParsedPassengerJwt(customerId, phone, tv, audit);
+     }
+ 
+     public long getExpirationSeconds() {
+         return props.getExpirationSeconds();
+     }
+ 
+     private SecretKey signingKey() {
+         String secret = props.getSecret();
+         if (secret == null || secret.isBlank()) {
+             throw new IllegalStateException("passenger-api app.jwt.secret is empty");
+         }
+         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
+         return Keys.hmacShaKeyFor(keyBytes);
+     }
++
++    private static long strictLong(Object value, String claim) {
++        if (!(value instanceof Byte || value instanceof Short
++                || value instanceof Integer || value instanceof Long)) {
++            throw new JwtException("invalid " + claim);
++        }
++        return ((Number) value).longValue();
++    }
++
++    private static int strictInt(Object value, String claim) {
++        if (!(value instanceof Byte || value instanceof Short || value instanceof Integer)) {
++            throw new JwtException("invalid " + claim);
++        }
++        return ((Number) value).intValue();
++    }
++
++    private static void requireValidCombination(long authEpoch,
++                                                PassengerSessionScope scope,
++                                                int audit,
++                                                String operationNo) {
++        if (authEpoch < 1 || scope == null) {
++            throw new IllegalArgumentException("invalid passenger session");
++        }
++        if (scope == NORMAL) {
++            if ((audit != 1 && audit != 2) || operationNo != null) {
++                throw new IllegalArgumentException("invalid normal passenger session");
++            }
++            return;
++        }
++        if (audit != 1 || operationNo == null || operationNo.isBlank()) {
++            throw new IllegalArgumentException("invalid restricted passenger session");
++        }
++    }
+ }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/InvalidPassengerSessionException.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/InvalidPassengerSessionException.java
+new file mode 100644
+index 0000000..9791379
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/InvalidPassengerSessionException.java
+@@ -0,0 +1,8 @@
++package com.sx.passengerapi.auth;
++
++public class InvalidPassengerSessionException extends RuntimeException {
++
++    public InvalidPassengerSessionException() {
++        super("invalid passenger session");
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/ParsedPassengerJwt.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/ParsedPassengerJwt.java
+index afcbc37..4dc4e33 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/auth/ParsedPassengerJwt.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/ParsedPassengerJwt.java
+@@ -1,4 +1,11 @@
+ package com.sx.passengerapi.auth;
+ 
+-/** @param audit 1=HTTP API；2=WebSocket 握手；缺省解析为 1 以兼容登录态旧 JWT。 */
+-public record ParsedPassengerJwt(long customerId, String phone, long tokenVersion, int audit) {}
++/** 已验签且完成严格 claim 校验的乘客 JWT 载荷。 */
++public record ParsedPassengerJwt(
++        long customerId,
++        String phone,
++        long authEpoch,
++        PassengerSessionScope scope,
++        int audit,
++        String operationNo) {
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthContext.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthContext.java
+new file mode 100644
+index 0000000..6fe5a54
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthContext.java
+@@ -0,0 +1,20 @@
++package com.sx.passengerapi.auth;
++
++public record PassengerAuthContext(
++        long customerId,
++        String phone,
++        long authEpoch,
++        PassengerSessionScope scope,
++        int audit,
++        String operationNo) {
++
++    public static PassengerAuthContext from(ParsedPassengerJwt token) {
++        return new PassengerAuthContext(
++                token.customerId(),
++                token.phone(),
++                token.authEpoch(),
++                token.scope(),
++                token.audit(),
++                token.operationNo());
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthDecisionService.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthDecisionService.java
+new file mode 100644
+index 0000000..1f56f66
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthDecisionService.java
+@@ -0,0 +1,34 @@
++package com.sx.passengerapi.auth;
++
++import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
++import org.springframework.stereotype.Service;
++
++import java.util.Objects;
++
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
++
++@Service
++public class PassengerAuthDecisionService {
++
++    public PassengerAuthContext verify(ParsedPassengerJwt token,
++                                       InternalAuthStateResponse state,
++                                       int channelAudit) {
++        if (token == null || state == null
++                || !state.isAllowed()
++                || state.getCustomerId() != token.customerId()
++                || state.getAuthEpoch() != token.authEpoch()
++                || !token.scope().name().equals(state.getAllowedScope())
++                || token.audit() != channelAudit
++                || !Objects.equals(state.getCurrentLifecycleOperationNo(), token.operationNo())
++                || !lifecycleMatches(token.scope(), state.getLifecycleStatus())) {
++            throw new InvalidPassengerSessionException();
++        }
++        return PassengerAuthContext.from(token);
++    }
++
++    private static boolean lifecycleMatches(PassengerSessionScope scope, String lifecycleStatus) {
++        return (scope == NORMAL && "ACTIVE".equals(lifecycleStatus))
++                || (scope == LIFECYCLE_RESTRICTED && "CANCELLING".equals(lifecycleStatus));
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthRequestWrapper.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthRequestWrapper.java
+index 6a85e65..2c9a6cc 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthRequestWrapper.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerAuthRequestWrapper.java
+@@ -1,61 +1,115 @@
+ package com.sx.passengerapi.auth;
+ 
+ import jakarta.servlet.http.HttpServletRequest;
+ import jakarta.servlet.http.HttpServletRequestWrapper;
+ 
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.Enumeration;
+-import java.util.HashSet;
+ import java.util.List;
+-import java.util.Set;
+ 
+ /**
+- * 校验 JWT 后注入 {@code X-User-Id}/{@code X-User-Phone}，
++ * 校验 JWT 和数据库权威状态后注入可信身份头，
+  * 与网关转发行为对齐，供 Controller 沿用 {@code @RequestHeader}。
+  */
+ public class PassengerAuthRequestWrapper extends HttpServletRequestWrapper {
+ 
++    public static final String USER_ID = "X-User-Id";
++    public static final String USER_PHONE = "X-User-Phone";
++    public static final String AUTH_EPOCH = "X-Auth-Epoch";
++    public static final String AUTH_SCOPE = "X-Auth-Scope";
++    public static final String LIFECYCLE_OPERATION_NO = "X-Lifecycle-Operation-No";
++
+     private final String userIdHeaderValue;
+     private final String userPhoneHeaderValue;
++    private final String authEpochHeaderValue;
++    private final String authScopeHeaderValue;
++    private final String lifecycleOperationNoHeaderValue;
+ 
+-    public PassengerAuthRequestWrapper(HttpServletRequest request, long customerId, String phone) {
++    public PassengerAuthRequestWrapper(HttpServletRequest request, PassengerAuthContext context) {
+         super(request);
+-        this.userIdHeaderValue = String.valueOf(customerId);
+-        this.userPhoneHeaderValue = phone == null ? "" : phone;
++        this.userIdHeaderValue = String.valueOf(context.customerId());
++        this.userPhoneHeaderValue = context.phone() == null ? "" : context.phone();
++        this.authEpochHeaderValue = String.valueOf(context.authEpoch());
++        this.authScopeHeaderValue = context.scope().name();
++        this.lifecycleOperationNoHeaderValue = context.operationNo();
+     }
+ 
+     @Override
+     public String getHeader(String name) {
+-        if ("X-User-Id".equalsIgnoreCase(name)) {
++        if (USER_ID.equalsIgnoreCase(name)) {
+             return userIdHeaderValue;
+         }
+-        if ("X-User-Phone".equalsIgnoreCase(name)) {
++        if (USER_PHONE.equalsIgnoreCase(name)) {
+             return userPhoneHeaderValue;
+         }
++        if (AUTH_EPOCH.equalsIgnoreCase(name)) {
++            return authEpochHeaderValue;
++        }
++        if (AUTH_SCOPE.equalsIgnoreCase(name)) {
++            return authScopeHeaderValue;
++        }
++        if (LIFECYCLE_OPERATION_NO.equalsIgnoreCase(name)) {
++            return lifecycleOperationNoHeaderValue;
++        }
+         return super.getHeader(name);
+     }
+ 
+     @Override
+     public Enumeration<String> getHeaders(String name) {
+-        if ("X-User-Id".equalsIgnoreCase(name)) {
+-            return Collections.enumeration(List.of(userIdHeaderValue));
+-        }
+-        if ("X-User-Phone".equalsIgnoreCase(name)) {
+-            return Collections.enumeration(List.of(userPhoneHeaderValue));
++        String trusted = getTrustedHeader(name);
++        if (isTrustedHeader(name)) {
++            return trusted == null
++                    ? Collections.emptyEnumeration()
++                    : Collections.enumeration(List.of(trusted));
+         }
+         return super.getHeaders(name);
+     }
+ 
+     @Override
+     public Enumeration<String> getHeaderNames() {
+-        Set<String> names = new HashSet<>();
++        List<String> names = new ArrayList<>();
+         Enumeration<String> e = super.getHeaderNames();
+         while (e.hasMoreElements()) {
+-            names.add(e.nextElement());
++            String name = e.nextElement();
++            if (!isTrustedHeader(name)) {
++                names.add(name);
++            }
+         }
+-        names.add("X-User-Id");
+-        names.add("X-User-Phone");
+-        return Collections.enumeration(new ArrayList<>(names));
++        names.add(USER_ID);
++        names.add(USER_PHONE);
++        names.add(AUTH_EPOCH);
++        names.add(AUTH_SCOPE);
++        if (lifecycleOperationNoHeaderValue != null) {
++            names.add(LIFECYCLE_OPERATION_NO);
++        }
++        return Collections.enumeration(names);
++    }
++
++    private String getTrustedHeader(String name) {
++        if (USER_ID.equalsIgnoreCase(name)) {
++            return userIdHeaderValue;
++        }
++        if (USER_PHONE.equalsIgnoreCase(name)) {
++            return userPhoneHeaderValue;
++        }
++        if (AUTH_EPOCH.equalsIgnoreCase(name)) {
++            return authEpochHeaderValue;
++        }
++        if (AUTH_SCOPE.equalsIgnoreCase(name)) {
++            return authScopeHeaderValue;
++        }
++        if (LIFECYCLE_OPERATION_NO.equalsIgnoreCase(name)) {
++            return lifecycleOperationNoHeaderValue;
++        }
++        return null;
++    }
++
++    private static boolean isTrustedHeader(String name) {
++        return name != null && (USER_ID.equalsIgnoreCase(name)
++                || USER_PHONE.equalsIgnoreCase(name)
++                || AUTH_EPOCH.equalsIgnoreCase(name)
++                || AUTH_SCOPE.equalsIgnoreCase(name)
++                || LIFECYCLE_OPERATION_NO.equalsIgnoreCase(name));
+     }
+ }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerJwtAuthFilter.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerJwtAuthFilter.java
+index fa9888d..b6be76d 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerJwtAuthFilter.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerJwtAuthFilter.java
+@@ -1,46 +1,58 @@
+ package com.sx.passengerapi.auth;
+ 
+ import com.fasterxml.jackson.databind.ObjectMapper;
++import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
++import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
++import com.sx.passengerapi.common.vo.ResponseVo;
++import feign.FeignException;
+ import jakarta.servlet.FilterChain;
+ import jakarta.servlet.ServletException;
+ import jakarta.servlet.http.HttpServletRequest;
+ import jakarta.servlet.http.HttpServletResponse;
+ import org.springframework.core.annotation.Order;
+ import org.springframework.http.HttpHeaders;
+ import org.springframework.http.MediaType;
+ import org.springframework.stereotype.Component;
+ import org.springframework.web.filter.OncePerRequestFilter;
+ 
+ import java.io.IOException;
+ import java.util.Map;
++import java.util.Objects;
++import java.util.Set;
++
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
+ 
+ /**
+- * 校验乘客 JWT 签名、aud、{@code tv} 与 Redis 当前版本一致；通过后注入 {@code X-User-Id}/{@code X-User-Phone}。
++ * 校验乘客 JWT 签名、aud 及 passenger DB 权威认证状态；通过后注入可信身份头。
+  * 公开路径：登录、发短信；{@code POST /app/api/v1/auth/logout} 须鉴权。
+  */
+ @Component
+ @Order(5)
+ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
+ 
+     private static final String BEARER = "Bearer ";
++    private static final Set<String> RESTRICTED_LIFECYCLE_PATHS = Set.of();
+ 
+     private final AppJwtService jwtService;
+-    private final PassengerTokenVersionStore tokenVersionStore;
++    private final PassengerCoreAuthStateClient authStateClient;
++    private final PassengerAuthDecisionService decisionService;
+     private final ObjectMapper objectMapper;
+ 
+     public PassengerJwtAuthFilter(
+             AppJwtService jwtService,
+-            PassengerTokenVersionStore tokenVersionStore,
++            PassengerCoreAuthStateClient authStateClient,
++            PassengerAuthDecisionService decisionService,
+             ObjectMapper objectMapper) {
+         this.jwtService = jwtService;
+-        this.tokenVersionStore = tokenVersionStore;
++        this.authStateClient = authStateClient;
++        this.decisionService = decisionService;
+         this.objectMapper = objectMapper;
+     }
+ 
+     @Override
+     protected boolean shouldNotFilter(HttpServletRequest request) {
+         String path = request.getRequestURI();
+         return path == null || !path.startsWith("/app/api/v1");
+     }
+ 
+     @Override
+@@ -72,39 +84,54 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
+         }
+ 
+         final ParsedPassengerJwt parsed;
+         try {
+             parsed = jwtService.parseAndVerify(token);
+         } catch (Exception e) {
+             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "token 无效");
+             return;
+         }
+ 
+-        Long cur = tokenVersionStore.currentVersion(parsed.customerId());
+-        if (cur == null || cur.longValue() != parsed.tokenVersion()) {
++        final PassengerAuthContext authContext;
++        try {
++            ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
++            if (result == null || !Objects.equals(result.getCode(), HttpServletResponse.SC_OK)
++                    || result.getData() == null) {
++                writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "认证服务暂时不可用");
++                return;
++            }
++            authContext = decisionService.verify(parsed, result.getData(), 1);
++        } catch (InvalidPassengerSessionException e) {
+             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "登录已失效，请重新登录");
+             return;
++        } catch (FeignException e) {
++            writeJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "认证服务暂时不可用");
++            return;
+         }
+ 
+-        if (parsed.audit() != 1) {
+-            writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "token 渠道不匹配，请重新登录或使用 WebSocket 专用令牌");
++        if (authContext.scope() == LIFECYCLE_RESTRICTED && !isRestrictedLifecyclePath(path)) {
++            writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, "受限会话不可访问该资源");
+             return;
+         }
+ 
+-        filterChain.doFilter(new PassengerAuthRequestWrapper(request, parsed.customerId(), parsed.phone()), response);
++        filterChain.doFilter(new PassengerAuthRequestWrapper(request, authContext), response);
+     }
+ 
+     private static boolean isPublicAuth(String path, String method) {
+         if (!"POST".equalsIgnoreCase(method)) {
+             return false;
+         }
+         return "/app/api/v1/auth/sms/send".equals(path)
+                 || "/app/api/v1/auth/login-sms".equals(path)
+                 || "/app/api/v1/auth/login-password".equals(path);
+     }
+ 
++    private static boolean isRestrictedLifecyclePath(String path) {
++        return RESTRICTED_LIFECYCLE_PATHS.contains(path);
++    }
++
+     private void writeJsonError(HttpServletResponse response, int httpStatus, String msg) throws IOException {
+         response.setStatus(httpStatus);
+         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+         response.getWriter().write(objectMapper.writeValueAsString(Map.of("code", httpStatus, "msg", msg)));
+     }
+ }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerSessionScope.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerSessionScope.java
+new file mode 100644
+index 0000000..93d9072
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/PassengerSessionScope.java
+@@ -0,0 +1,6 @@
++package com.sx.passengerapi.auth;
++
++public enum PassengerSessionScope {
++    NORMAL,
++    LIFECYCLE_RESTRICTED
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreAuthClient.java b/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreAuthClient.java
+index 67cfe1f..97c07ee 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreAuthClient.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreAuthClient.java
+@@ -1,26 +1,29 @@
+ package com.sx.passengerapi.client;
+ 
+ import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
+ import com.sx.passengerapi.client.dto.AppLoginPasswordRequest;
+ import com.sx.passengerapi.client.dto.AppSmsLoginRequest;
+ import com.sx.passengerapi.client.dto.AppSmsSendRequest;
+ import com.sx.passengerapi.client.dto.AppSmsSendResult;
+ import com.sx.passengerapi.common.vo.ResponseVo;
++import com.sx.passengerapi.config.PassengerCoreFeignConfiguration;
+ import org.springframework.cloud.openfeign.FeignClient;
+ import org.springframework.web.bind.annotation.PostMapping;
+ import org.springframework.web.bind.annotation.RequestBody;
+ 
+ /**
+  * 调用 passenger 核心服务的乘客认证接口。
+  */
+-@FeignClient(name = "passengerCoreAuth", url = "${services.passenger.base-url:http://127.0.0.1:8092}")
++@FeignClient(name = "passengerCoreAuth",
++        url = "${services.passenger.base-url:http://127.0.0.1:8092}",
++        configuration = PassengerCoreFeignConfiguration.class)
+ public interface PassengerCoreAuthClient {
+ 
+     @PostMapping("/api/v1/app/auth/login-password")
+     ResponseVo<AppAuthCustomerBrief> loginPassword(@RequestBody AppLoginPasswordRequest body);
+ 
+     @PostMapping("/api/v1/app/auth/sms/send")
+     ResponseVo<AppSmsSendResult> sendSms(@RequestBody AppSmsSendRequest body);
+ 
+     @PostMapping("/api/v1/app/auth/login-sms")
+     ResponseVo<AppAuthCustomerBrief> loginSms(@RequestBody AppSmsLoginRequest body);
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreAuthStateClient.java b/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreAuthStateClient.java
+new file mode 100644
+index 0000000..cd97da3
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreAuthStateClient.java
+@@ -0,0 +1,24 @@
++package com.sx.passengerapi.client;
++
++import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
++import com.sx.passengerapi.client.dto.InternalLogoutRequest;
++import com.sx.passengerapi.client.dto.InternalLogoutResponse;
++import com.sx.passengerapi.common.vo.ResponseVo;
++import com.sx.passengerapi.config.PassengerCoreFeignConfiguration;
++import org.springframework.cloud.openfeign.FeignClient;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.PathVariable;
++import org.springframework.web.bind.annotation.PostMapping;
++import org.springframework.web.bind.annotation.RequestBody;
++
++@FeignClient(name = "passengerCoreAuthState",
++        url = "${services.passenger.base-url:http://127.0.0.1:8092}",
++        configuration = PassengerCoreFeignConfiguration.class)
++public interface PassengerCoreAuthStateClient {
++
++    @GetMapping("/api/v1/internal/auth-state/{customerId}")
++    ResponseVo<InternalAuthStateResponse> get(@PathVariable("customerId") long customerId);
++
++    @PostMapping("/api/v1/internal/auth-state/logout")
++    ResponseVo<InternalLogoutResponse> logout(@RequestBody InternalLogoutRequest request);
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreSettingsClient.java b/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreSettingsClient.java
+index 42b769b..89536f2 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreSettingsClient.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/client/PassengerCoreSettingsClient.java
+@@ -3,29 +3,32 @@ package com.sx.passengerapi.client;
+ import com.sx.passengerapi.client.dto.AppAccountCancelConfirmRequest;
+ import com.sx.passengerapi.client.dto.AppAccountCancelResult;
+ import com.sx.passengerapi.client.dto.AppAccountCancelSmsSendResult;
+ import com.sx.passengerapi.client.dto.AppPhoneChangeConfirmRequest;
+ import com.sx.passengerapi.client.dto.AppPhoneChangeResult;
+ import com.sx.passengerapi.client.dto.AppPhoneChangeSmsSendRequest;
+ import com.sx.passengerapi.client.dto.AppSettingsCustomerIdRequest;
+ import com.sx.passengerapi.client.dto.AppSettingsProfileResponse;
+ import com.sx.passengerapi.client.dto.AppSmsSendResult;
+ import com.sx.passengerapi.common.vo.ResponseVo;
++import com.sx.passengerapi.config.PassengerCoreFeignConfiguration;
+ import org.springframework.cloud.openfeign.FeignClient;
+ import org.springframework.web.bind.annotation.PostMapping;
+ import org.springframework.web.bind.annotation.RequestBody;
+ 
+ /**
+  * passenger-api 到 passenger 核心服务的设置接口 Feign。
+  * 浏览器只访问 BFF；核心服务不直接暴露 token 解析逻辑。
+  */
+-@FeignClient(name = "passengerCoreSettings", url = "${services.passenger.base-url:http://127.0.0.1:8092}")
++@FeignClient(name = "passengerCoreSettings",
++        url = "${services.passenger.base-url:http://127.0.0.1:8092}",
++        configuration = PassengerCoreFeignConfiguration.class)
+ public interface PassengerCoreSettingsClient {
+ 
+     @PostMapping("/api/v1/app/settings/profile")
+     ResponseVo<AppSettingsProfileResponse> profile(@RequestBody AppSettingsCustomerIdRequest body);
+ 
+     @PostMapping("/api/v1/app/settings/phone-change/sms/send")
+     ResponseVo<AppSmsSendResult> sendPhoneChangeSms(@RequestBody AppPhoneChangeSmsSendRequest body);
+ 
+     @PostMapping("/api/v1/app/settings/phone-change/confirm")
+     ResponseVo<AppPhoneChangeResult> confirmPhoneChange(@RequestBody AppPhoneChangeConfirmRequest body);
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalAuthStateResponse.java b/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalAuthStateResponse.java
+new file mode 100644
+index 0000000..c9dce67
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalAuthStateResponse.java
+@@ -0,0 +1,90 @@
++package com.sx.passengerapi.client.dto;
++
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++
++@JsonIgnoreProperties(ignoreUnknown = true)
++public class InternalAuthStateResponse {
++
++    private long customerId;
++    private Integer businessStatus;
++    private String lifecycleStatus;
++    private long authEpoch;
++    private String currentLifecycleOperationNo;
++    private String allowedScope;
++    private boolean allowed;
++
++    public InternalAuthStateResponse() {
++    }
++
++    public InternalAuthStateResponse(long customerId,
++                                     Integer businessStatus,
++                                     String lifecycleStatus,
++                                     long authEpoch,
++                                     String currentLifecycleOperationNo,
++                                     String allowedScope,
++                                     boolean allowed) {
++        this.customerId = customerId;
++        this.businessStatus = businessStatus;
++        this.lifecycleStatus = lifecycleStatus;
++        this.authEpoch = authEpoch;
++        this.currentLifecycleOperationNo = currentLifecycleOperationNo;
++        this.allowedScope = allowedScope;
++        this.allowed = allowed;
++    }
++
++    public long getCustomerId() {
++        return customerId;
++    }
++
++    public void setCustomerId(long customerId) {
++        this.customerId = customerId;
++    }
++
++    public Integer getBusinessStatus() {
++        return businessStatus;
++    }
++
++    public void setBusinessStatus(Integer businessStatus) {
++        this.businessStatus = businessStatus;
++    }
++
++    public String getLifecycleStatus() {
++        return lifecycleStatus;
++    }
++
++    public void setLifecycleStatus(String lifecycleStatus) {
++        this.lifecycleStatus = lifecycleStatus;
++    }
++
++    public long getAuthEpoch() {
++        return authEpoch;
++    }
++
++    public void setAuthEpoch(long authEpoch) {
++        this.authEpoch = authEpoch;
++    }
++
++    public String getCurrentLifecycleOperationNo() {
++        return currentLifecycleOperationNo;
++    }
++
++    public void setCurrentLifecycleOperationNo(String currentLifecycleOperationNo) {
++        this.currentLifecycleOperationNo = currentLifecycleOperationNo;
++    }
++
++    public String getAllowedScope() {
++        return allowedScope;
++    }
++
++    public void setAllowedScope(String allowedScope) {
++        this.allowedScope = allowedScope;
++    }
++
++    public boolean isAllowed() {
++        return allowed;
++    }
++
++    public void setAllowed(boolean allowed) {
++        this.allowed = allowed;
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalLogoutRequest.java b/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalLogoutRequest.java
+new file mode 100644
+index 0000000..eefb6cd
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalLogoutRequest.java
+@@ -0,0 +1,4 @@
++package com.sx.passengerapi.client.dto;
++
++public record InternalLogoutRequest(long customerId, long expectedAuthEpoch) {
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalLogoutResponse.java b/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalLogoutResponse.java
+new file mode 100644
+index 0000000..0749aeb
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/client/dto/InternalLogoutResponse.java
+@@ -0,0 +1,4 @@
++package com.sx.passengerapi.client.dto;
++
++public record InternalLogoutResponse(long customerId, long authEpoch) {
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtConfiguration.java b/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtConfiguration.java
+index 80b95fc..a828bae 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtConfiguration.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtConfiguration.java
+@@ -1,9 +1,13 @@
+ package com.sx.passengerapi.config;
+ 
+ import org.springframework.boot.context.properties.EnableConfigurationProperties;
+ import org.springframework.context.annotation.Configuration;
+ 
+ @Configuration
+-@EnableConfigurationProperties({AppJwtProperties.class, CouponClaimIdentityProperties.class})
++@EnableConfigurationProperties({
++        AppJwtProperties.class,
++        CouponClaimIdentityProperties.class,
++        PassengerInternalClientProperties.class
++})
+ public class AppJwtConfiguration {
+ }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtProperties.java b/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtProperties.java
+index 09b0e53..1997565 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtProperties.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/config/AppJwtProperties.java
+@@ -6,37 +6,47 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
+  * 乘客端 JWT：签发密钥须与网关 {@code gateway.jwt.secret-app} 一致；
+  * {@code audience} 须与 {@code gateway.jwt.audience-app} 一致以便开启 aud 校验。
+  */
+ @ConfigurationProperties(prefix = "app.jwt")
+ public class AppJwtProperties {
+ 
+     private String secret = "";
+ 
+     private long expirationSeconds = 604800L;
+ 
++    private long restrictedExpirationSeconds = 1800L;
++
+     /** 与 gateway.application.yml gateway.jwt.audience-app 一致 */
+     private String audience = "app-bff";
+ 
+     public String getSecret() {
+         return secret;
+     }
+ 
+     public void setSecret(String secret) {
+         this.secret = secret;
+     }
+ 
+     public long getExpirationSeconds() {
+         return expirationSeconds;
+     }
+ 
+     public void setExpirationSeconds(long expirationSeconds) {
+         this.expirationSeconds = expirationSeconds;
+     }
+ 
++    public long getRestrictedExpirationSeconds() {
++        return restrictedExpirationSeconds;
++    }
++
++    public void setRestrictedExpirationSeconds(long restrictedExpirationSeconds) {
++        this.restrictedExpirationSeconds = restrictedExpirationSeconds;
++    }
++
+     public String getAudience() {
+         return audience;
+     }
+ 
+     public void setAudience(String audience) {
+         this.audience = audience;
+     }
+ }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerCoreFeignConfiguration.java b/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerCoreFeignConfiguration.java
+new file mode 100644
+index 0000000..81664ab
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerCoreFeignConfiguration.java
+@@ -0,0 +1,13 @@
++package com.sx.passengerapi.config;
++
++import feign.RequestInterceptor;
++import org.springframework.context.annotation.Bean;
++
++/** 仅由 passenger core Feign client 显式引用，避免内部凭据污染其他下游。 */
++public class PassengerCoreFeignConfiguration {
++
++    @Bean
++    public RequestInterceptor passengerInternalToken(PassengerInternalClientProperties properties) {
++        return template -> template.header("X-Internal-Service-Token", properties.getToken());
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerInternalClientProperties.java b/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerInternalClientProperties.java
+new file mode 100644
+index 0000000..21ffb2a
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/config/PassengerInternalClientProperties.java
+@@ -0,0 +1,17 @@
++package com.sx.passengerapi.config;
++
++import org.springframework.boot.context.properties.ConfigurationProperties;
++
++@ConfigurationProperties(prefix = "passenger.internal-auth")
++public class PassengerInternalClientProperties {
++
++    private String token = "";
++
++    public String getToken() {
++        return token;
++    }
++
++    public void setToken(String token) {
++        this.token = token;
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
+index 371cd55..429ff86 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
+@@ -1,74 +1,96 @@
+ package com.sx.passengerapi.ws;
+ 
+ import com.sx.passengerapi.auth.AppJwtService;
+-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
++import com.sx.passengerapi.auth.InvalidPassengerSessionException;
++import com.sx.passengerapi.auth.PassengerAuthDecisionService;
++import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
++import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
++import com.sx.passengerapi.common.vo.ResponseVo;
++import feign.FeignException;
+ import io.jsonwebtoken.JwtException;
+ import lombok.extern.slf4j.Slf4j;
+ import org.springframework.http.HttpStatus;
+ import org.springframework.http.server.ServerHttpRequest;
+ import org.springframework.http.server.ServerHttpResponse;
+ import org.springframework.http.server.ServletServerHttpRequest;
+ import org.springframework.stereotype.Component;
+ import org.springframework.web.socket.WebSocketHandler;
+ import org.springframework.web.socket.server.HandshakeInterceptor;
+ 
+ import java.net.URI;
+ import java.util.Map;
++import java.util.Objects;
++
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
+ 
+ @Component
+ @Slf4j
+ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
+ 
+     public static final String ATTR_CUSTOMER_ID = "customerId";
+ 
+     private final PassengerWsProperties wsProperties;
+     private final AppJwtService jwtService;
+-    private final PassengerTokenVersionStore tokenVersionStore;
++    private final PassengerCoreAuthStateClient authStateClient;
++    private final PassengerAuthDecisionService decisionService;
+ 
+     public PassengerWsHandshakeInterceptor(PassengerWsProperties wsProperties,
+                                            AppJwtService jwtService,
+-                                           PassengerTokenVersionStore tokenVersionStore) {
++                                           PassengerCoreAuthStateClient authStateClient,
++                                           PassengerAuthDecisionService decisionService) {
+         this.wsProperties = wsProperties;
+         this.jwtService = jwtService;
+-        this.tokenVersionStore = tokenVersionStore;
++        this.authStateClient = authStateClient;
++        this.decisionService = decisionService;
+     }
+ 
+     @Override
+     public boolean beforeHandshake(ServerHttpRequest request,
+                                    ServerHttpResponse response,
+                                    WebSocketHandler wsHandler,
+                                    Map<String, Object> attributes) {
+         if (!wsProperties.isEnabled()) {
+             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+             return false;
+         }
+         try {
+             String token = extractToken(request);
+             var parsed = jwtService.parseAndVerify(token);
+-            if (parsed.audit() != 2) {
+-                response.setStatusCode(HttpStatus.UNAUTHORIZED);
++            ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
++            if (result == null || !Objects.equals(result.getCode(), HttpStatus.OK.value())
++                    || result.getData() == null) {
++                response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+                 return false;
+             }
+-            Long tv = tokenVersionStore.currentVersion(parsed.customerId());
+-            if (tv == null || tv.longValue() != parsed.tokenVersion()) {
+-                response.setStatusCode(HttpStatus.UNAUTHORIZED);
++
++            if (parsed.scope() == LIFECYCLE_RESTRICTED) {
++                decisionService.verify(parsed, result.getData(), 1);
++                response.setStatusCode(HttpStatus.FORBIDDEN);
+                 return false;
+             }
++
++            decisionService.verify(parsed, result.getData(), 2);
+             attributes.put(ATTR_CUSTOMER_ID, parsed.customerId());
+             return true;
++        } catch (InvalidPassengerSessionException e) {
++            response.setStatusCode(HttpStatus.UNAUTHORIZED);
++            return false;
+         } catch (JwtException | IllegalArgumentException e) {
+             response.setStatusCode(HttpStatus.UNAUTHORIZED);
+             return false;
++        } catch (FeignException e) {
++            response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
++            return false;
+         } catch (Exception e) {
+-            log.warn("WS handshake error: {}", e.toString());
+-            response.setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR);
++            log.warn("WS handshake authentication failed type={}", e.getClass().getSimpleName());
++            response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+             return false;
+         }
+     }
+ 
+     @Override
+     public void afterHandshake(ServerHttpRequest request,
+                                ServerHttpResponse response,
+                                WebSocketHandler wsHandler,
+                                Exception exception) {
+         // no-op
+diff --git a/passenger-api/src/main/resources/application.yml b/passenger-api/src/main/resources/application.yml
+index 098c125..f3753a1 100644
+--- a/passenger-api/src/main/resources/application.yml
++++ b/passenger-api/src/main/resources/application.yml
+@@ -14,20 +14,22 @@ spring:
+       database: ${REDIS_DB:0}
+ 
+ app:
+   jwt:
+     # 与网关 gateway.jwt.secret-app 保持一致；非 local/dev/test 必须显式配置。
+     secret: ${JWT_SECRET_APP:}
+     expiration-seconds: 604800
+     audience: app-bff
+ 
+ passenger:
++  internal-auth:
++    token: ${PASSENGER_INTERNAL_TOKEN:}
+   ws:
+     # 运维总闸：false 时拒绝 ws-token / WS 握手
+     enabled: ${PASSENGER_WS_ENABLED:true}
+     heartbeat-timeout-ms: 90000
+ 
+ coupon:
+   claim-identity:
+     phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET:}
+ 
+ logging:
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/auth/AppJwtServiceTest.java b/passenger-api/src/test/java/com/sx/passengerapi/auth/AppJwtServiceTest.java
+new file mode 100644
+index 0000000..81e5014
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/auth/AppJwtServiceTest.java
+@@ -0,0 +1,115 @@
++package com.sx.passengerapi.auth;
++
++import com.sx.passengerapi.config.AppJwtProperties;
++import io.jsonwebtoken.JwtException;
++import io.jsonwebtoken.Jwts;
++import io.jsonwebtoken.security.Keys;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++import javax.crypto.SecretKey;
++import java.nio.charset.StandardCharsets;
++import java.util.Date;
++import java.util.Map;
++
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++
++class AppJwtServiceTest {
++
++    private static final String SECRET = "test-app-jwt-secret-with-at-least-32-bytes";
++    private static final String AUDIENCE = "app-bff";
++
++    private AppJwtProperties properties;
++    private AppJwtService jwt;
++
++    @BeforeEach
++    void setUp() {
++        properties = new AppJwtProperties();
++        properties.setSecret(SECRET);
++        properties.setAudience(AUDIENCE);
++        properties.setExpirationSeconds(600);
++        properties.setRestrictedExpirationSeconds(120);
++        jwt = new AppJwtService(properties);
++    }
++
++    @Test
++    void roundTripsNormalAndRestrictedClaims() {
++        String normal = jwt.createPassengerToken(7L, "13800138000", 5L, NORMAL, 1, null);
++        assertThat(jwt.parseAndVerify(normal)).isEqualTo(
++                new ParsedPassengerJwt(7L, "13800138000", 5L, NORMAL, 1, null));
++
++        String restricted = jwt.createPassengerToken(
++                7L, "13800138000", 6L, LIFECYCLE_RESTRICTED, 1, "op-1");
++        assertThat(jwt.parseAndVerify(restricted)).isEqualTo(
++                new ParsedPassengerJwt(7L, "13800138000", 6L, LIFECYCLE_RESTRICTED, 1, "op-1"));
++    }
++
++    @Test
++    void rejectsLegacyTvAndMissingStrictClaims() {
++        assertThatThrownBy(() -> jwt.parseAndVerify(signClaims(Map.of("tv", 1, "audit", 1))))
++                .isInstanceOf(JwtException.class);
++        assertThatThrownBy(() -> jwt.parseAndVerify(signClaims(Map.of("ae", 1, "audit", 1))))
++                .isInstanceOf(JwtException.class);
++        assertThatThrownBy(() -> jwt.parseAndVerify(signClaims(Map.of("ae", 1, "scope", "NORMAL"))))
++                .isInstanceOf(JwtException.class);
++    }
++
++    @Test
++    void rejectsUnexpectedClaimTypesAndNonPositiveEpoch() {
++        assertThatThrownBy(() -> jwt.parseAndVerify(
++                signClaims(Map.of("ae", "5", "scope", "NORMAL", "audit", 1))))
++                .isInstanceOf(JwtException.class);
++        assertThatThrownBy(() -> jwt.parseAndVerify(
++                signClaims(Map.of("ae", 5, "scope", 1, "audit", 1))))
++                .isInstanceOf(JwtException.class);
++        assertThatThrownBy(() -> jwt.parseAndVerify(
++                signClaims(Map.of("ae", 5, "scope", "NORMAL", "audit", "1"))))
++                .isInstanceOf(JwtException.class);
++        assertThatThrownBy(() -> jwt.parseAndVerify(
++                signClaims(Map.of("ae", 0, "scope", "NORMAL", "audit", 1))))
++                .isInstanceOf(JwtException.class);
++    }
++
++    @Test
++    void rejectsInvalidScopeAuditOperationCombinations() {
++        assertThatThrownBy(() -> jwt.createPassengerToken(7L, "", 6L, LIFECYCLE_RESTRICTED, 2, "op-1"))
++                .isInstanceOf(IllegalArgumentException.class);
++        assertThatThrownBy(() -> jwt.createPassengerToken(7L, "", 6L, LIFECYCLE_RESTRICTED, 1, null))
++                .isInstanceOf(IllegalArgumentException.class);
++        assertThatThrownBy(() -> jwt.createPassengerToken(7L, "", 6L, NORMAL, 1, "op-1"))
++                .isInstanceOf(IllegalArgumentException.class);
++        assertThatThrownBy(() -> jwt.createPassengerToken(7L, "", 6L, NORMAL, 3, null))
++                .isInstanceOf(IllegalArgumentException.class);
++    }
++
++    @Test
++    void rejectsInvalidCombinationsDuringParsing() {
++        assertThatThrownBy(() -> jwt.parseAndVerify(
++                signClaims(Map.of("ae", 5, "scope", "LIFECYCLE_RESTRICTED", "audit", 2,
++                        "operationNo", "op-1"))))
++                .isInstanceOf(JwtException.class);
++        assertThatThrownBy(() -> jwt.parseAndVerify(
++                signClaims(Map.of("ae", 5, "scope", "NORMAL", "audit", 1,
++                        "operationNo", "op-1"))))
++                .isInstanceOf(JwtException.class);
++    }
++
++    private String signClaims(Map<String, Object> claims) {
++        long now = System.currentTimeMillis();
++        return Jwts.builder()
++                .subject("7")
++                .claims(claims)
++                .audience().add(AUDIENCE).and()
++                .issuedAt(new Date(now))
++                .expiration(new Date(now + 60_000))
++                .signWith(signingKey())
++                .compact();
++    }
++
++    private SecretKey signingKey() {
++        return Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8));
++    }
++}
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerJwtAuthFilterTest.java b/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerJwtAuthFilterTest.java
+new file mode 100644
+index 0000000..27c26b5
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/auth/PassengerJwtAuthFilterTest.java
+@@ -0,0 +1,188 @@
++package com.sx.passengerapi.auth;
++
++import com.fasterxml.jackson.databind.ObjectMapper;
++import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
++import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
++import com.sx.passengerapi.common.vo.ResponseVo;
++import feign.Request;
++import feign.RetryableException;
++import jakarta.servlet.FilterChain;
++import jakarta.servlet.ServletRequest;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.mockito.ArgumentCaptor;
++import org.springframework.mock.web.MockHttpServletRequest;
++import org.springframework.mock.web.MockHttpServletResponse;
++
++import java.net.ConnectException;
++import java.nio.charset.StandardCharsets;
++import java.util.Map;
++
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.clearInvocations;
++import static org.mockito.Mockito.doThrow;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.times;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++class PassengerJwtAuthFilterTest {
++
++    private final AppJwtService jwtService = mock(AppJwtService.class);
++    private final PassengerCoreAuthStateClient authStateClient = mock(PassengerCoreAuthStateClient.class);
++    private final PassengerAuthDecisionService decisionService = new PassengerAuthDecisionService();
++    private PassengerJwtAuthFilter filter;
++
++    @BeforeEach
++    void setUp() {
++        filter = new PassengerJwtAuthFilter(jwtService, authStateClient, decisionService, new ObjectMapper());
++    }
++
++    @Test
++    void activeNormalSessionAllowsExactlyOneStateLookupAndInjectsTrustedHeaders() throws Exception {
++        ParsedPassengerJwt token = token(NORMAL, 1, null);
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token);
++        when(authStateClient.get(7L)).thenReturn(ok(state(7L, "ACTIVE", 9L, null, "NORMAL", true)));
++        FilterChain chain = mock(FilterChain.class);
++
++        MockHttpServletResponse response = execute("GET", "/app/api/v1/orders/current", chain);
++
++        assertThat(response.getStatus()).isEqualTo(200);
++        ArgumentCaptor<ServletRequest> request = ArgumentCaptor.forClass(ServletRequest.class);
++        verify(chain).doFilter(request.capture(), any());
++        PassengerAuthRequestWrapper wrapped = (PassengerAuthRequestWrapper) request.getValue();
++        assertThat(wrapped.getHeader("X-User-Id")).isEqualTo("7");
++        assertThat(wrapped.getHeader("X-User-Phone")).isEqualTo("13800138000");
++        assertThat(wrapped.getHeader("X-Auth-Epoch")).isEqualTo("9");
++        assertThat(wrapped.getHeader("X-Auth-Scope")).isEqualTo("NORMAL");
++        assertThat(wrapped.getHeader("X-Lifecycle-Operation-No")).isNull();
++        verify(authStateClient, times(1)).get(7L);
++    }
++
++    @Test
++    void matchingRestrictedSessionIsAuthoritativeButOrdinaryBusinessPathIsForbidden() throws Exception {
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(LIFECYCLE_RESTRICTED, 1, "op-1"));
++        when(authStateClient.get(7L)).thenReturn(ok(
++                state(7L, "CANCELLING", 9L, "op-1", "LIFECYCLE_RESTRICTED", true)));
++        FilterChain chain = mock(FilterChain.class);
++
++        MockHttpServletResponse response = execute("POST", "/app/api/v1/orders", chain);
++
++        assertThat(response.getStatus()).isEqualTo(403);
++        verify(chain, never()).doFilter(any(), any());
++        verify(authStateClient, times(1)).get(7L);
++    }
++
++    @Test
++    void customerEpochScopeAndOperationMismatchEachReturnUnauthorized() throws Exception {
++        assertUnauthorized(token(NORMAL, 1, null), state(8L, "ACTIVE", 9L, null, "NORMAL", true));
++        assertUnauthorized(token(NORMAL, 1, null), state(7L, "ACTIVE", 10L, null, "NORMAL", true));
++        assertUnauthorized(token(NORMAL, 1, null),
++                state(7L, "CANCELLING", 9L, null, "LIFECYCLE_RESTRICTED", true));
++        assertUnauthorized(token(LIFECYCLE_RESTRICTED, 1, "op-1"),
++                state(7L, "CANCELLING", 9L, "op-2", "LIFECYCLE_RESTRICTED", true));
++    }
++
++    @Test
++    void disallowedStateAndWrongHttpAuditReturnUnauthorized() throws Exception {
++        assertUnauthorized(token(NORMAL, 1, null), state(7L, "CANCELLED", 9L, null, null, false));
++        assertUnauthorized(token(NORMAL, 1, null),
++                state(7L, "CANCELLING", 9L, null, "NORMAL", true));
++        assertUnauthorized(token(NORMAL, 2, null), state(7L, "ACTIVE", 9L, null, "NORMAL", true));
++    }
++
++    @Test
++    void passengerFiveHundredAndConnectionFailureReturnServiceUnavailable() throws Exception {
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 1, null));
++        doThrow(retryable(500, new IllegalStateException("downstream 500")))
++                .when(authStateClient).get(7L);
++        FilterChain firstChain = mock(FilterChain.class);
++
++        MockHttpServletResponse first = execute("GET", "/app/api/v1/orders/current", firstChain);
++
++        assertThat(first.getStatus()).isEqualTo(503);
++        verify(firstChain, never()).doFilter(any(), any());
++
++        doThrow(retryable(-1, new ConnectException("connection refused")))
++                .when(authStateClient).get(7L);
++        FilterChain secondChain = mock(FilterChain.class);
++        MockHttpServletResponse second = execute("GET", "/app/api/v1/orders/current", secondChain);
++
++        assertThat(second.getStatus()).isEqualTo(503);
++        verify(secondChain, never()).doFilter(any(), any());
++    }
++
++    @Test
++    void publicLoginSkipsJwtAndAuthorityLookup() throws Exception {
++        FilterChain chain = mock(FilterChain.class);
++
++        MockHttpServletResponse response = execute("POST", "/app/api/v1/auth/login-sms", chain, false);
++
++        assertThat(response.getStatus()).isEqualTo(200);
++        verify(chain).doFilter(any(), any());
++        verify(jwtService, never()).parseAndVerify(any());
++        verify(authStateClient, never()).get(any(Long.class));
++    }
++
++    private void assertUnauthorized(ParsedPassengerJwt token, InternalAuthStateResponse state) throws Exception {
++        clearInvocations(authStateClient);
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token);
++        when(authStateClient.get(7L)).thenReturn(ok(state));
++        FilterChain chain = mock(FilterChain.class);
++
++        MockHttpServletResponse response = execute("GET", "/app/api/v1/orders/current", chain);
++
++        assertThat(response.getStatus()).isEqualTo(401);
++        verify(chain, never()).doFilter(any(), any());
++        verify(authStateClient, times(1)).get(7L);
++    }
++
++    private MockHttpServletResponse execute(String method, String path, FilterChain chain) throws Exception {
++        return execute(method, path, chain, true);
++    }
++
++    private MockHttpServletResponse execute(String method, String path, FilterChain chain, boolean authorized)
++            throws Exception {
++        MockHttpServletRequest request = new MockHttpServletRequest(method, path);
++        request.setRequestURI(path);
++        if (authorized) {
++            request.addHeader("Authorization", "Bearer jwt-value");
++        }
++        MockHttpServletResponse response = new MockHttpServletResponse();
++        filter.doFilter(request, response, chain);
++        return response;
++    }
++
++    private static ParsedPassengerJwt token(PassengerSessionScope scope, int audit, String operationNo) {
++        return new ParsedPassengerJwt(7L, "13800138000", 9L, scope, audit, operationNo);
++    }
++
++    private static InternalAuthStateResponse state(long customerId,
++                                                   String lifecycleStatus,
++                                                   long epoch,
++                                                   String operationNo,
++                                                   String scope,
++                                                   boolean allowed) {
++        return new InternalAuthStateResponse(
++                customerId, 1, lifecycleStatus, epoch, operationNo, scope, allowed);
++    }
++
++    private static ResponseVo<InternalAuthStateResponse> ok(InternalAuthStateResponse state) {
++        return ResponseVo.success(state);
++    }
++
++    private static RetryableException retryable(int status, Exception cause) {
++        Request request = Request.create(
++                Request.HttpMethod.GET,
++                "http://passenger/api/v1/internal/auth-state/7",
++                Map.of(),
++                new byte[0],
++                StandardCharsets.UTF_8);
++        return new RetryableException(status, "passenger unavailable", Request.HttpMethod.GET,
++                cause, (Long) null, request);
++    }
++}
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/config/PassengerCoreFeignConfigurationTest.java b/passenger-api/src/test/java/com/sx/passengerapi/config/PassengerCoreFeignConfigurationTest.java
+new file mode 100644
+index 0000000..92c182f
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/config/PassengerCoreFeignConfigurationTest.java
+@@ -0,0 +1,55 @@
++package com.sx.passengerapi.config;
++
++import com.sx.passengerapi.client.CalculateClient;
++import com.sx.passengerapi.client.MapClient;
++import com.sx.passengerapi.client.OrderClient;
++import com.sx.passengerapi.client.PassengerCoreAuthClient;
++import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
++import com.sx.passengerapi.client.PassengerCoreSettingsClient;
++import com.sx.passengerapi.client.WalletClient;
++import feign.RequestInterceptor;
++import feign.RequestTemplate;
++import org.junit.jupiter.api.Test;
++import org.springframework.cloud.openfeign.FeignClient;
++
++import java.util.List;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++class PassengerCoreFeignConfigurationTest {
++
++    @Test
++    void addsInternalTokenHeaderWithoutExposingItsValueElsewhere() {
++        PassengerInternalClientProperties properties = new PassengerInternalClientProperties();
++        properties.setToken("test-internal-token");
++        RequestInterceptor interceptor = new PassengerCoreFeignConfiguration()
++                .passengerInternalToken(properties);
++        RequestTemplate template = new RequestTemplate();
++
++        interceptor.apply(template);
++
++        assertThat(template.headers().get("X-Internal-Service-Token"))
++                .containsExactly("test-internal-token");
++        assertThat(interceptor.toString()).doesNotContain("test-internal-token");
++    }
++
++    @Test
++    void configurationIsScopedToExactlyTheThreePassengerCoreClients() {
++        for (Class<?> coreClient : List.of(
++                PassengerCoreAuthClient.class,
++                PassengerCoreSettingsClient.class,
++                PassengerCoreAuthStateClient.class)) {
++            assertThat(coreClient.getAnnotation(FeignClient.class).configuration())
++                    .containsExactly(PassengerCoreFeignConfiguration.class);
++        }
++
++        for (Class<?> otherClient : List.of(
++                OrderClient.class,
++                CalculateClient.class,
++                WalletClient.class,
++                MapClient.class)) {
++            assertThat(otherClient.getAnnotation(FeignClient.class).configuration())
++                    .doesNotContain(PassengerCoreFeignConfiguration.class);
++        }
++    }
++}
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptorTest.java b/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptorTest.java
+new file mode 100644
+index 0000000..49c7109
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptorTest.java
+@@ -0,0 +1,174 @@
++package com.sx.passengerapi.ws;
++
++import com.sx.passengerapi.auth.AppJwtService;
++import com.sx.passengerapi.auth.PassengerAuthDecisionService;
++import com.sx.passengerapi.auth.ParsedPassengerJwt;
++import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
++import com.sx.passengerapi.client.dto.InternalAuthStateResponse;
++import com.sx.passengerapi.common.vo.ResponseVo;
++import feign.Request;
++import feign.RetryableException;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.http.HttpStatus;
++import org.springframework.http.server.ServletServerHttpRequest;
++import org.springframework.http.server.ServletServerHttpResponse;
++import org.springframework.mock.web.MockHttpServletRequest;
++import org.springframework.mock.web.MockHttpServletResponse;
++import org.springframework.web.socket.WebSocketHandler;
++
++import java.net.ConnectException;
++import java.nio.charset.StandardCharsets;
++import java.util.HashMap;
++import java.util.Map;
++
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.times;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++class PassengerWsHandshakeInterceptorTest {
++
++    private final AppJwtService jwtService = mock(AppJwtService.class);
++    private final PassengerCoreAuthStateClient authStateClient = mock(PassengerCoreAuthStateClient.class);
++    private PassengerWsProperties properties;
++    private PassengerWsHandshakeInterceptor interceptor;
++
++    @BeforeEach
++    void setUp() {
++        properties = new PassengerWsProperties();
++        properties.setEnabled(true);
++        interceptor = new PassengerWsHandshakeInterceptor(
++                properties, jwtService, authStateClient, new PassengerAuthDecisionService());
++    }
++
++    @Test
++    void activeNormalWsTokenAllowsAfterExactlyOneAuthorityLookup() {
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 2, null));
++        when(authStateClient.get(7L)).thenReturn(ok(state(
++                7L, "ACTIVE", 9L, null, "NORMAL", true)));
++        Map<String, Object> attributes = new HashMap<>();
++        MockHttpServletResponse response = new MockHttpServletResponse();
++
++        boolean allowed = interceptor.beforeHandshake(
++                request(), serverResponse(response), mock(WebSocketHandler.class), attributes);
++
++        assertThat(allowed).isTrue();
++        assertThat(attributes).containsEntry(PassengerWsHandshakeInterceptor.ATTR_CUSTOMER_ID, 7L);
++        verify(authStateClient, times(1)).get(7L);
++    }
++
++    @Test
++    void restrictedAuthoritativeTokenIsForbiddenAfterOneLookup() {
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(LIFECYCLE_RESTRICTED, 1, "op-1"));
++        when(authStateClient.get(7L)).thenReturn(ok(state(
++                7L, "CANCELLING", 9L, "op-1", "LIFECYCLE_RESTRICTED", true)));
++        MockHttpServletResponse response = new MockHttpServletResponse();
++
++        boolean allowed = interceptor.beforeHandshake(
++                request(), serverResponse(response), mock(WebSocketHandler.class), new HashMap<>());
++
++        assertThat(allowed).isFalse();
++        assertThat(response.getStatus()).isEqualTo(HttpStatus.FORBIDDEN.value());
++        verify(authStateClient, times(1)).get(7L);
++    }
++
++    @Test
++    void wrongEpochAndWrongWsAuditReturnUnauthorized() {
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 2, null));
++        when(authStateClient.get(7L)).thenReturn(ok(state(
++                7L, "ACTIVE", 10L, null, "NORMAL", true)));
++        MockHttpServletResponse epochResponse = new MockHttpServletResponse();
++
++        boolean epochAllowed = interceptor.beforeHandshake(
++                request(), serverResponse(epochResponse), mock(WebSocketHandler.class), new HashMap<>());
++
++        assertThat(epochAllowed).isFalse();
++        assertThat(epochResponse.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
++
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 1, null));
++        when(authStateClient.get(7L)).thenReturn(ok(state(
++                7L, "ACTIVE", 9L, null, "NORMAL", true)));
++        MockHttpServletResponse auditResponse = new MockHttpServletResponse();
++
++        boolean auditAllowed = interceptor.beforeHandshake(
++                request(), serverResponse(auditResponse), mock(WebSocketHandler.class), new HashMap<>());
++
++        assertThat(auditAllowed).isFalse();
++        assertThat(auditResponse.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
++        verify(authStateClient, times(2)).get(7L);
++    }
++
++    @Test
++    void invalidSignatureReturnsUnauthorizedWithoutAuthorityLookup() {
++        when(jwtService.parseAndVerify("jwt-value")).thenThrow(new io.jsonwebtoken.JwtException("bad signature"));
++        MockHttpServletResponse response = new MockHttpServletResponse();
++
++        boolean allowed = interceptor.beforeHandshake(
++                request(), serverResponse(response), mock(WebSocketHandler.class), new HashMap<>());
++
++        assertThat(allowed).isFalse();
++        assertThat(response.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
++        verify(authStateClient, never()).get(7L);
++    }
++
++    @Test
++    void passengerConnectionFailureReturnsServiceUnavailable() {
++        when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 2, null));
++        when(authStateClient.get(7L)).thenThrow(retryable());
++        MockHttpServletResponse response = new MockHttpServletResponse();
++
++        boolean allowed = interceptor.beforeHandshake(
++                request(), serverResponse(response), mock(WebSocketHandler.class), new HashMap<>());
++
++        assertThat(allowed).isFalse();
++        assertThat(response.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE.value());
++        verify(authStateClient, times(1)).get(7L);
++    }
++
++    private static ServletServerHttpRequest request() {
++        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/app/ws/v1/stream");
++        request.setRequestURI("/app/ws/v1/stream");
++        request.setQueryString("token=jwt-value");
++        return new ServletServerHttpRequest(request);
++    }
++
++    private static ServletServerHttpResponse serverResponse(MockHttpServletResponse response) {
++        return new ServletServerHttpResponse(response);
++    }
++
++    private static ParsedPassengerJwt token(com.sx.passengerapi.auth.PassengerSessionScope scope,
++                                            int audit,
++                                            String operationNo) {
++        return new ParsedPassengerJwt(7L, "", 9L, scope, audit, operationNo);
++    }
++
++    private static InternalAuthStateResponse state(long customerId,
++                                                   String lifecycleStatus,
++                                                   long epoch,
++                                                   String operationNo,
++                                                   String scope,
++                                                   boolean allowed) {
++        return new InternalAuthStateResponse(
++                customerId, 1, lifecycleStatus, epoch, operationNo, scope, allowed);
++    }
++
++    private static ResponseVo<InternalAuthStateResponse> ok(InternalAuthStateResponse state) {
++        return ResponseVo.success(state);
++    }
++
++    private static RetryableException retryable() {
++        Request request = Request.create(
++                Request.HttpMethod.GET,
++                "http://passenger/api/v1/internal/auth-state/7",
++                Map.of(),
++                new byte[0],
++                StandardCharsets.UTF_8);
++        return new RetryableException(-1, "passenger unavailable", Request.HttpMethod.GET,
++                new ConnectException("connection refused"), (Long) null, request);
++    }
++}

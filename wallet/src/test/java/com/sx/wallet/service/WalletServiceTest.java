@@ -8,7 +8,8 @@ import java.math.BigDecimal;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class WalletServiceTest {
-    private final WalletService service = new WalletService(null, true, null);
+    private final WalletService service = new WalletService(null, true, null,
+            org.mockito.Mockito.mock(com.sx.wallet.lifecycle.service.WalletAccountWriteFence.class));
 
     @Test
     void rejectsNonPositiveAutoPayAmount() {

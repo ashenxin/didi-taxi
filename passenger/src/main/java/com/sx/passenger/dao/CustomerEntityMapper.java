@@ -28,4 +28,9 @@ public interface CustomerEntityMapper extends BaseMapper<Customer> {
     int cancelAccountCas(@Param("customerId") long customerId,
                          @Param("expectedLifecycleVersion") long expectedLifecycleVersion,
                          @Param("cancelledAt") LocalDateTime cancelledAt);
+
+    int finalizeAccountCancellation(@Param("customerId") long customerId,
+                                    @Param("operationNo") String operationNo,
+                                    @Param("expectedLifecycleVersion") long expectedLifecycleVersion,
+                                    @Param("cancelledAt") LocalDateTime cancelledAt);
 }

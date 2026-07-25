@@ -1,0 +1,1968 @@
+# Review package: a3a3bd5..a910d6f
+
+## Commits
+a910d6f 修复：收紧登出清理与WS并发撤销
+38fc586 功能：重接乘客登录登出与本地WS撤销
+
+## Files changed
+ .../com/sx/passengerapi/auth/AppJwtService.java    |  13 +-
+ .../client/dto/AppAuthCustomerBrief.java           |  28 +++-
+ .../common/exception/GlobalExceptionHandler.java   |   7 +
+ .../exception/StalePassengerLogoutException.java   |   9 +
+ .../controller/PassengerAuthController.java        |  31 +++-
+ .../model/auth/CustomerLoginResponse.java          |  19 ++-
+ .../model/auth/PassengerLogoutResult.java          |  12 ++
+ .../passengerapi/service/PassengerAuthService.java | 146 ++++++++++------
+ .../service/PassengerOrderService.java             |  26 ++-
+ .../service/PassengerSettingsService.java          |  14 +-
+ .../ws/PassengerNoticeWebSocketHandler.java        |  17 +-
+ .../ws/PassengerWsHandshakeInterceptor.java        |   9 +-
+ .../ws/PassengerWsSessionRegistry.java             | 171 ++++++++++++++++---
+ .../exception/GlobalExceptionHandlerTest.java      |  55 ++++++
+ .../controller/PassengerAuthControllerTest.java    |  42 +++++
+ .../service/PassengerAuthServiceTest.java          | 185 ++++++++++++++++++---
+ ...PassengerOrderServiceCancelIdempotencyTest.java |  37 +++++
+ .../service/PassengerSettingsServiceTest.java      |  32 +++-
+ .../ws/PassengerNoticeWebSocketHandlerTest.java    |  60 +++++++
+ .../ws/PassengerWsHandshakeInterceptorTest.java    |  11 +-
+ .../ws/PassengerWsSessionRegistryTest.java         |  94 +++++++++++
+ 21 files changed, 884 insertions(+), 134 deletions(-)
+
+## Diff
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/auth/AppJwtService.java b/passenger-api/src/main/java/com/sx/passengerapi/auth/AppJwtService.java
+index 090f4a7..98f0636 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/auth/AppJwtService.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/auth/AppJwtService.java
+@@ -47,27 +47,20 @@ public class AppJwtService {
+                 .claim("scope", scope.name())
+                 .claim("audit", audit)
+                 .claim("operationNo", operationNo)
+                 .audience().add(props.getAudience()).and()
+                 .issuedAt(new Date(now))
+                 .expiration(new Date(expMs))
+                 .signWith(signingKey())
+                 .compact();
+     }
+ 
+-    /**
+-     * Task 5 会把现有登录签发调用切到显式 scope；过渡期间该入口也只签发严格 ae/scope claims。
+-     */
+-    public String createPassengerToken(long customerId, String phone, long authEpoch, int audit) {
+-        return createPassengerToken(customerId, phone, authEpoch, NORMAL, audit, null);
+-    }
+-
+     public ParsedPassengerJwt parseAndVerify(String token) {
+         if (token == null || token.isBlank()) {
+             throw new JwtException("missing token");
+         }
+         Claims c = Jwts.parser()
+                 .verifyWith(signingKey())
+                 .requireAudience(props.getAudience())
+                 .build()
+                 .parseSignedClaims(token.trim())
+                 .getPayload();
+@@ -97,20 +90,26 @@ public class AppJwtService {
+             throw e;
+         } catch (IllegalArgumentException | NullPointerException e) {
+             throw new JwtException("invalid passenger claims", e);
+         }
+     }
+ 
+     public long getExpirationSeconds() {
+         return props.getExpirationSeconds();
+     }
+ 
++    public long getExpirationSeconds(PassengerSessionScope scope) {
++        return scope == LIFECYCLE_RESTRICTED
++                ? props.getRestrictedExpirationSeconds()
++                : props.getExpirationSeconds();
++    }
++
+     private SecretKey signingKey() {
+         String secret = props.getSecret();
+         if (secret == null || secret.isBlank()) {
+             throw new IllegalStateException("passenger-api app.jwt.secret is empty");
+         }
+         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
+         return Keys.hmacShaKeyFor(keyBytes);
+     }
+ 
+     private static long strictLong(Object value, String claim) {
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/client/dto/AppAuthCustomerBrief.java b/passenger-api/src/main/java/com/sx/passengerapi/client/dto/AppAuthCustomerBrief.java
+index 0ffb92b..2e6377c 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/client/dto/AppAuthCustomerBrief.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/client/dto/AppAuthCustomerBrief.java
+@@ -3,20 +3,23 @@ package com.sx.passengerapi.client.dto;
+ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+ 
+ import java.io.Serializable;
+ 
+ @JsonIgnoreProperties(ignoreUnknown = true)
+ public class AppAuthCustomerBrief implements Serializable {
+ 
+     private Long id;
+     private String phone;
+     private String nickname;
++    private Long authEpoch;
++    private String scope;
++    private String operationNo;
+ 
+     public Long getId() {
+         return id;
+     }
+ 
+     public void setId(Long id) {
+         this.id = id;
+     }
+ 
+     public String getPhone() {
+@@ -27,12 +30,35 @@ public class AppAuthCustomerBrief implements Serializable {
+         this.phone = phone;
+     }
+ 
+     public String getNickname() {
+         return nickname;
+     }
+ 
+     public void setNickname(String nickname) {
+         this.nickname = nickname;
+     }
+-}
+ 
++    public Long getAuthEpoch() {
++        return authEpoch;
++    }
++
++    public void setAuthEpoch(Long authEpoch) {
++        this.authEpoch = authEpoch;
++    }
++
++    public String getScope() {
++        return scope;
++    }
++
++    public void setScope(String scope) {
++        this.scope = scope;
++    }
++
++    public String getOperationNo() {
++        return operationNo;
++    }
++
++    public void setOperationNo(String operationNo) {
++        this.operationNo = operationNo;
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/common/exception/GlobalExceptionHandler.java b/passenger-api/src/main/java/com/sx/passengerapi/common/exception/GlobalExceptionHandler.java
+index 6adc988..a8e695c 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/common/exception/GlobalExceptionHandler.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/common/exception/GlobalExceptionHandler.java
+@@ -44,20 +44,27 @@ public class GlobalExceptionHandler {
+     private static ResponseEntity<ResponseVo<?>> entity(ResponseVo<?> body) {
+         return ResponseEntity.status(toHttpStatus(body.getCode())).body(body);
+     }
+ 
+     @ExceptionHandler(BizErrorException.class)
+     public ResponseEntity<ResponseVo<?>> bizErrorExceptionHandler(BizErrorException e, HttpServletRequest request) {
+         log.warn("业务异常 path={} code={} msg={}", request.getRequestURI(), e.getErrorCode(), e.getErrorMessage());
+         return entity(ResultUtil.bizError(e));
+     }
+ 
++    @ExceptionHandler(StalePassengerLogoutException.class)
++    public ResponseEntity<ResponseVo<?>> stalePassengerLogoutExceptionHandler(
++            StalePassengerLogoutException e, HttpServletRequest request) {
++        log.warn("过期登出请求被拒绝 path={} code=409", request.getRequestURI());
++        return entity(ResultUtil.error(ExceptionCode.CONFLICT.getValue(), e.getMessage()));
++    }
++
+     @ExceptionHandler(HttpClientErrorException.NotFound.class)
+     public ResponseEntity<ResponseVo<?>> notFoundExceptionHandler(HttpClientErrorException.NotFound e, HttpServletRequest request) {
+         log.warn("下游返回404 path={} detail={}", request.getRequestURI(), e.getMessage());
+         return entity(ResultUtil.error(ExceptionCode.NOT_FOUND.getValue(), "资源不存在"));
+     }
+ 
+     @ExceptionHandler(FeignException.NotFound.class)
+     public ResponseEntity<ResponseVo<?>> feignNotFoundExceptionHandler(FeignException.NotFound e, HttpServletRequest request) {
+         log.warn("下游返回404(Feign) path={} detail={}", request.getRequestURI(), e.getMessage());
+         return entity(ResultUtil.error(ExceptionCode.NOT_FOUND.getValue(), "资源不存在"));
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/common/exception/StalePassengerLogoutException.java b/passenger-api/src/main/java/com/sx/passengerapi/common/exception/StalePassengerLogoutException.java
+new file mode 100644
+index 0000000..c66595a
+--- /dev/null
++++ b/passenger-api/src/main/java/com/sx/passengerapi/common/exception/StalePassengerLogoutException.java
+@@ -0,0 +1,9 @@
++package com.sx.passengerapi.common.exception;
++
++/** core logout CAS 拒绝了过期认证代次；不得继续关闭 WS 或处理订单。 */
++public class StalePassengerLogoutException extends RuntimeException {
++
++    public StalePassengerLogoutException() {
++        super("认证状态已变化，请刷新后重试");
++    }
++}
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/controller/PassengerAuthController.java b/passenger-api/src/main/java/com/sx/passengerapi/controller/PassengerAuthController.java
+index 4927dfe..56fb0bc 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/controller/PassengerAuthController.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/controller/PassengerAuthController.java
+@@ -1,12 +1,14 @@
+ package com.sx.passengerapi.controller;
+ 
++import com.sx.passengerapi.auth.PassengerAuthContext;
++import com.sx.passengerapi.auth.PassengerSessionScope;
+ import com.sx.passengerapi.common.exception.BizErrorException;
+ import com.sx.passengerapi.common.util.ResultUtil;
+ import com.sx.passengerapi.common.vo.ResponseVo;
+ import com.sx.passengerapi.model.auth.CustomerLoginResponse;
+ import com.sx.passengerapi.model.auth.PassengerLogoutResult;
+ import com.sx.passengerapi.model.auth.SmsSendResult;
+ import com.sx.passengerapi.service.PassengerAuthService;
+ import jakarta.validation.Valid;
+ import org.springframework.web.bind.annotation.PostMapping;
+ import org.springframework.web.bind.annotation.RequestBody;
+@@ -16,20 +18,24 @@ import org.springframework.web.bind.annotation.RestController;
+ 
+ /**
+  * 乘客端认证（对外），经 gateway 访问。
+  * 统一前缀：{@code /app/api/v1/auth}
+  */
+ @RestController
+ @RequestMapping("/app/api/v1/auth")
+ public class PassengerAuthController {
+ 
+     private static final String USER_ID_HEADER = "X-User-Id";
++    private static final String USER_PHONE_HEADER = "X-User-Phone";
++    private static final String AUTH_EPOCH_HEADER = "X-Auth-Epoch";
++    private static final String AUTH_SCOPE_HEADER = "X-Auth-Scope";
++    private static final String OPERATION_NO_HEADER = "X-Lifecycle-Operation-No";
+ 
+     private final PassengerAuthService passengerAuthService;
+ 
+     public PassengerAuthController(PassengerAuthService passengerAuthService) {
+         this.passengerAuthService = passengerAuthService;
+     }
+ 
+     /**
+      * 发送短信验证码。
+      * {@code POST /app/api/v1/auth/sms/send}
+@@ -56,30 +62,43 @@ public class PassengerAuthController {
+     public ResponseVo<CustomerLoginResponse> loginPassword(@Valid @RequestBody com.sx.passengerapi.model.auth.PasswordLoginRequest body) {
+         return ResultUtil.success(passengerAuthService.loginPassword(body.getPhone(), body.getPassword()));
+     }
+ 
+     /**
+      * 退出登录（须 Bearer）。
+      * {@code POST /app/api/v1/auth/logout}
+      */
+     @PostMapping("/logout")
+     public ResponseVo<PassengerLogoutResult> logout(
+-            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId) {
+-        if (passengerId == null) {
++            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
++            @RequestHeader(value = AUTH_EPOCH_HEADER, required = false) Long authEpoch) {
++        if (passengerId == null || authEpoch == null) {
+             throw new BizErrorException(401, "未授权，请重新登录");
+         }
+-        return ResultUtil.success(passengerAuthService.logout(passengerId));
++        return ResultUtil.success(passengerAuthService.logout(passengerId, authEpoch));
+     }
+ 
+     /**
+      * 用 API token（audit=1）换取 WebSocket 握手 token（audit=2）。
+      * {@code POST /app/api/v1/auth/ws-token}
+      */
+     @PostMapping("/ws-token")
+     public ResponseVo<CustomerLoginResponse> wsToken(
+-            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId) {
+-        if (passengerId == null) {
++            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
++            @RequestHeader(value = USER_PHONE_HEADER, required = false) String phone,
++            @RequestHeader(value = AUTH_EPOCH_HEADER, required = false) Long authEpoch,
++            @RequestHeader(value = AUTH_SCOPE_HEADER, required = false) String scope,
++            @RequestHeader(value = OPERATION_NO_HEADER, required = false) String operationNo) {
++        if (passengerId == null || authEpoch == null || scope == null) {
+             throw new BizErrorException(401, "未授权，请重新登录");
+         }
+-        return ResultUtil.success(passengerAuthService.issueWsToken(passengerId));
++        final PassengerSessionScope trustedScope;
++        try {
++            trustedScope = PassengerSessionScope.valueOf(scope);
++        } catch (IllegalArgumentException ex) {
++            throw new BizErrorException(401, "未授权，请重新登录");
++        }
++        PassengerAuthContext context = new PassengerAuthContext(
++                passengerId, phone, authEpoch, trustedScope, 1, operationNo);
++        return ResultUtil.success(passengerAuthService.issueWsToken(context));
+     }
+ }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/model/auth/CustomerLoginResponse.java b/passenger-api/src/main/java/com/sx/passengerapi/model/auth/CustomerLoginResponse.java
+index 7cb16b6..9f27f13 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/model/auth/CustomerLoginResponse.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/model/auth/CustomerLoginResponse.java
+@@ -1,19 +1,21 @@
+ package com.sx.passengerapi.model.auth;
+ 
+ import java.io.Serializable;
+ 
+ public class CustomerLoginResponse implements Serializable {
+ 
+     private String accessToken;
+     private String tokenType = "Bearer";
+     private long expiresIn;
++    private String scope;
++    private String operationNo;
+     private CustomerProfileVO customer;
+ 
+     public String getAccessToken() {
+         return accessToken;
+     }
+ 
+     public void setAccessToken(String accessToken) {
+         this.accessToken = accessToken;
+     }
+ 
+@@ -26,19 +28,34 @@ public class CustomerLoginResponse implements Serializable {
+     }
+ 
+     public long getExpiresIn() {
+         return expiresIn;
+     }
+ 
+     public void setExpiresIn(long expiresIn) {
+         this.expiresIn = expiresIn;
+     }
+ 
++    public String getScope() {
++        return scope;
++    }
++
++    public void setScope(String scope) {
++        this.scope = scope;
++    }
++
++    public String getOperationNo() {
++        return operationNo;
++    }
++
++    public void setOperationNo(String operationNo) {
++        this.operationNo = operationNo;
++    }
++
+     public CustomerProfileVO getCustomer() {
+         return customer;
+     }
+ 
+     public void setCustomer(CustomerProfileVO customer) {
+         this.customer = customer;
+     }
+ }
+-
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/model/auth/PassengerLogoutResult.java b/passenger-api/src/main/java/com/sx/passengerapi/model/auth/PassengerLogoutResult.java
+index c9dc584..df3a396 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/model/auth/PassengerLogoutResult.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/model/auth/PassengerLogoutResult.java
+@@ -1,12 +1,24 @@
+ package com.sx.passengerapi.model.auth;
+ 
+ import lombok.Data;
+ 
+ /**
+  * {@code POST /app/api/v1/auth/logout} 响应 data；{@code hint} 为可选的用户提示（与 PRD §5.6 对齐）。
+  */
+ @Data
+ public class PassengerLogoutResult {
++    /** core 认证代次已提交失效，后续订单清理失败也保持 true。 */
++    private boolean loggedOut;
++    /** 订单清理暂未完成，客户端可稍后查询或由后台重试。 */
++    private boolean orderCleanupPending;
+     /** 可选：如到达前已代取消订单、或到达后未取消订单等说明 */
+     private String hint;
++
++    public static PassengerLogoutResult loggedOutWithPendingCleanup(String hint) {
++        PassengerLogoutResult result = new PassengerLogoutResult();
++        result.setLoggedOut(true);
++        result.setOrderCleanupPending(true);
++        result.setHint(hint);
++        return result;
++    }
+ }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerAuthService.java b/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerAuthService.java
+index 61d50ae..ea6b46d 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerAuthService.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerAuthService.java
+@@ -1,145 +1,189 @@
+ package com.sx.passengerapi.service;
+ 
+ import com.sx.passengerapi.auth.AppJwtService;
+-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
++import com.sx.passengerapi.auth.PassengerAuthContext;
++import com.sx.passengerapi.auth.PassengerSessionScope;
+ import com.sx.passengerapi.client.PassengerCoreAuthClient;
++import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
+ import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
+ import com.sx.passengerapi.client.dto.AppLoginPasswordRequest;
+ import com.sx.passengerapi.client.dto.AppSmsLoginRequest;
+ import com.sx.passengerapi.client.dto.AppSmsSendRequest;
+ import com.sx.passengerapi.client.dto.AppSmsSendResult;
++import com.sx.passengerapi.client.dto.InternalLogoutRequest;
++import com.sx.passengerapi.client.dto.InternalLogoutResponse;
+ import com.sx.passengerapi.common.exception.BizErrorException;
++import com.sx.passengerapi.common.exception.StalePassengerLogoutException;
+ import com.sx.passengerapi.common.vo.ResponseVo;
+ import com.sx.passengerapi.model.auth.CustomerLoginResponse;
+ import com.sx.passengerapi.model.auth.CustomerProfileVO;
+ import com.sx.passengerapi.model.auth.PassengerLogoutResult;
+ import com.sx.passengerapi.model.auth.SmsSendResult;
+ import com.sx.passengerapi.ws.PassengerWsProperties;
++import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
++import feign.FeignException;
+ import lombok.extern.slf4j.Slf4j;
+ import org.springframework.stereotype.Service;
+ 
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
++
+ @Service
+ @Slf4j
+ public class PassengerAuthService {
+ 
+     private final PassengerCoreAuthClient passengerCoreAuthClient;
++    private final PassengerCoreAuthStateClient authStateClient;
+     private final AppJwtService jwtService;
+-    private final PassengerTokenVersionStore tokenVersionStore;
+     private final PassengerOrderService passengerOrderService;
+     private final PassengerWsProperties passengerWsProperties;
++    private final PassengerWsSessionRegistry sessions;
+ 
+     public PassengerAuthService(
+             PassengerCoreAuthClient passengerCoreAuthClient,
++            PassengerCoreAuthStateClient authStateClient,
+             AppJwtService jwtService,
+-            PassengerTokenVersionStore tokenVersionStore,
+             PassengerOrderService passengerOrderService,
+-            PassengerWsProperties passengerWsProperties) {
++            PassengerWsProperties passengerWsProperties,
++            PassengerWsSessionRegistry sessions) {
+         this.passengerCoreAuthClient = passengerCoreAuthClient;
++        this.authStateClient = authStateClient;
+         this.jwtService = jwtService;
+-        this.tokenVersionStore = tokenVersionStore;
+         this.passengerOrderService = passengerOrderService;
+         this.passengerWsProperties = passengerWsProperties;
++        this.sessions = sessions;
+     }
+ 
+     public SmsSendResult sendSms(String phone) {
+         ResponseVo<AppSmsSendResult> body = passengerCoreAuthClient.sendSms(new AppSmsSendRequest(phone));
+         if (body == null || body.getCode() == null) {
+             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
+         }
+         if (body.getCode() != 200) {
+             throw new BizErrorException(body.getCode(), body.getMsg());
+         }
+-        log.info("乘客短信发送请求已提交 phone={}", maskPhone(phone));
++        log.info("乘客短信发送请求已提交");
+         AppSmsSendResult data = body.getData();
+         return new SmsSendResult(data == null ? null : data.getMockCode());
+     }
+ 
+     public CustomerLoginResponse loginSms(String phone, String code) {
+         AppAuthCustomerBrief brief = unwrap(passengerCoreAuthClient.loginSms(new AppSmsLoginRequest(phone, code)));
+         return toLoginResponse(brief);
+     }
+ 
+     public CustomerLoginResponse loginPassword(String phone, String password) {
+-        AppAuthCustomerBrief brief = unwrap(passengerCoreAuthClient.loginPassword(new AppLoginPasswordRequest(phone, password)));
++        AppAuthCustomerBrief brief = unwrap(
++                passengerCoreAuthClient.loginPassword(new AppLoginPasswordRequest(phone, password)));
+         return toLoginResponse(brief);
+     }
+ 
+-    /**
+-     * 登出：到达前在途单按 PRD §5.6 代乘客取消；到达后/行程中不取消仅提示；最后递增 token 版本使 JWT 失效。
+-     */
+-    public PassengerLogoutResult logout(long passengerId) {
+-        if (passengerId <= 0) {
+-            throw new BizErrorException(400, "乘客ID非法");
++    /** 先由 passenger core CAS 失效认证代次，再撤销本节点 WS，最后处理订单清单。 */
++    public PassengerLogoutResult logout(long passengerId, long tokenAuthEpoch) {
++        if (passengerId <= 0 || tokenAuthEpoch <= 0) {
++            throw new BizErrorException(400, "乘客认证信息非法");
++        }
++        ResponseVo<InternalLogoutResponse> logoutResponse;
++        try {
++            logoutResponse = authStateClient.logout(new InternalLogoutRequest(passengerId, tokenAuthEpoch));
++        } catch (FeignException ex) {
++            if (ex.status() == 409) {
++                throw new StalePassengerLogoutException();
++            }
++            throw ex;
++        }
++        unwrapLogout(logoutResponse);
++        sessions.closeCustomerSessions(passengerId, "logout");
++        try {
++            PassengerLogoutResult result = passengerOrderService.cancelInFlightOrdersOnPassengerLogout(passengerId);
++            if (result == null) {
++                result = new PassengerLogoutResult();
++            }
++            result.setLoggedOut(true);
++            log.info("乘客已登出 customerId={}", passengerId);
++            return result;
++        } catch (RuntimeException ex) {
++            log.error("登出已生效但订单处理失败 customerId={}", passengerId, ex);
++            return PassengerLogoutResult.loggedOutWithPendingCleanup("已经登出，订单处理需重试或查询");
+         }
+-        PassengerLogoutResult side = passengerOrderService.cancelInFlightOrdersOnPassengerLogout(passengerId);
+-        tokenVersionStore.nextVersion(passengerId);
+-        log.info("乘客已登出 customerId={}", passengerId);
+-        return side;
+     }
+ 
+-    /**
+-     * 用 HTTP API token（audit=1）换取 WebSocket 握手 token（audit=2），{@code tv} 不变。
+-     */
+-    public CustomerLoginResponse issueWsToken(long passengerId) {
++    /** 用已由 Filter 验证的 NORMAL HTTP 上下文签发同认证代次的 audit=2 WS 小票。 */
++    public CustomerLoginResponse issueWsToken(PassengerAuthContext context) {
+         if (!passengerWsProperties.isEnabled()) {
+             throw new BizErrorException(503, "实时通道暂未开放（WebSocket 已关闭）");
+         }
+-        Long tv = tokenVersionStore.currentVersion(passengerId);
+-        if (tv == null) {
++        if (context == null || context.customerId() <= 0 || context.authEpoch() <= 0 || context.audit() != 1) {
+             throw new BizErrorException(401, "登录已失效，请重新登录");
+         }
+-        String wsTok = jwtService.createPassengerToken(passengerId, "", tv, 2);
++        if (context.scope() != NORMAL) {
++            throw new BizErrorException(403, "受限会话不可使用实时通道");
++        }
++        String wsToken = jwtService.createPassengerToken(
++                context.customerId(), context.phone(), context.authEpoch(), NORMAL, 2, null);
+         CustomerProfileVO profile = new CustomerProfileVO();
+-        profile.setId(passengerId);
++        profile.setId(context.customerId());
+         profile.setPhone(null);
+ 
+         CustomerLoginResponse out = new CustomerLoginResponse();
+-        out.setAccessToken(wsTok);
++        out.setAccessToken(wsToken);
+         out.setTokenType("Bearer");
+-        out.setExpiresIn(jwtService.getExpirationSeconds());
++        out.setExpiresIn(jwtService.getExpirationSeconds(NORMAL));
++        out.setScope(NORMAL.name());
++        out.setOperationNo(null);
+         out.setCustomer(profile);
+-        log.info("乘客 WebSocket Token 已签发 customerId={}", passengerId);
++        log.info("乘客 WebSocket Token 已签发 customerId={}", context.customerId());
+         return out;
+     }
+ 
+     private AppAuthCustomerBrief unwrap(ResponseVo<AppAuthCustomerBrief> body) {
+-        if (body == null) {
+-            throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
+-        }
+-        Integer code = body.getCode();
+-        if (code == null) {
++        if (body == null || body.getCode() == null) {
+             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
+         }
+-        if (code != 200) {
+-            throw new BizErrorException(code, body.getMsg());
++        if (body.getCode() != 200) {
++            throw new BizErrorException(body.getCode(), body.getMsg());
+         }
+         if (body.getData() == null || body.getData().getId() == null) {
+             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
+         }
+         return body.getData();
+     }
+ 
++    private static void unwrapLogout(ResponseVo<InternalLogoutResponse> body) {
++        if (body == null || body.getCode() == null) {
++            throw new BizErrorException(502, "认证服务暂时不可用，请稍后重试");
++        }
++        if (body.getCode() != 200) {
++            throw new BizErrorException(body.getCode(), body.getMsg());
++        }
++    }
++
+     private CustomerLoginResponse toLoginResponse(AppAuthCustomerBrief brief) {
++        if (brief.getAuthEpoch() == null || brief.getAuthEpoch() <= 0 || brief.getScope() == null) {
++            throw new BizErrorException(502, "认证服务返回的登录状态不完整");
++        }
++        final PassengerSessionScope scope;
++        try {
++            scope = PassengerSessionScope.valueOf(brief.getScope());
++        } catch (IllegalArgumentException ex) {
++            throw new BizErrorException(502, "认证服务返回的登录状态不完整");
++        }
++
+         CustomerProfileVO profile = new CustomerProfileVO();
+         profile.setId(brief.getId());
+         profile.setPhone(brief.getPhone());
+         profile.setNickname(brief.getNickname());
+ 
+-        long tv = tokenVersionStore.nextVersion(brief.getId());
+-        String token = jwtService.createPassengerToken(brief.getId(), brief.getPhone(), tv, 1);
+-        CustomerLoginResponse resp = new CustomerLoginResponse();
+-        resp.setAccessToken(token);
+-        resp.setTokenType("Bearer");
+-        resp.setExpiresIn(jwtService.getExpirationSeconds());
+-        resp.setCustomer(profile);
+-        log.info("乘客登录成功 customerId={} phone={}", brief.getId(), maskPhone(brief.getPhone()));
+-        return resp;
+-    }
+-
+-    private static String maskPhone(String phone) {
+-        if (phone == null || phone.length() < 4) {
+-            return "****";
+-        }
+-        return "****" + phone.substring(phone.length() - 4);
++        sessions.closeCustomerSessions(brief.getId(), "auth_epoch_changed");
++        String token = jwtService.createPassengerToken(
++                brief.getId(), brief.getPhone(), brief.getAuthEpoch(), scope, 1, brief.getOperationNo());
++        CustomerLoginResponse response = new CustomerLoginResponse();
++        response.setAccessToken(token);
++        response.setTokenType("Bearer");
++        response.setExpiresIn(jwtService.getExpirationSeconds(scope));
++        response.setScope(scope.name());
++        response.setOperationNo(brief.getOperationNo());
++        response.setCustomer(profile);
++        log.info("乘客登录成功 customerId={}", brief.getId());
++        return response;
+     }
+ }
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerOrderService.java b/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerOrderService.java
+index 4c969c1..62fc89c 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerOrderService.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerOrderService.java
+@@ -498,21 +498,27 @@ public class PassengerOrderService {
+     }
+ 
+     /**
+      * 乘客退出登录：若存在「司机到达前」在途单则逐单代取消；若存在已到达/行程中单则仅返回提示、不取消（PRD §5.6）。
+      */
+     public PassengerLogoutResult cancelInFlightOrdersOnPassengerLogout(long passengerId) {
+         PassengerLogoutResult out = new PassengerLogoutResult();
+         if (passengerId <= 0) {
+             return out;
+         }
+-        List<TripOrderRow> rows = loadAllPassengerOrders(passengerId);
++        OrderRowsLoadResult loadResult = loadAllPassengerOrdersWithStatus(passengerId);
++        if (!loadResult.complete()) {
++            out.setOrderCleanupPending(true);
++            out.setHint("已经登出，订单处理需重试或查询");
++            return out;
++        }
++        List<TripOrderRow> rows = loadResult.rows();
+         if (rows == null || rows.isEmpty()) {
+             return out;
+         }
+         final int finished = 5;
+         final int cancelled = 6;
+         final int arrived = 3;
+         final int started = 4;
+         for (TripOrderRow row : rows) {
+             Integer st = row.getStatus();
+             if (st == null || st == finished || st == cancelled) {
+@@ -535,53 +541,63 @@ public class PassengerOrderService {
+             String orderNo = row.getOrderNo();
+             if (orderNo == null || orderNo.isBlank()) {
+                 continue;
+             }
+             try {
+                 CancelOrderRequest req = new CancelOrderRequest();
+                 req.setPassengerId(passengerId);
+                 req.setCancelReason("乘客退出登录");
+                 cancelOrder(orderNo, req, "passenger-logout-cancel:" + UUID.randomUUID());
+                 cancelledCount++;
+-            } catch (BizErrorException e) {
++            } catch (RuntimeException e) {
++                out.setOrderCleanupPending(true);
+                 log.warn("登出代取消失败 orderNo={} passengerId={} msg={}", orderNo, passengerId, e.getMessage());
+             }
+         }
+-        if (cancelledCount > 0) {
++        if (out.isOrderCleanupPending()) {
++            out.setHint("已经登出，部分订单处理需重试或查询");
++        } else if (cancelledCount > 0) {
+             out.setHint("已为您取消进行中的订单（退出登录）。");
+         }
+         return out;
+     }
+ 
+     private List<TripOrderRow> loadAllPassengerOrders(Long passengerId) {
++        return loadAllPassengerOrdersWithStatus(passengerId).rows();
++    }
++
++    private OrderRowsLoadResult loadAllPassengerOrdersWithStatus(Long passengerId) {
+         List<TripOrderRow> rows = new ArrayList<>();
+         final int corePageSize = 100;
+         int corePageNo = 1;
+         while (true) {
+             var resp = orderClient.pageOrders(passengerId, corePageNo, corePageSize);
+             if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
+                 log.warn("查询乘客订单失败 passengerId={} pageNo={} code={} msg={}",
+                         passengerId, corePageNo, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
+-                return Collections.emptyList();
++                return new OrderRowsLoadResult(Collections.emptyList(), false);
+             }
+             OrderPageData data = resp.getData();
+             if (data == null || data.getList() == null || data.getList().isEmpty()) {
+                 break;
+             }
+             rows.addAll(data.getList());
+             Integer total = data.getTotal();
+             if (total != null && rows.size() >= total) {
+                 break;
+             }
+             corePageNo++;
+         }
+-        return rows;
++        return new OrderRowsLoadResult(rows, true);
++    }
++
++    private record OrderRowsLoadResult(List<TripOrderRow> rows, boolean complete) {
+     }
+ 
+     private PassengerOrderListItemVO toListItemVO(TripOrderRow row, SettlementSummaryRow summary) {
+         PassengerOrderListItemVO vo = new PassengerOrderListItemVO();
+         vo.setOrderNo(row.getOrderNo());
+         vo.setOriginAddress(row.getOriginAddress());
+         vo.setDestAddress(row.getDestAddress());
+         vo.setStatus(OrderStatus.fromCode(row.getStatus()));
+         vo.setEstimatedAmount(row.getEstimatedAmount());
+         vo.setFinalAmount(row.getFinalAmount());
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerSettingsService.java b/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerSettingsService.java
+index 93fb9b0..213e3c4 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerSettingsService.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/service/PassengerSettingsService.java
+@@ -1,13 +1,12 @@
+ package com.sx.passengerapi.service;
+ 
+-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
+ import com.sx.passengerapi.client.CalculateClient;
+ import com.sx.passengerapi.client.OrderClient;
+ import com.sx.passengerapi.client.PassengerCoreSettingsClient;
+ import com.sx.passengerapi.client.dto.AppAccountCancelConfirmRequest;
+ import com.sx.passengerapi.client.dto.AppAccountCancelResult;
+ import com.sx.passengerapi.client.dto.AppAccountCancelSmsSendResult;
+ import com.sx.passengerapi.client.dto.AppPhoneChangeConfirmRequest;
+ import com.sx.passengerapi.client.dto.AppPhoneChangeResult;
+ import com.sx.passengerapi.client.dto.AppPhoneChangeSmsSendRequest;
+ import com.sx.passengerapi.client.dto.AppSettingsCustomerIdRequest;
+@@ -20,43 +19,44 @@ import com.sx.passengerapi.model.ordercore.TripOrderRow;
+ import com.sx.passengerapi.model.benefit.BenefitClearPointsRequest;
+ import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
+ import com.sx.passengerapi.model.settings.AccountCancelConfirmRequest;
+ import com.sx.passengerapi.model.settings.AccountCancelResultVO;
+ import com.sx.passengerapi.model.settings.PhoneChangeConfirmRequest;
+ import com.sx.passengerapi.model.settings.PhoneChangeResultVO;
+ import com.sx.passengerapi.model.settings.PhoneChangeSmsSendRequest;
+ import com.sx.passengerapi.model.settings.SettingsProfileVO;
+ import com.sx.passengerapi.model.settings.SettingsSmsSendResultVO;
+ import com.sx.passengerapi.model.wallet.CouponInvalidateRequest;
++import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
+ import lombok.extern.slf4j.Slf4j;
+ import org.springframework.stereotype.Service;
+ 
+ import java.util.Collections;
+ import java.util.List;
+ 
+ @Service
+ @Slf4j
+ public class PassengerSettingsService {
+     private final PassengerCoreSettingsClient passengerCoreSettingsClient;
+     private final OrderClient orderClient;
+     private final CalculateClient calculateClient;
+-    private final PassengerTokenVersionStore tokenVersionStore;
++    private final PassengerWsSessionRegistry sessions;
+ 
+     public PassengerSettingsService(
+             PassengerCoreSettingsClient passengerCoreSettingsClient,
+             OrderClient orderClient,
+             CalculateClient calculateClient,
+-            PassengerTokenVersionStore tokenVersionStore) {
++            PassengerWsSessionRegistry sessions) {
+         this.passengerCoreSettingsClient = passengerCoreSettingsClient;
+         this.orderClient = orderClient;
+         this.calculateClient = calculateClient;
+-        this.tokenVersionStore = tokenVersionStore;
++        this.sessions = sessions;
+     }
+ 
+     public SettingsProfileVO profile(long customerId) {
+         AppSettingsProfileResponse data = unwrap(passengerCoreSettingsClient.profile(new AppSettingsCustomerIdRequest(customerId)));
+         SettingsProfileVO out = new SettingsProfileVO();
+         out.setCustomerId(data.getCustomerId());
+         out.setMaskedPhone(data.getMaskedPhone());
+         out.setStatus(data.getStatus());
+         out.setDeleted(data.getDeleted());
+         return out;
+@@ -66,22 +66,21 @@ public class PassengerSettingsService {
+         AppSmsSendResult data = unwrap(passengerCoreSettingsClient.sendPhoneChangeSms(
+                 new AppPhoneChangeSmsSendRequest(customerId, req.getNewPhone())));
+         SettingsSmsSendResultVO out = new SettingsSmsSendResultVO();
+         out.setMockCode(data == null ? null : data.getMockCode());
+         return out;
+     }
+ 
+     public PhoneChangeResultVO confirmPhoneChange(long customerId, PhoneChangeConfirmRequest req) {
+         AppPhoneChangeResult data = unwrap(passengerCoreSettingsClient.confirmPhoneChange(
+                 new AppPhoneChangeConfirmRequest(customerId, req.getNewPhone(), req.getCode())));
+-        // 更换手机号后强制重新登录，避免旧 token 继续代表已变更的登录凭据。
+-        tokenVersionStore.nextVersion(customerId);
++        sessions.closeCustomerSessions(customerId, "phone_changed");
+ 
+         PhoneChangeResultVO out = new PhoneChangeResultVO();
+         out.setChanged(data.getChanged());
+         out.setRequireLogin(data.getRequireLogin());
+         out.setMaskedNewPhone(data.getMaskedNewPhone());
+         log.info("乘客 BFF 更换手机号完成 customerId={}", customerId);
+         return out;
+     }
+ 
+     public SettingsSmsSendResultVO sendAccountCancelSms(long customerId) {
+@@ -98,24 +97,23 @@ public class PassengerSettingsService {
+             throw new BizErrorException(409, "当前存在进行中订单，请先完成或取消订单后再注销");
+         }
+         if (hasUnsettledOrder(customerId)) {
+             throw new BizErrorException(409, "当前存在未结清订单，请结清后再注销");
+         }
+         if (hasLockedCoupon(customerId)) {
+             throw new BizErrorException(409, "当前存在订单锁定中的优惠券，请先完成或取消相关订单后再注销");
+         }
+         AppAccountCancelResult data = unwrap(passengerCoreSettingsClient.confirmAccountCancel(
+                 new AppAccountCancelConfirmRequest(customerId, req.getCode(), req.getConfirm())));
++        sessions.closeCustomerSessions(customerId, "account_cancelled");
+         tryInvalidateUnusedCoupons(customerId);
+         tryClearBenefitPoints(customerId);
+-        // 注销生效后旧 token 立即失效；后台历史数据仍按原 customerId 可查。
+-        tokenVersionStore.nextVersion(customerId);
+ 
+         AccountCancelResultVO out = new AccountCancelResultVO();
+         out.setCancelled(data.getCancelled());
+         out.setRequireLogin(data.getRequireLogin());
+         log.info("乘客 BFF 注销账号完成 customerId={}", customerId);
+         return out;
+     }
+ 
+     private boolean hasActiveOrder(long customerId) {
+         for (TripOrderRow row : loadAllPassengerOrders(customerId)) {
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerNoticeWebSocketHandler.java b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerNoticeWebSocketHandler.java
+index 09ba636..a69ad14 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerNoticeWebSocketHandler.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerNoticeWebSocketHandler.java
+@@ -45,22 +45,34 @@ public class PassengerNoticeWebSocketHandler extends TextWebSocketHandler {
+     }
+ 
+     @Override
+     public void afterConnectionEstablished(WebSocketSession session) {
+         Object idObj = session.getAttributes().get(PassengerWsHandshakeInterceptor.ATTR_CUSTOMER_ID);
+         if (!(idObj instanceof Number)) {
+             registry.safeClose(session, CloseStatus.NOT_ACCEPTABLE);
+             return;
+         }
+         long customerId = ((Number) idObj).longValue();
+-        registry.register(customerId, session);
+-        registry.get(customerId).touch();
++        Object permitObj = session.getAttributes().get(
++                PassengerWsHandshakeInterceptor.ATTR_REGISTRATION_PERMIT);
++        if (!(permitObj instanceof PassengerWsSessionRegistry.RegistrationPermit permit)) {
++            registry.safeClose(session, new CloseStatus(4001, "auth_epoch_changed"));
++            return;
++        }
++        if (!registry.register(permit, session)) {
++            return;
++        }
++        PassengerWsSessionRegistry.PassengerSession registered = registry.get(customerId);
++        if (registered == null || !session.getId().equals(registered.getSession().getId())) {
++            return;
++        }
++        registered.touch();
+         log.info("乘客 WebSocket 已连接 customerId={} sessionId={} remote={}",
+                 customerId, session.getId(), session.getRemoteAddress());
+     }
+ 
+     @Override
+     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+         var ps = registry.getBySessionId(session.getId());
+         if (ps == null) {
+             return;
+         }
+@@ -76,20 +88,21 @@ public class PassengerNoticeWebSocketHandler extends TextWebSocketHandler {
+             registry.safeSendText(session, "{\"type\":\"PONG\",\"ts\":" + System.currentTimeMillis() + "}");
+         }
+     }
+ 
+     @Override
+     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+         registry.removeBySession(session);
+     }
+ 
+     public void heartbeatSweep() {
++        registry.cleanupCollectedFences();
+         if (!props.isEnabled()) {
+             return;
+         }
+         long now = System.currentTimeMillis();
+         long timeout = props.getHeartbeatTimeoutMs();
+         for (PassengerWsSessionRegistry.PassengerSession ps : registry.allSessions()) {
+             if (ps == null) {
+                 continue;
+             }
+             if (now - ps.lastSeenAtMs() > timeout) {
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
+index 429ff86..203e315 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptor.java
+@@ -21,63 +21,70 @@ import java.net.URI;
+ import java.util.Map;
+ import java.util.Objects;
+ 
+ import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
+ 
+ @Component
+ @Slf4j
+ public class PassengerWsHandshakeInterceptor implements HandshakeInterceptor {
+ 
+     public static final String ATTR_CUSTOMER_ID = "customerId";
++    public static final String ATTR_REGISTRATION_PERMIT = "registrationPermit";
+ 
+     private final PassengerWsProperties wsProperties;
+     private final AppJwtService jwtService;
+     private final PassengerCoreAuthStateClient authStateClient;
+     private final PassengerAuthDecisionService decisionService;
++    private final PassengerWsSessionRegistry registry;
+ 
+     public PassengerWsHandshakeInterceptor(PassengerWsProperties wsProperties,
+                                            AppJwtService jwtService,
+                                            PassengerCoreAuthStateClient authStateClient,
+-                                           PassengerAuthDecisionService decisionService) {
++                                           PassengerAuthDecisionService decisionService,
++                                           PassengerWsSessionRegistry registry) {
+         this.wsProperties = wsProperties;
+         this.jwtService = jwtService;
+         this.authStateClient = authStateClient;
+         this.decisionService = decisionService;
++        this.registry = registry;
+     }
+ 
+     @Override
+     public boolean beforeHandshake(ServerHttpRequest request,
+                                    ServerHttpResponse response,
+                                    WebSocketHandler wsHandler,
+                                    Map<String, Object> attributes) {
+         if (!wsProperties.isEnabled()) {
+             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+             return false;
+         }
+         try {
+             String token = extractToken(request);
+             var parsed = jwtService.parseAndVerify(token);
++            PassengerWsSessionRegistry.RegistrationPermit permit =
++                    registry.captureRegistration(parsed.customerId());
+             ResponseVo<InternalAuthStateResponse> result = authStateClient.get(parsed.customerId());
+             if (result == null || !Objects.equals(result.getCode(), HttpStatus.OK.value())
+                     || result.getData() == null) {
+                 response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+                 return false;
+             }
+ 
+             if (parsed.scope() == LIFECYCLE_RESTRICTED) {
+                 decisionService.verify(parsed, result.getData(), 1);
+                 response.setStatusCode(HttpStatus.FORBIDDEN);
+                 return false;
+             }
+ 
+             decisionService.verify(parsed, result.getData(), 2);
+             attributes.put(ATTR_CUSTOMER_ID, parsed.customerId());
++            attributes.put(ATTR_REGISTRATION_PERMIT, permit);
+             return true;
+         } catch (InvalidPassengerSessionException e) {
+             response.setStatusCode(HttpStatus.UNAUTHORIZED);
+             return false;
+         } catch (JwtException | IllegalArgumentException e) {
+             response.setStatusCode(HttpStatus.UNAUTHORIZED);
+             return false;
+         } catch (FeignException e) {
+             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+             return false;
+diff --git a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsSessionRegistry.java b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsSessionRegistry.java
+index e33fac5..bc55a57 100644
+--- a/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsSessionRegistry.java
++++ b/passenger-api/src/main/java/com/sx/passengerapi/ws/PassengerWsSessionRegistry.java
+@@ -1,100 +1,225 @@
+ package com.sx.passengerapi.ws;
+ 
+-import lombok.Getter;
+ import lombok.extern.slf4j.Slf4j;
+ import org.springframework.stereotype.Component;
+ import org.springframework.web.socket.CloseStatus;
+ import org.springframework.web.socket.TextMessage;
+ import org.springframework.web.socket.WebSocketSession;
+ 
+ import java.io.IOException;
++import java.lang.ref.ReferenceQueue;
++import java.lang.ref.WeakReference;
+ import java.util.Collection;
+ import java.util.Map;
++import java.util.Set;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.atomic.AtomicLong;
+ 
+ @Component
+ @Slf4j
+ public class PassengerWsSessionRegistry {
+ 
+-    @Getter
++    private static final Set<String> ALLOWED_CLOSE_REASONS = Set.of(
++            "logout", "phone_changed", "account_cancelling", "account_cancelled");
++
++    private static final class CustomerFence {
++        private long generation;
++    }
++
++    private static final class FenceReference extends WeakReference<CustomerFence> {
++        private final long customerId;
++
++        private FenceReference(long customerId,
++                               CustomerFence referent,
++                               ReferenceQueue<CustomerFence> queue) {
++            super(referent, queue);
++            this.customerId = customerId;
++        }
++    }
++
++    /** 握手在 DB 权威回查前捕获，连接建立时用于拒绝本地撤销之后到达的旧握手。 */
++    public static class RegistrationPermit {
++        private final long customerId;
++        private final CustomerFence fence;
++        private final long generation;
++
++        private RegistrationPermit(long customerId, CustomerFence fence, long generation) {
++            this.customerId = customerId;
++            this.fence = fence;
++            this.generation = generation;
++        }
++    }
++
+     public static class PassengerSession {
+         private final long customerId;
+         private final WebSocketSession session;
++        private final CustomerFence fence;
+         private final AtomicLong lastSeenAtMs = new AtomicLong(System.currentTimeMillis());
+ 
+-        public PassengerSession(long customerId, WebSocketSession session) {
++        private PassengerSession(long customerId, WebSocketSession session, CustomerFence fence) {
+             this.customerId = customerId;
+             this.session = session;
++            this.fence = fence;
++        }
++
++        public long getCustomerId() {
++            return customerId;
++        }
++
++        public WebSocketSession getSession() {
++            return session;
+         }
+ 
+         public void touch() {
+             lastSeenAtMs.set(System.currentTimeMillis());
+         }
+ 
+         public long lastSeenAtMs() {
+             return lastSeenAtMs.get();
+         }
+     }
+ 
+     private final Map<Long, PassengerSession> byCustomerId = new ConcurrentHashMap<>();
+     private final Map<String, Long> customerIdBySessionId = new ConcurrentHashMap<>();
++    private final Map<Long, FenceReference> fences = new ConcurrentHashMap<>();
++    private final ReferenceQueue<CustomerFence> collectedFences = new ReferenceQueue<>();
++
++    public RegistrationPermit captureRegistration(long customerId) {
++        if (customerId <= 0) {
++            throw new IllegalArgumentException("invalid customerId");
++        }
++        cleanupCollectedFences();
++        CustomerFence fence = findOrCreateFence(customerId);
++        synchronized (fence) {
++            return new RegistrationPermit(customerId, fence, fence.generation);
++        }
++    }
+ 
+     /**
+-     * 注册会话；若同乘客已有连接则关闭旧连接（单端在线）。
++     * 注册会话；generation 不匹配时拒绝迟到握手，同乘客并发注册在同一 fence 上串行替换。
+      */
+-    public void register(long customerId, WebSocketSession session) {
+-        if (customerId <= 0 || session == null) {
+-            return;
++    public boolean register(RegistrationPermit permit, WebSocketSession session) {
++        if (permit == null || permit.customerId <= 0 || session == null) {
++            safeClose(session, CloseStatus.NOT_ACCEPTABLE);
++            return false;
+         }
+-        PassengerSession prev = byCustomerId.get(customerId);
+-        if (prev != null && prev.getSession() != null && prev.getSession().isOpen()
+-                && !prev.getSession().getId().equals(session.getId())) {
+-            customerIdBySessionId.remove(prev.getSession().getId());
+-            safeClose(prev.getSession(), new CloseStatus(4000, "replaced"));
+-            log.info("WS replaced previous session customerId={} oldSessionId={}", customerId, prev.getSession().getId());
++        cleanupCollectedFences();
++        CustomerFence fence = permit.fence;
++        synchronized (fence) {
++            if (fence.generation != permit.generation) {
++                safeClose(session, new CloseStatus(4001, "auth_epoch_changed"));
++                return false;
++            }
++            long customerId = permit.customerId;
++            PassengerSession previous = byCustomerId.get(customerId);
++            if (previous != null && previous.getSession() != null
++                    && !previous.getSession().getId().equals(session.getId())) {
++                customerIdBySessionId.remove(previous.getSession().getId(), customerId);
++                safeClose(previous.getSession(), new CloseStatus(4000, "replaced"));
++                log.info("WS replaced previous session customerId={} oldSessionId={}",
++                        customerId, previous.getSession().getId());
++            }
++            PassengerSession current = new PassengerSession(customerId, session, fence);
++            byCustomerId.put(customerId, current);
++            customerIdBySessionId.put(session.getId(), customerId);
++            log.info("WS session registered customerId={} sessionId={}", customerId, session.getId());
++            return true;
+         }
+-        PassengerSession ps = new PassengerSession(customerId, session);
+-        byCustomerId.put(customerId, ps);
+-        customerIdBySessionId.put(session.getId(), customerId);
+-        log.info("WS session registered customerId={} sessionId={}", customerId, session.getId());
+     }
+ 
+     public PassengerSession get(long customerId) {
+         return byCustomerId.get(customerId);
+     }
+ 
+     public PassengerSession getBySessionId(String sessionId) {
+         if (sessionId == null) {
+             return null;
+         }
+         Long customerId = customerIdBySessionId.get(sessionId);
+-        return customerId == null ? null : byCustomerId.get(customerId);
++        PassengerSession current = customerId == null ? null : byCustomerId.get(customerId);
++        return current != null && sessionId.equals(current.getSession().getId()) ? current : null;
+     }
+ 
+     public Collection<PassengerSession> allSessions() {
+         return byCustomerId.values();
+     }
+ 
+     public void removeBySession(WebSocketSession session) {
+         if (session == null) {
+             return;
+         }
+-        Long customerId = customerIdBySessionId.remove(session.getId());
+-        if (customerId != null) {
+-            PassengerSession cur = byCustomerId.get(customerId);
+-            if (cur != null && session.getId().equals(cur.getSession().getId())) {
+-                byCustomerId.remove(customerId);
++        Long customerId = customerIdBySessionId.get(session.getId());
++        if (customerId == null) {
++            return;
++        }
++        PassengerSession current = byCustomerId.get(customerId);
++        if (current == null) {
++            customerIdBySessionId.remove(session.getId(), customerId);
++            return;
++        }
++        synchronized (current.fence) {
++            customerIdBySessionId.remove(session.getId(), customerId);
++            if (session.getId().equals(current.getSession().getId())) {
++                byCustomerId.remove(customerId, current);
+                 log.info("WS session removed customerId={} sessionId={}", customerId, session.getId());
+             }
+         }
++        cleanupCollectedFences();
++    }
++
++    public void closeCustomerSessions(long customerId, String reason) {
++        cleanupCollectedFences();
++        FenceReference reference = fences.get(customerId);
++        CustomerFence fence = reference == null ? null : reference.get();
++        if (fence == null) {
++            return;
++        }
++        synchronized (fence) {
++            fence.generation++;
++            PassengerSession current = byCustomerId.remove(customerId);
++            if (current == null || current.getSession() == null) {
++                return;
++            }
++            customerIdBySessionId.remove(current.getSession().getId(), customerId);
++            safeClose(current.getSession(), new CloseStatus(4001, sanitizeReason(reason)));
++        }
++    }
++
++    private CustomerFence findOrCreateFence(long customerId) {
++        while (true) {
++            FenceReference currentReference = fences.get(customerId);
++            CustomerFence current = currentReference == null ? null : currentReference.get();
++            if (current != null) {
++                return current;
++            }
++            CustomerFence created = new CustomerFence();
++            FenceReference createdReference = new FenceReference(customerId, created, collectedFences);
++            boolean installed = currentReference == null
++                    ? fences.putIfAbsent(customerId, createdReference) == null
++                    : fences.replace(customerId, currentReference, createdReference);
++            if (installed) {
++                return created;
++            }
++        }
++    }
++
++    /** 清理由已放弃握手留下的弱 fence 引用；心跳任务也会周期调用。 */
++    public void cleanupCollectedFences() {
++        FenceReference collected;
++        while ((collected = (FenceReference) collectedFences.poll()) != null) {
++            fences.remove(collected.customerId, collected);
++        }
++    }
++
++    private static String sanitizeReason(String reason) {
++        return ALLOWED_CLOSE_REASONS.contains(reason) ? reason : "auth_epoch_changed";
+     }
+ 
+     public void safeClose(WebSocketSession session, CloseStatus status) {
+         if (session == null) {
+             return;
+         }
+         try {
+             if (session.isOpen()) {
+                 session.close(status == null ? CloseStatus.NORMAL : status);
+             }
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/common/exception/GlobalExceptionHandlerTest.java b/passenger-api/src/test/java/com/sx/passengerapi/common/exception/GlobalExceptionHandlerTest.java
+new file mode 100644
+index 0000000..d805224
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/common/exception/GlobalExceptionHandlerTest.java
+@@ -0,0 +1,55 @@
++package com.sx.passengerapi.common.exception;
++
++import feign.FeignException;
++import jakarta.servlet.http.HttpServletRequest;
++import org.junit.jupiter.api.Test;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++class GlobalExceptionHandlerTest {
++
++    @Test
++    void staleLogoutExceptionRemainsConflictWithContextPath() {
++        GlobalExceptionHandler handler = new GlobalExceptionHandler();
++        HttpServletRequest request = mock(HttpServletRequest.class);
++        when(request.getContextPath()).thenReturn("/passenger-api");
++        when(request.getRequestURI()).thenReturn("/passenger-api/app/api/v1/auth/logout");
++
++        var response = handler.stalePassengerLogoutExceptionHandler(
++                new StalePassengerLogoutException(), request);
++
++        assertThat(response.getStatusCode().value()).isEqualTo(409);
++        assertThat(response.getBody().getCode()).isEqualTo(409);
++        assertThat(response.getBody().getMsg()).isEqualTo("认证状态已变化，请刷新后重试");
++    }
++
++    @Test
++    void unrelatedDownstreamConflictKeepsExistingBadGatewayMapping() {
++        GlobalExceptionHandler handler = new GlobalExceptionHandler();
++        FeignException exception = mock(FeignException.class);
++        HttpServletRequest request = mock(HttpServletRequest.class);
++        when(exception.status()).thenReturn(409);
++        when(request.getRequestURI()).thenReturn("/app/api/v1/orders");
++
++        var response = handler.feignExceptionHandler(exception, request);
++
++        assertThat(response.getStatusCode().value()).isEqualTo(502);
++        assertThat(response.getBody().getCode()).isEqualTo(502);
++    }
++
++    @Test
++    void rawFeignConflictOnLogoutPathIsNotMistakenForCoreStaleLogout() {
++        GlobalExceptionHandler handler = new GlobalExceptionHandler();
++        FeignException exception = mock(FeignException.class);
++        HttpServletRequest request = mock(HttpServletRequest.class);
++        when(exception.status()).thenReturn(409);
++        when(request.getRequestURI()).thenReturn("/app/api/v1/auth/logout");
++
++        var response = handler.feignExceptionHandler(exception, request);
++
++        assertThat(response.getStatusCode().value()).isEqualTo(502);
++        assertThat(response.getBody().getCode()).isEqualTo(502);
++    }
++}
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/controller/PassengerAuthControllerTest.java b/passenger-api/src/test/java/com/sx/passengerapi/controller/PassengerAuthControllerTest.java
+new file mode 100644
+index 0000000..2774e53
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/controller/PassengerAuthControllerTest.java
+@@ -0,0 +1,42 @@
++package com.sx.passengerapi.controller;
++
++import com.sx.passengerapi.auth.PassengerAuthContext;
++import com.sx.passengerapi.model.auth.CustomerLoginResponse;
++import com.sx.passengerapi.model.auth.PassengerLogoutResult;
++import com.sx.passengerapi.service.PassengerAuthService;
++import org.junit.jupiter.api.Test;
++
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++class PassengerAuthControllerTest {
++
++    private final PassengerAuthService service = mock(PassengerAuthService.class);
++    private final PassengerAuthController controller = new PassengerAuthController(service);
++
++    @Test
++    void logoutUsesTrustedAuthEpochAsExpectedEpoch() {
++        PassengerLogoutResult result = new PassengerLogoutResult();
++        when(service.logout(7L, 9L)).thenReturn(result);
++
++        var response = controller.logout(7L, 9L);
++
++        assertThat(response.getData()).isSameAs(result);
++        verify(service).logout(7L, 9L);
++    }
++
++    @Test
++    void wsTokenBuildsVerifiedContextFromTrustedHeaders() {
++        CustomerLoginResponse result = new CustomerLoginResponse();
++        PassengerAuthContext context = new PassengerAuthContext(7L, "13800138000", 9L, NORMAL, 1, null);
++        when(service.issueWsToken(context)).thenReturn(result);
++
++        var response = controller.wsToken(7L, "13800138000", 9L, "NORMAL", null);
++
++        assertThat(response.getData()).isSameAs(result);
++        verify(service).issueWsToken(context);
++    }
++}
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerAuthServiceTest.java b/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerAuthServiceTest.java
+index 88e24a8..31cfc1f 100644
+--- a/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerAuthServiceTest.java
++++ b/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerAuthServiceTest.java
+@@ -1,71 +1,208 @@
+ package com.sx.passengerapi.service;
+ 
+ import com.sx.passengerapi.auth.AppJwtService;
+-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
++import com.sx.passengerapi.auth.PassengerAuthContext;
+ import com.sx.passengerapi.client.PassengerCoreAuthClient;
++import com.sx.passengerapi.client.PassengerCoreAuthStateClient;
+ import com.sx.passengerapi.client.dto.AppAuthCustomerBrief;
++import com.sx.passengerapi.client.dto.InternalLogoutRequest;
++import com.sx.passengerapi.client.dto.InternalLogoutResponse;
+ import com.sx.passengerapi.common.exception.BizErrorException;
++import com.sx.passengerapi.common.exception.StalePassengerLogoutException;
+ import com.sx.passengerapi.common.vo.ResponseVo;
+ import com.sx.passengerapi.model.auth.CustomerLoginResponse;
++import com.sx.passengerapi.model.auth.PassengerLogoutResult;
+ import com.sx.passengerapi.ws.PassengerWsProperties;
++import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
++import feign.FeignException;
+ import org.junit.jupiter.api.Test;
++import org.mockito.InOrder;
+ 
++import static com.sx.passengerapi.auth.PassengerSessionScope.LIFECYCLE_RESTRICTED;
++import static com.sx.passengerapi.auth.PassengerSessionScope.NORMAL;
+ import static org.assertj.core.api.Assertions.assertThat;
+ import static org.junit.jupiter.api.Assertions.assertThrows;
+ import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.inOrder;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.times;
+ import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoMoreInteractions;
+ import static org.mockito.Mockito.when;
+ 
+ class PassengerAuthServiceTest {
+ 
+     private final PassengerCoreAuthClient coreAuthClient = mock(PassengerCoreAuthClient.class);
++    private final PassengerCoreAuthStateClient authStateClient = mock(PassengerCoreAuthStateClient.class);
+     private final AppJwtService jwtService = mock(AppJwtService.class);
+-    private final PassengerTokenVersionStore tokenVersionStore = mock(PassengerTokenVersionStore.class);
+     private final PassengerOrderService passengerOrderService = mock(PassengerOrderService.class);
+     private final PassengerWsProperties wsProperties = new PassengerWsProperties();
++    private final PassengerWsSessionRegistry sessions = mock(PassengerWsSessionRegistry.class);
+     private final PassengerAuthService service = new PassengerAuthService(
+-            coreAuthClient, jwtService, tokenVersionStore, passengerOrderService, wsProperties);
++            coreAuthClient, authStateClient, jwtService, passengerOrderService, wsProperties, sessions);
+ 
+     @Test
+-    void passwordLoginIssuesAuditOneTokenWithNewTokenVersion() {
+-        AppAuthCustomerBrief customer = new AppAuthCustomerBrief();
+-        customer.setId(10001L);
+-        customer.setPhone("13812345678");
+-        customer.setNickname("乘客");
+-        when(coreAuthClient.loginPassword(any())).thenReturn(ResponseVo.success(customer));
+-        when(tokenVersionStore.nextVersion(10001L)).thenReturn(7L);
+-        when(jwtService.createPassengerToken(10001L, "13812345678", 7L, 1)).thenReturn("token-1");
+-        when(jwtService.getExpirationSeconds()).thenReturn(7200L);
++    void signsExactlyTheEpochAndScopeReturnedByCoreAfterClosingOldWs() {
++        when(coreAuthClient.loginPassword(any())).thenReturn(ResponseVo.success(
++                brief(7L, "13800138000", 11L, "NORMAL", null)));
++        when(jwtService.createPassengerToken(7L, "13800138000", 11L, NORMAL, 1, null))
++                .thenReturn("token-1");
++        when(jwtService.getExpirationSeconds(NORMAL)).thenReturn(7200L);
+ 
+-        CustomerLoginResponse response = service.loginPassword("13812345678", "secret");
++        CustomerLoginResponse response = service.loginPassword("13800138000", "secret");
+ 
+         assertThat(response.getAccessToken()).isEqualTo("token-1");
+-        assertThat(response.getCustomer().getId()).isEqualTo(10001L);
+-        verify(jwtService).createPassengerToken(10001L, "13812345678", 7L, 1);
++        assertThat(response.getScope()).isEqualTo("NORMAL");
++        assertThat(response.getOperationNo()).isNull();
++        InOrder order = inOrder(sessions, jwtService);
++        order.verify(sessions).closeCustomerSessions(7L, "auth_epoch_changed");
++        order.verify(jwtService).createPassengerToken(7L, "13800138000", 11L, NORMAL, 1, null);
++    }
++
++    @Test
++    void signsRestrictedReauthenticationForThirtyMinutes() {
++        when(coreAuthClient.loginSms(any())).thenReturn(ResponseVo.success(
++                brief(7L, "13800138000", 12L, "LIFECYCLE_RESTRICTED", "op-1")));
++        when(jwtService.createPassengerToken(
++                7L, "13800138000", 12L, LIFECYCLE_RESTRICTED, 1, "op-1"))
++                .thenReturn("restricted-token");
++        when(jwtService.getExpirationSeconds(LIFECYCLE_RESTRICTED)).thenReturn(1800L);
++
++        CustomerLoginResponse response = service.loginSms("13800138000", "111111");
++
++        assertThat(response.getScope()).isEqualTo("LIFECYCLE_RESTRICTED");
++        assertThat(response.getOperationNo()).isEqualTo("op-1");
++        assertThat(response.getExpiresIn()).isEqualTo(1800L);
++    }
++
++    @Test
++    void websocketTokenUsesOnlyVerifiedNormalContextAndSameEpoch() {
++        wsProperties.setEnabled(true);
++        PassengerAuthContext context = new PassengerAuthContext(7L, "13800138000", 13L, NORMAL, 1, null);
++        when(jwtService.createPassengerToken(7L, "13800138000", 13L, NORMAL, 2, null))
++                .thenReturn("ws-token");
++        when(jwtService.getExpirationSeconds(NORMAL)).thenReturn(7200L);
++
++        CustomerLoginResponse response = service.issueWsToken(context);
++
++        assertThat(response.getAccessToken()).isEqualTo("ws-token");
++        assertThat(response.getScope()).isEqualTo("NORMAL");
++        verify(jwtService).createPassengerToken(7L, "13800138000", 13L, NORMAL, 2, null);
++        verifyNoMoreInteractions(authStateClient);
++    }
++
++    @Test
++    void websocketTokenRejectsRestrictedVerifiedContext() {
++        wsProperties.setEnabled(true);
++        PassengerAuthContext context = new PassengerAuthContext(
++                7L, "", 13L, LIFECYCLE_RESTRICTED, 1, "op-1");
++
++        BizErrorException error = assertThrows(BizErrorException.class,
++                () -> service.issueWsToken(context));
++
++        assertThat(error.getErrorCode()).isEqualTo(403);
++        verify(jwtService, never()).createPassengerToken(
++                any(Long.class), any(), any(Long.class), any(), any(Integer.class), any());
+     }
+ 
+     @Test
+     void websocketTokenIsRejectedWhenRealtimeChannelDisabled() {
+         wsProperties.setEnabled(false);
+ 
+         BizErrorException error = assertThrows(BizErrorException.class,
+-                () -> service.issueWsToken(10001L));
++                () -> service.issueWsToken(new PassengerAuthContext(7L, "", 13L, NORMAL, 1, null)));
+ 
+         assertThat(error.getErrorCode()).isEqualTo(503);
+-        verify(tokenVersionStore, never()).currentVersion(10001L);
++        verify(jwtService, never()).createPassengerToken(
++                any(Long.class), any(), any(Long.class), any(), any(Integer.class), any());
+     }
+ 
+     @Test
+-    void websocketTokenRequiresCurrentLoginVersion() {
+-        wsProperties.setEnabled(true);
+-        when(tokenVersionStore.currentVersion(10001L)).thenReturn(null);
++    void commitsEpochThenClosesLocalWsThenProcessesOrders() {
++        when(authStateClient.logout(new InternalLogoutRequest(7L, 9L)))
++                .thenReturn(ResponseVo.success(new InternalLogoutResponse(7L, 10L)));
++        when(passengerOrderService.cancelInFlightOrdersOnPassengerLogout(7L))
++                .thenReturn(new PassengerLogoutResult());
+ 
+-        BizErrorException error = assertThrows(BizErrorException.class,
+-                () -> service.issueWsToken(10001L));
++        PassengerLogoutResult result = service.logout(7L, 9L);
++
++        assertThat(result.isLoggedOut()).isTrue();
++        assertThat(result.isOrderCleanupPending()).isFalse();
++        InOrder order = inOrder(authStateClient, sessions, passengerOrderService);
++        order.verify(authStateClient).logout(new InternalLogoutRequest(7L, 9L));
++        order.verify(sessions).closeCustomerSessions(7L, "logout");
++        order.verify(passengerOrderService).cancelInFlightOrdersOnPassengerLogout(7L);
++    }
++
++    @Test
++    void staleLogoutDoesNotCloseTheNewSessionOrTouchOrders() {
++        when(authStateClient.logout(new InternalLogoutRequest(7L, 9L)))
++                .thenReturn(new ResponseVo<>(409, "认证状态已变化，请刷新后重试"));
++
++        BizErrorException error = assertThrows(BizErrorException.class, () -> service.logout(7L, 9L));
++
++        assertThat(error.getErrorCode()).isEqualTo(409);
++        verify(sessions, never()).closeCustomerSessions(any(Long.class), any());
++        verify(passengerOrderService, never()).cancelInFlightOrdersOnPassengerLogout(any(Long.class));
++    }
+ 
+-        assertThat(error.getErrorCode()).isEqualTo(401);
+-        verify(jwtService, never()).createPassengerToken(any(Long.class), any(), any(Long.class), any(Integer.class));
++    @Test
++    void coreFeignConflictBecomesDedicatedStaleLogoutExceptionBeforeSideEffects() {
++        FeignException conflict = mock(FeignException.class);
++        when(conflict.status()).thenReturn(409);
++        when(authStateClient.logout(new InternalLogoutRequest(7L, 9L))).thenThrow(conflict);
++
++        assertThrows(StalePassengerLogoutException.class, () -> service.logout(7L, 9L));
++
++        verify(sessions, never()).closeCustomerSessions(any(Long.class), any());
++        verify(passengerOrderService, never()).cancelInFlightOrdersOnPassengerLogout(any(Long.class));
++    }
++
++    @Test
++    void orderFailureDoesNotAttemptToRestoreEpoch() {
++        when(authStateClient.logout(new InternalLogoutRequest(7L, 9L)))
++                .thenReturn(ResponseVo.success(new InternalLogoutResponse(7L, 10L)));
++        when(passengerOrderService.cancelInFlightOrdersOnPassengerLogout(7L))
++                .thenThrow(new BizErrorException(502, "order unavailable"));
++
++        PassengerLogoutResult result = service.logout(7L, 9L);
++
++        assertThat(result.isLoggedOut()).isTrue();
++        assertThat(result.isOrderCleanupPending()).isTrue();
++        verify(authStateClient, times(1)).logout(any());
++        verifyNoMoreInteractions(authStateClient);
++    }
++
++    @Test
++    void explicitOrderCleanupFailureRemainsPendingAfterEpochWasCommitted() {
++        when(authStateClient.logout(new InternalLogoutRequest(7L, 9L)))
++                .thenReturn(ResponseVo.success(new InternalLogoutResponse(7L, 10L)));
++        PassengerLogoutResult cleanup = new PassengerLogoutResult();
++        cleanup.setOrderCleanupPending(true);
++        cleanup.setHint("部分订单处理需重试");
++        when(passengerOrderService.cancelInFlightOrdersOnPassengerLogout(7L)).thenReturn(cleanup);
++
++        PassengerLogoutResult result = service.logout(7L, 9L);
++
++        assertThat(result.isLoggedOut()).isTrue();
++        assertThat(result.isOrderCleanupPending()).isTrue();
++        verify(authStateClient, times(1)).logout(any());
++        verifyNoMoreInteractions(authStateClient);
++    }
++
++    private static AppAuthCustomerBrief brief(long id,
++                                               String phone,
++                                               long authEpoch,
++                                               String scope,
++                                               String operationNo) {
++        AppAuthCustomerBrief customer = new AppAuthCustomerBrief();
++        customer.setId(id);
++        customer.setPhone(phone);
++        customer.setNickname("乘客");
++        customer.setAuthEpoch(authEpoch);
++        customer.setScope(scope);
++        customer.setOperationNo(operationNo);
++        return customer;
+     }
+ }
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerOrderServiceCancelIdempotencyTest.java b/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerOrderServiceCancelIdempotencyTest.java
+index addec7b..ac65713 100644
+--- a/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerOrderServiceCancelIdempotencyTest.java
++++ b/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerOrderServiceCancelIdempotencyTest.java
+@@ -57,11 +57,48 @@ class PassengerOrderServiceCancelIdempotencyTest {
+         when(orderClient.cancel(eq("O2"),
+                 argThat(key -> key != null && key.startsWith("passenger-logout-cancel:")), any()))
+                 .thenReturn(ResponseVo.success(new OrderActionResult(false)));
+ 
+         var result = service.cancelInFlightOrdersOnPassengerLogout(10001L);
+ 
+         assertThat(result.getHint()).contains("已为您取消");
+         verify(orderClient).cancel(eq("O2"),
+                 argThat(key -> key != null && key.startsWith("passenger-logout-cancel:")), any());
+     }
++
++    @Test
++    void logoutOrderQueryFailureIsReportedAsPendingCleanup() {
++        when(orderClient.pageOrders(10001L, 1, 100))
++                .thenReturn(new ResponseVo<>(502, "order unavailable"));
++
++        var result = service.cancelInFlightOrdersOnPassengerLogout(10001L);
++
++        assertThat(result.isOrderCleanupPending()).isTrue();
++    }
++
++    @Test
++    void anyLogoutCancelFailureIsReportedAsPendingCleanup() {
++        TripOrderRow failed = order("O-FAILED");
++        TripOrderRow completed = order("O-COMPLETED");
++        OrderPageData page = new OrderPageData();
++        page.setList(List.of(failed, completed));
++        page.setTotal(2);
++        when(orderClient.pageOrders(10001L, 1, 100)).thenReturn(ResponseVo.success(page));
++        when(orderClient.cancel(eq("O-FAILED"), any(), any()))
++                .thenReturn(new ResponseVo<>(502, "order unavailable"));
++        when(orderClient.cancel(eq("O-COMPLETED"), any(), any()))
++                .thenReturn(ResponseVo.success(new OrderActionResult(false)));
++
++        var result = service.cancelInFlightOrdersOnPassengerLogout(10001L);
++
++        assertThat(result.isOrderCleanupPending()).isTrue();
++        verify(orderClient).cancel(eq("O-COMPLETED"), any(), any());
++    }
++
++    private static TripOrderRow order(String orderNo) {
++        TripOrderRow row = new TripOrderRow();
++        row.setOrderNo(orderNo);
++        row.setPassengerId(10001L);
++        row.setStatus(0);
++        return row;
++    }
+ }
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerSettingsServiceTest.java b/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerSettingsServiceTest.java
+index 2569df2..9d633b2 100644
+--- a/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerSettingsServiceTest.java
++++ b/passenger-api/src/test/java/com/sx/passengerapi/service/PassengerSettingsServiceTest.java
+@@ -1,58 +1,75 @@
+ package com.sx.passengerapi.service;
+ 
+-import com.sx.passengerapi.auth.PassengerTokenVersionStore;
+ import com.sx.passengerapi.client.CalculateClient;
+ import com.sx.passengerapi.client.OrderClient;
+ import com.sx.passengerapi.client.PassengerCoreSettingsClient;
+ import com.sx.passengerapi.client.dto.AppAccountCancelResult;
++import com.sx.passengerapi.client.dto.AppPhoneChangeResult;
+ import com.sx.passengerapi.common.vo.ResponseVo;
+ import com.sx.passengerapi.model.ordercore.OrderPageData;
+ import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
+ import com.sx.passengerapi.model.settings.AccountCancelConfirmRequest;
+ import com.sx.passengerapi.model.settings.AccountCancelResultVO;
++import com.sx.passengerapi.model.settings.PhoneChangeConfirmRequest;
++import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
+ import org.junit.jupiter.api.Test;
+ 
+ import java.util.Collections;
+ 
+ import static org.assertj.core.api.Assertions.assertThat;
+ import static org.mockito.ArgumentMatchers.any;
+ import static org.mockito.ArgumentMatchers.eq;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoInteractions;
+ import static org.mockito.Mockito.when;
+ 
+ class PassengerSettingsServiceTest {
+     private final PassengerCoreSettingsClient passengerCoreSettingsClient = mock(PassengerCoreSettingsClient.class);
+     private final OrderClient orderClient = mock(OrderClient.class);
+     private final CalculateClient calculateClient = mock(CalculateClient.class);
+-    private final PassengerTokenVersionStore tokenVersionStore = mock(PassengerTokenVersionStore.class);
++    private final PassengerWsSessionRegistry sessions = mock(PassengerWsSessionRegistry.class);
+     private final PassengerSettingsService service = new PassengerSettingsService(
+-            passengerCoreSettingsClient, orderClient, calculateClient, tokenVersionStore);
++            passengerCoreSettingsClient, orderClient, calculateClient, sessions);
++
++    @Test
++    void successfulPhoneChangeClosesOldWsWithoutStartingSaga() {
++        AppPhoneChangeResult changed = new AppPhoneChangeResult();
++        changed.setChanged(true);
++        changed.setRequireLogin(true);
++        changed.setMaskedNewPhone("****8000");
++        when(passengerCoreSettingsClient.confirmPhoneChange(any())).thenReturn(ResponseVo.success(changed));
++
++        service.confirmPhoneChange(10001L, phoneChangeRequest());
++
++        verify(sessions).closeCustomerSessions(10001L, "phone_changed");
++        verifyNoInteractions(orderClient, calculateClient);
++    }
+ 
+     @Test
+     void confirmAccountCancelKeepsCancellationSuccessfulWhenBenefitCleanupFails() {
+         when(orderClient.pageOrders(eq(10001L), eq(1), eq(100))).thenReturn(ResponseVo.success(emptyOrderPage()));
+         UnsettledOrderCheckResult unsettled = new UnsettledOrderCheckResult();
+         unsettled.setExists(false);
+         when(orderClient.unsettledExists(10001L)).thenReturn(ResponseVo.success(unsettled));
+         when(calculateClient.lockedCouponsExists(10001L)).thenReturn(ResponseVo.success(false));
+         when(passengerCoreSettingsClient.confirmAccountCancel(any())).thenReturn(ResponseVo.success(cancelledResult()));
+         when(calculateClient.invalidateCouponsByPassenger(any())).thenReturn(ResponseVo.success(0));
+         when(calculateClient.clearBenefitPointsByAccountCancel(any()))
+                 .thenReturn(new ResponseVo<>(502, "福利积分服务暂时不可用"));
+ 
+         AccountCancelResultVO result = service.confirmAccountCancel(10001L, cancelRequest());
+ 
+         assertThat(result.getCancelled()).isTrue();
+         assertThat(result.getRequireLogin()).isTrue();
+-        verify(tokenVersionStore).nextVersion(10001L);
++        verify(sessions).closeCustomerSessions(10001L, "account_cancelled");
+     }
+ 
+     private static OrderPageData emptyOrderPage() {
+         OrderPageData data = new OrderPageData();
+         data.setTotal(0);
+         data.setPageNo(1);
+         data.setPageSize(100);
+         data.setList(Collections.emptyList());
+         return data;
+     }
+@@ -63,11 +80,18 @@ class PassengerSettingsServiceTest {
+         result.setRequireLogin(true);
+         return result;
+     }
+ 
+     private static AccountCancelConfirmRequest cancelRequest() {
+         AccountCancelConfirmRequest request = new AccountCancelConfirmRequest();
+         request.setCode("123456");
+         request.setConfirm(true);
+         return request;
+     }
++
++    private static PhoneChangeConfirmRequest phoneChangeRequest() {
++        PhoneChangeConfirmRequest request = new PhoneChangeConfirmRequest();
++        request.setNewPhone("13800138000");
++        request.setCode("123456");
++        return request;
++    }
+ }
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerNoticeWebSocketHandlerTest.java b/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerNoticeWebSocketHandlerTest.java
+new file mode 100644
+index 0000000..3595a23
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerNoticeWebSocketHandlerTest.java
+@@ -0,0 +1,60 @@
++package com.sx.passengerapi.ws;
++
++import org.junit.jupiter.api.Test;
++import org.springframework.web.socket.CloseStatus;
++import org.springframework.web.socket.WebSocketSession;
++
++import java.util.HashMap;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatCode;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++class PassengerNoticeWebSocketHandlerTest {
++
++    @Test
++    void connectionEstablishedAfterLogoutIsRejectedByCapturedGeneration() throws Exception {
++        PassengerWsSessionRegistry registry = new PassengerWsSessionRegistry();
++        var permit = registry.captureRegistration(7L);
++        registry.closeCustomerSessions(7L, "logout");
++        WebSocketSession session = session("late-session", permit);
++        PassengerNoticeWebSocketHandler handler = new PassengerNoticeWebSocketHandler(
++                registry, new PassengerWsProperties());
++
++        handler.afterConnectionEstablished(session);
++
++        assertThat(registry.get(7L)).isNull();
++        verify(session).close(new CloseStatus(4001, "auth_epoch_changed"));
++        handler.stopWsMaintenance();
++    }
++
++    @Test
++    void closeImmediatelyAfterRegistrationDoesNotCrashConnectionCallback() {
++        PassengerWsSessionRegistry registry = mock(PassengerWsSessionRegistry.class);
++        PassengerWsSessionRegistry.RegistrationPermit permit = mock(
++                PassengerWsSessionRegistry.RegistrationPermit.class);
++        WebSocketSession session = session("racing-session", permit);
++        when(registry.register(permit, session)).thenReturn(true);
++        when(registry.get(7L)).thenReturn(null);
++        PassengerNoticeWebSocketHandler handler = new PassengerNoticeWebSocketHandler(
++                registry, new PassengerWsProperties());
++
++        assertThatCode(() -> handler.afterConnectionEstablished(session)).doesNotThrowAnyException();
++
++        handler.stopWsMaintenance();
++    }
++
++    private static WebSocketSession session(
++            String id, PassengerWsSessionRegistry.RegistrationPermit permit) {
++        WebSocketSession session = mock(WebSocketSession.class);
++        var attributes = new HashMap<String, Object>();
++        attributes.put(PassengerWsHandshakeInterceptor.ATTR_CUSTOMER_ID, 7L);
++        attributes.put(PassengerWsHandshakeInterceptor.ATTR_REGISTRATION_PERMIT, permit);
++        when(session.getAttributes()).thenReturn(attributes);
++        when(session.getId()).thenReturn(id);
++        when(session.isOpen()).thenReturn(true);
++        return session;
++    }
++}
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptorTest.java b/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptorTest.java
+index 49c7109..f8b3a09 100644
+--- a/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptorTest.java
++++ b/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsHandshakeInterceptorTest.java
+@@ -28,44 +28,53 @@ import static org.assertj.core.api.Assertions.assertThat;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.times;
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+ 
+ class PassengerWsHandshakeInterceptorTest {
+ 
+     private final AppJwtService jwtService = mock(AppJwtService.class);
+     private final PassengerCoreAuthStateClient authStateClient = mock(PassengerCoreAuthStateClient.class);
++    private final PassengerWsSessionRegistry registry = mock(PassengerWsSessionRegistry.class);
+     private PassengerWsProperties properties;
+     private PassengerWsHandshakeInterceptor interceptor;
+ 
+     @BeforeEach
+     void setUp() {
+         properties = new PassengerWsProperties();
+         properties.setEnabled(true);
+         interceptor = new PassengerWsHandshakeInterceptor(
+-                properties, jwtService, authStateClient, new PassengerAuthDecisionService());
++                properties, jwtService, authStateClient, new PassengerAuthDecisionService(), registry);
+     }
+ 
+     @Test
+     void activeNormalWsTokenAllowsAfterExactlyOneAuthorityLookup() {
++        PassengerWsSessionRegistry.RegistrationPermit permit = mock(
++                PassengerWsSessionRegistry.RegistrationPermit.class);
+         when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(NORMAL, 2, null));
++        when(registry.captureRegistration(7L)).thenReturn(permit);
+         when(authStateClient.get(7L)).thenReturn(ok(state(
+                 7L, "ACTIVE", 9L, null, "NORMAL", true)));
+         Map<String, Object> attributes = new HashMap<>();
+         MockHttpServletResponse response = new MockHttpServletResponse();
+ 
+         boolean allowed = interceptor.beforeHandshake(
+                 request(), serverResponse(response), mock(WebSocketHandler.class), attributes);
+ 
+         assertThat(allowed).isTrue();
+         assertThat(attributes).containsEntry(PassengerWsHandshakeInterceptor.ATTR_CUSTOMER_ID, 7L);
++        assertThat(attributes).containsEntry(
++                PassengerWsHandshakeInterceptor.ATTR_REGISTRATION_PERMIT, permit);
++        var order = org.mockito.Mockito.inOrder(registry, authStateClient);
++        order.verify(registry).captureRegistration(7L);
++        order.verify(authStateClient).get(7L);
+         verify(authStateClient, times(1)).get(7L);
+     }
+ 
+     @Test
+     void restrictedAuthoritativeTokenIsForbiddenAfterOneLookup() {
+         when(jwtService.parseAndVerify("jwt-value")).thenReturn(token(LIFECYCLE_RESTRICTED, 1, "op-1"));
+         when(authStateClient.get(7L)).thenReturn(ok(state(
+                 7L, "CANCELLING", 9L, "op-1", "LIFECYCLE_RESTRICTED", true)));
+         MockHttpServletResponse response = new MockHttpServletResponse();
+ 
+diff --git a/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsSessionRegistryTest.java b/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsSessionRegistryTest.java
+new file mode 100644
+index 0000000..ff68270
+--- /dev/null
++++ b/passenger-api/src/test/java/com/sx/passengerapi/ws/PassengerWsSessionRegistryTest.java
+@@ -0,0 +1,94 @@
++package com.sx.passengerapi.ws;
++
++import org.junit.jupiter.api.Test;
++import org.springframework.web.socket.CloseStatus;
++import org.springframework.web.socket.WebSocketSession;
++
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++class PassengerWsSessionRegistryTest {
++
++    @Test
++    void registrationCapturedBeforeCloseIsRejectedAfterClose() throws Exception {
++        PassengerWsSessionRegistry registry = new PassengerWsSessionRegistry();
++        var permit = registry.captureRegistration(7L);
++        WebSocketSession late = openSession("late-session");
++
++        registry.closeCustomerSessions(7L, "logout");
++        boolean accepted = registry.register(permit, late);
++
++        assertThat(accepted).isFalse();
++        assertThat(registry.get(7L)).isNull();
++        assertThat(registry.getBySessionId("late-session")).isNull();
++        verify(late).close(new CloseStatus(4001, "auth_epoch_changed"));
++    }
++
++    @Test
++    void registrationCompletedBeforeCloseIsRemovedAndClosed() throws Exception {
++        PassengerWsSessionRegistry registry = new PassengerWsSessionRegistry();
++        WebSocketSession session = openSession("session-1");
++        assertThat(registry.register(registry.captureRegistration(7L), session)).isTrue();
++
++        registry.closeCustomerSessions(7L, "logout");
++
++        assertThat(registry.get(7L)).isNull();
++        assertThat(registry.getBySessionId("session-1")).isNull();
++        verify(session).close(new CloseStatus(4001, "logout"));
++    }
++
++    @Test
++    void concurrentDoubleRegistrationLeavesOnlyWinnerAndNoReverseMappingForLoser() throws Exception {
++        PassengerWsSessionRegistry registry = new PassengerWsSessionRegistry();
++        var firstPermit = registry.captureRegistration(7L);
++        var secondPermit = registry.captureRegistration(7L);
++        WebSocketSession first = openSession("session-1");
++        WebSocketSession second = openSession("session-2");
++        CountDownLatch start = new CountDownLatch(1);
++        try (var executor = Executors.newFixedThreadPool(2)) {
++            Future<Boolean> firstResult = executor.submit(() -> {
++                start.await();
++                return registry.register(firstPermit, first);
++            });
++            Future<Boolean> secondResult = executor.submit(() -> {
++                start.await();
++                return registry.register(secondPermit, second);
++            });
++            start.countDown();
++            assertThat(firstResult.get()).isTrue();
++            assertThat(secondResult.get()).isTrue();
++        }
++
++        PassengerWsSessionRegistry.PassengerSession current = registry.get(7L);
++        assertThat(current).isNotNull();
++        WebSocketSession winner = current.getSession();
++        WebSocketSession loser = winner == first ? second : first;
++        assertThat(registry.getBySessionId(winner.getId())).isSameAs(current);
++        assertThat(registry.getBySessionId(loser.getId())).isNull();
++        verify(loser).close(new CloseStatus(4000, "replaced"));
++    }
++
++    @Test
++    void unknownOrSensitiveReasonIsSanitized() throws Exception {
++        PassengerWsSessionRegistry registry = new PassengerWsSessionRegistry();
++        WebSocketSession session = openSession("session-2");
++        registry.register(registry.captureRegistration(7L), session);
++
++        registry.closeCustomerSessions(7L, "token=secret phone=13800138000");
++
++        verify(session).close(new CloseStatus(4001, "auth_epoch_changed"));
++    }
++
++    private static WebSocketSession openSession(String id) {
++        WebSocketSession session = mock(WebSocketSession.class);
++        when(session.getId()).thenReturn(id);
++        when(session.isOpen()).thenReturn(true);
++        return session;
++    }
++}

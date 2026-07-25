@@ -5,6 +5,9 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.calculate.dao.CouponTemplateMapper;
 import com.sx.calculate.dao.CouponUseRecordMapper;
 import com.sx.calculate.dao.UserCouponMapper;
+import com.sx.calculate.lifecycle.model.CalculateWriteAction;
+import com.sx.calculate.lifecycle.model.LockedCouponRisk;
+import com.sx.calculate.lifecycle.service.CalculateAccountWriteFence;
 import com.sx.calculate.model.CouponTemplate;
 import com.sx.calculate.model.CouponUseRecord;
 import com.sx.calculate.model.UserCoupon;
@@ -46,13 +49,16 @@ public class CouponService {
     private final CouponTemplateMapper templateMapper;
     private final UserCouponMapper userCouponMapper;
     private final CouponUseRecordMapper recordMapper;
+    private final CalculateAccountWriteFence accountWriteFence;
 
     public CouponService(CouponTemplateMapper templateMapper,
                          UserCouponMapper userCouponMapper,
-                         CouponUseRecordMapper recordMapper) {
+                         CouponUseRecordMapper recordMapper,
+                         CalculateAccountWriteFence accountWriteFence) {
         this.templateMapper = templateMapper;
         this.userCouponMapper = userCouponMapper;
         this.recordMapper = recordMapper;
+        this.accountWriteFence = accountWriteFence;
     }
 
     public CouponPageVO page(Long passengerId, String status, int pageNo, int pageSize) {
@@ -250,6 +256,7 @@ public class CouponService {
 
     @Transactional
     public CouponClaimResult claimAll(Long passengerId, String claimIdentityType, String claimIdentityHash) {
+        accountWriteFence.lockAndRequireActive(passengerId, CalculateWriteAction.COUPON_CLAIM);
         CouponClaimResult result = new CouponClaimResult();
         int claimed = 0;
         int skipped = 0;
@@ -268,6 +275,7 @@ public class CouponService {
     @Transactional
     public CouponClaimResult claimSelected(Long passengerId, List<Long> templateIds,
                                            String claimIdentityType, String claimIdentityHash) {
+        accountWriteFence.lockAndRequireActive(passengerId, CalculateWriteAction.COUPON_CLAIM);
         CouponClaimResult result = new CouponClaimResult();
         if (templateIds == null || templateIds.isEmpty()) {
             return result;
@@ -353,6 +361,32 @@ public class CouponService {
         }
     }
 
+    @Transactional(readOnly = true)
+    public List<LockedCouponRisk> inspectLockedCoupons(Long passengerId) {
+        if (passengerId == null || passengerId <= 0) {
+            throw new IllegalArgumentException("passengerId不能为空");
+        }
+        return userCouponMapper.selectList(Wrappers.<UserCoupon>lambdaQuery()
+                        .eq(UserCoupon::getPassengerId, passengerId)
+                        .eq(UserCoupon::getStatus, LOCKED)
+                        .orderByAsc(UserCoupon::getId)
+                        .last("LIMIT 20"))
+                .stream()
+                .map(coupon -> new LockedCouponRisk(coupon.getId(), coupon.getLockedOrderNo()))
+                .toList();
+    }
+
+    @Transactional
+    public List<LockedCouponRisk> inspectLockedCouponsForUpdate(Long passengerId) {
+        if (passengerId == null || passengerId <= 0) {
+            throw new IllegalArgumentException("passengerId不能为空");
+        }
+        return userCouponMapper.selectLockedForUpdate(passengerId)
+                .stream()
+                .map(coupon -> new LockedCouponRisk(coupon.getId(), coupon.getLockedOrderNo()))
+                .toList();
+    }
+
     @Transactional
     public int invalidateByPassenger(Long passengerId, String reason) {
         assertNoLockedCoupons(passengerId);
@@ -391,6 +425,8 @@ public class CouponService {
             noCoupon.setPayableAmount(scale(request.getFinalAmount()));
             return noCoupon;
         }
+        accountWriteFence.lockAndRequireActive(
+                request.getPassengerId(), CalculateWriteAction.COUPON_LOCK);
         UserCoupon coupon = request.getCouponId() == null
                 ? bestCoupon(request)
                 : userCouponMapper.selectById(request.getCouponId());
@@ -475,6 +511,8 @@ public class CouponService {
 
     @Transactional
     public void use(CouponUseRequest request) {
+        accountWriteFence.lockAndRequireResolvable(
+                request.getPassengerId(), CalculateWriteAction.COUPON_USE);
         UserCoupon coupon = userCouponMapper.selectById(request.getCouponId());
         if (coupon == null || !coupon.getPassengerId().equals(request.getPassengerId())) {
             throw new IllegalArgumentException("优惠券不存在");
@@ -508,6 +546,8 @@ public class CouponService {
 
     @Transactional
     public void release(CouponUseRequest request) {
+        accountWriteFence.lockAndRequireResolvable(
+                request.getPassengerId(), CalculateWriteAction.COUPON_RELEASE);
         UserCoupon coupon = userCouponMapper.selectById(request.getCouponId());
         if (coupon == null || !coupon.getPassengerId().equals(request.getPassengerId())) {
             throw new IllegalArgumentException("优惠券不存在");

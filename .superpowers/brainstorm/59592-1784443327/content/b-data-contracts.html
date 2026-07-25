@@ -1,0 +1,60 @@
+<h2>B 方案 · 持久化模型与参与者契约</h2>
+<p class="subtitle">控制面保存流程事实；业务域保存业务事实。新增业务通过注册参与者接入，而不是修改注销主方法。</p>
+
+<div class="section">
+  <h3>生命周期中心的数据骨架</h3>
+  <div class="table-responsive">
+    <table class="table table-sm">
+      <thead><tr><th>表 / 聚合</th><th>主要职责</th><th>关键唯一约束</th></tr></thead>
+      <tbody>
+        <tr><td><code>customer</code></td><td>lifecycle_status、lifecycle_version、auth_epoch、当前 operation</td><td>customer.id；active phone</td></tr>
+        <tr><td><code>account_lifecycle_operation</code></td><td>一次换号/注销的请求、状态、请求哈希、不可逆标记</td><td>account_id + type + idempotency_key</td></tr>
+        <tr><td><code>account_lifecycle_step</code></td><td>参与者步骤、重试、超时、结果和错误</td><td>operation_id + step_code</td></tr>
+        <tr><td><code>account_lifecycle_blocker</code></td><td>结构化阻断项、资源、解决动作和解除状态</td><td>operation_id + domain + blocker_key</td></tr>
+        <tr><td><code>account_lifecycle_event</code></td><td>状态迁移与人工操作审计</td><td>event_id</td></tr>
+        <tr><td><code>account_lifecycle_outbox</code></td><td>可靠发布命令/事件</td><td>event_id</td></tr>
+        <tr><td><code>customer_phone_binding_history</code></td><td>手机号绑定版本、起止时间、变更原因和历史身份哈希</td><td>customer_id + binding_version</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">通信分层</div>
+    <div class="mockup-body">
+      <div class="mock-content"><strong>同步 Check</strong>：生命周期中心 → 各领域只读检查端口 → 结构化 blockers</div>
+      <div class="mock-content"><strong>异步 Command</strong>：本地 Outbox → Kafka command → 目标领域幂等执行</div>
+      <div class="mock-content"><strong>异步 Result</strong>：领域本地事务提交副作用 + Inbox → Kafka result → 中心推进 Step</div>
+      <div class="mock-content"><strong>恢复扫描</strong>：XXL-Job 扫 RETRY_PENDING / 超时 Step，重新投递同一 operationId + stepCode</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>参与者只实现统一语义</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+      <div class="mock-nav">check(context) → PASS / BLOCKED(blockers[])</div>
+      <div class="mock-content">plan(context) → LifecycleStepDefinition[]</div>
+      <div class="mock-content">execute(operationId, stepCode, accountId, lifecycleVersion) → SUCCEEDED / RETRYABLE / MANUAL</div>
+      <div class="mock-content">query(operationId, stepCode) → 用于“响应丢失、成功未知”的主动对账</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>当前与未来的注册项</h3>
+  <div class="table-responsive">
+    <table class="table table-sm">
+      <thead><tr><th>Domain</th><th>Check</th><th>Required action</th><th>未来自然扩展</th></tr></thead>
+      <tbody>
+        <tr><td>ORDER</td><td>在途、未结算、人工处理</td><td>无强制删单；保留账本</td><td>退款、发票、收入冲正</td></tr>
+        <tr><td>WALLET</td><td>支付中、回调中、渠道争议</td><td>关闭免密与渠道授权</td><td>银行卡、余额、拒付、对账</td></tr>
+        <tr><td>CALCULATE</td><td>锁券、积分处理中</td><td>作废未使用券、积分清零</td><td>积分商城、礼品卡、退券</td></tr>
+        <tr><td>IDENTITY</td><td>实名/OAuth/申诉状态</td><td>撤销绑定、按策略匿名化</td><td>人脸、邮箱、多登录标识</td></tr>
+        <tr><td>SESSION</td><td>无</td><td>authEpoch、HTTP/WS 会话撤销</td><td>设备会话、Push token</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
