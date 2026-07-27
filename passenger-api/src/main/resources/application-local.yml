@@ -1,16 +1,10 @@
-app:
-  jwt:
-    secret: ${JWT_SECRET_APP:dev-didi-app-jwt-secret-change-me-32b!!}
-
-passenger:
-  internal-auth:
-    token: ${PASSENGER_INTERNAL_TOKEN:dev-passenger-internal-change-me}
-
-order:
-  lifecycle:
-    internal-auth:
-      token: ${ORDER_LIFECYCLE_INTERNAL_TOKEN:dev-order-lifecycle-change-me}
-
-coupon:
-  claim-identity:
-    phone-hash-secret: ${COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET:dev-coupon-claim-secret-change-me}
+spring:
+  config:
+    import:
+      - nacos:passenger-api-local.yml?group=DIDI_TAXI&refreshEnabled=false
+  nacos:
+    config:
+      server-addr: "${NACOS_SERVER_ADDR:127.0.0.1:8848}"
+      namespace: "${NACOS_NAMESPACE}"
+      username: "${NACOS_USERNAME:nacos}"
+      password: "${NACOS_PASSWORD}"
