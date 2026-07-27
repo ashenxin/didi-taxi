@@ -1,4 +1,29 @@
-# capacity-service Nacos 本地配置运行手册
+# 业务服务 Nacos 本地配置运行手册（以 capacity-service 为例）
+
+## 适用范围
+
+除明确保留本地 `application.properties` 的 `xxl-job-admin` 外，项目中的所有业务
+服务都采用与 `capacity-service` 相同的 Nacos 本地配置模式：使用 `local`
+Namespace、`DIDI_TAXI` Group、单个必选 YAML Data ID，关闭热刷新，并在远程
+配置缺失或加载标记不为 `true` 时终止启动。
+
+已接入的配置如下：
+
+| 模块 | Data ID |
+| --- | --- |
+| `capacity` | `capacity-service-local.yml` |
+| `calculate` | `calculate-service-local.yml` |
+| `passenger` | `passenger-service-local.yml` |
+| `order` | `order-service-local.yml` |
+| `wallet` | `wallet-service-local.yml` |
+| `map` | `map-service-local.yml` |
+| `admin-api` | `admin-api-local.yml` |
+| `passenger-api` | `passenger-api-local.yml` |
+| `driver-api` | `driver-api-local.yml` |
+| `gateway` | `gateway-local.yml` |
+
+下文使用 `capacity-service` 演示操作。其他业务服务只需替换 Data ID、加载标记、
+Maven 模块名、启动类、端口和服务专属验证接口，其余流程相同。
 
 ## 配置身份
 
