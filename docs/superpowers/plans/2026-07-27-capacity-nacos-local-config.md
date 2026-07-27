@@ -1,69 +1,69 @@
-# Capacity Nacos Local Config Implementation Plan
+# 运力服务 Nacos 本地配置实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **供执行代理使用：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 子技能，逐任务执行本计划。各步骤使用复选框（`- [ ]`）跟踪进度。
 
-**Goal:** Move the complete effective local configuration of `capacity-service`, including its business secrets, into the `didi-taxi-local` Nacos namespace without enabling service discovery.
+**目标：** 在不启用服务发现的前提下，将 `capacity-service` 在本地环境实际生效的完整配置（包括业务秘密值）迁移到 Nacos 的 `didi-taxi-local` 命名空间。
 
-**Architecture:** Keep application identity and the Nacos Config Data bootstrap in local classpath files, while loading one mandatory YAML Data ID from Nacos. Keep tests isolated by placing the Nacos import only in `application-local.yml`; publish a flattened local configuration to Nacos and require restart for changes.
+**架构：** 应用身份和 Nacos Config Data 引导配置保留在本地 classpath 文件中，运行配置从 Nacos 的一个必选 YAML Data ID 加载。Nacos 导入声明只放在 `application-local.yml`，使测试环境保持隔离；发布到 Nacos 的是扁平化后的本地有效配置，配置变更后通过重启服务生效。
 
-**Tech Stack:** Java 21, Spring Boot 3.3.5, Spring Cloud 2023.0.5, Spring Alibaba Nacos Config 2023.0.3.3, Nacos Server 3.2.3, Maven, JUnit 5, SnakeYAML.
+**技术栈：** Java 21、Spring Boot 3.3.5、Spring Cloud 2023.0.5、Spring Alibaba Nacos Config 2023.0.3.3、Nacos Server 3.2.3、Maven、JUnit 5、SnakeYAML。
 
-## Global Constraints
+## 全局约束
 
-- Only `capacity-service` is in scope.
-- Create only the `didi-taxi-local` Nacos namespace.
-- Use Group `DIDI_TAXI` and Data ID `capacity-service-local.yml`.
-- Use the generated namespace ID, not the display name, in client configuration.
-- Use `spring.config.import`; do not create `bootstrap.yml`.
-- Use mandatory `nacos:` import with `refreshEnabled=false`; do not use `optional:nacos:`.
-- Do not add Nacos Discovery or change any fixed HTTP service URL.
-- Keep `spring.application.name=capacity-service` in local `application.yml`.
-- Put business secrets in Nacos, but pass Nacos's own username and password through `NACOS_USERNAME` and `NACOS_PASSWORD`.
-- Do not commit secret values, generated namespace IDs, access tokens, or temporary Nacos payload files.
-- Tests must use the `test` profile and must not contact Nacos.
-- Do not change Spring Boot, Spring Cloud, database, Redis, Kafka, or XXL-JOB versions.
-- Preserve the unrelated untracked file `passenger-api/src/main/java/com/sx/passengerapi/service/PassengerSettingsService 2.java`.
-
----
-
-## File Map
-
-- Modify `capacity/pom.xml`: add the standalone Nacos Config dependency.
-- Modify `capacity/src/main/resources/application.yml`: reduce it to application identity.
-- Create `capacity/src/main/resources/application-local.yml`: contain only Nacos bootstrap and import properties.
-- Create `capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`: enforce the local/remote configuration boundary without contacting Nacos.
-- Create `docs/runbooks/capacity-service-Nacos本地配置运行手册.md`: document namespace, publication, startup, verification, failure behavior, and rollback.
-- External Nacos state: create namespace `didi-taxi-local` and publish `DIDI_TAXI/capacity-service-local.yml`; this is deliberately not represented by a secret-bearing repository file.
-
-## Interfaces
-
-- Local profile consumes:
-  - `NACOS_SERVER_ADDR`, default `127.0.0.1:8848`
-  - `NACOS_NAMESPACE`, required namespace ID
-  - `NACOS_USERNAME`, default `nacos`
-  - `NACOS_PASSWORD`, required password
-- Nacos Config Data produces the same Spring property keys currently supplied by `capacity/src/main/resources/application.yml`.
-- Nacos resource identity:
-  - Namespace display name: `didi-taxi-local`
-  - Group: `DIDI_TAXI`
-  - Data ID: `capacity-service-local.yml`
-  - Type: YAML
-  - Refresh: disabled
+- 本次范围仅包括 `capacity-service`。
+- 只创建 Nacos 命名空间 `didi-taxi-local`。
+- 使用 Group `DIDI_TAXI` 和 Data ID `capacity-service-local.yml`。
+- 客户端配置必须使用生成的 namespace ID，不能使用显示名称。
+- 使用 `spring.config.import`，不创建 `bootstrap.yml`。
+- 使用必选的 `nacos:` 导入并设置 `refreshEnabled=false`，不使用 `optional:nacos:`。
+- 不添加 Nacos Discovery，不修改任何固定 HTTP 服务地址。
+- 在本地 `application.yml` 中保留 `spring.application.name=capacity-service`。
+- 业务秘密值存入 Nacos；Nacos 自身的用户名和密码仍通过 `NACOS_USERNAME`、`NACOS_PASSWORD` 传入。
+- 不提交秘密值、生成的 namespace ID、访问令牌或临时 Nacos 配置载荷文件。
+- 测试必须使用 `test` profile，并且不得连接 Nacos。
+- 不修改 Spring Boot、Spring Cloud、数据库、Redis、Kafka 或 XXL-JOB 的版本。
+- 保留无关的未跟踪文件 `passenger-api/src/main/java/com/sx/passengerapi/service/PassengerSettingsService 2.java`。
 
 ---
 
-### Task 1: Lock the classpath configuration boundary with a failing test
+## 文件地图
 
-**Files:**
-- Create: `capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`
-- Read: `capacity/src/main/resources/application.yml`
-- Expected missing file before implementation: `capacity/src/main/resources/application-local.yml`
+- 修改 `capacity/pom.xml`：添加独立的 Nacos Config 依赖。
+- 修改 `capacity/src/main/resources/application.yml`：精简为只包含应用身份。
+- 创建 `capacity/src/main/resources/application-local.yml`：只包含 Nacos 引导和导入配置。
+- 创建 `capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`：在不连接 Nacos 的情况下约束本地与远程配置边界。
+- 创建 `docs/runbooks/capacity-service-Nacos本地配置运行手册.md`：记录命名空间、配置发布、启动、验证、故障行为和回滚方式。
+- Nacos 外部状态：创建命名空间 `didi-taxi-local` 并发布 `DIDI_TAXI/capacity-service-local.yml`；仓库中不创建包含秘密值的对应载荷文件。
 
-**Interfaces:**
-- Consumes: the classpath resource names `application.yml` and `application-local.yml`.
-- Produces: an executable contract that the base profile is Nacos-free and the local profile imports exactly one mandatory Data ID.
+## 接口约定
 
-- [ ] **Step 1: Create the boundary test**
+- `local` profile 使用：
+  - `NACOS_SERVER_ADDR`，默认值为 `127.0.0.1:8848`
+  - `NACOS_NAMESPACE`，必填的 namespace ID
+  - `NACOS_USERNAME`，默认值为 `nacos`
+  - `NACOS_PASSWORD`，必填密码
+- Nacos Config Data 提供与当前 `capacity/src/main/resources/application.yml` 相同的 Spring 属性键。
+- Nacos 资源标识：
+  - Namespace 显示名称：`didi-taxi-local`
+  - Group：`DIDI_TAXI`
+  - Data ID：`capacity-service-local.yml`
+  - 类型：YAML
+  - 刷新：关闭
+
+---
+
+### 任务 1：用失败测试锁定 classpath 配置边界
+
+**文件：**
+- 创建：`capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`
+- 读取：`capacity/src/main/resources/application.yml`
+- 实施前预期不存在：`capacity/src/main/resources/application-local.yml`
+
+**接口约定：**
+- 输入：classpath 资源 `application.yml` 和 `application-local.yml`。
+- 输出：一个可执行契约，保证基础 profile 不依赖 Nacos，且 local profile 只导入一个必选 Data ID。
+
+- [ ] **步骤 1：创建边界测试**
 
 ```java
 package com.sx.capacity.config;
@@ -131,37 +131,37 @@ class NacosLocalConfigBoundaryTest {
 }
 ```
 
-- [ ] **Step 2: Run the new test and verify the expected failure**
+- [ ] **步骤 2：运行新测试并确认按预期失败**
 
-Run:
+执行：
 
 ```bash
 mvn -pl capacity -Dtest=NacosLocalConfigBoundaryTest test
 ```
 
-Expected: FAIL because the current `application.yml` contains runtime configuration and `application-local.yml` does not yet exist.
+预期：FAIL，因为当前 `application.yml` 仍包含运行配置，并且 `application-local.yml` 尚不存在。
 
-- [ ] **Step 3: Confirm the failure is structural rather than a Nacos network attempt**
+- [ ] **步骤 3：确认失败源于文件结构，而不是尝试连接 Nacos**
 
-Inspect the test output. It must fail on an assertion or `application-local.yml must exist`; it must not contain a connection attempt to `127.0.0.1:8848`.
+检查测试输出。测试必须因断言或 `application-local.yml must exist` 失败，输出中不得出现连接 `127.0.0.1:8848` 的尝试。
 
 ---
 
-### Task 2: Add the Nacos client and minimal local bootstrap
+### 任务 2：添加 Nacos 客户端和最小本地引导配置
 
-**Files:**
-- Modify: `capacity/pom.xml`
-- Modify: `capacity/src/main/resources/application.yml`
-- Create: `capacity/src/main/resources/application-local.yml`
-- Test: `capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`
+**文件：**
+- 修改：`capacity/pom.xml`
+- 修改：`capacity/src/main/resources/application.yml`
+- 创建：`capacity/src/main/resources/application-local.yml`
+- 测试：`capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`
 
-**Interfaces:**
-- Consumes: environment variables defined in the global interfaces section.
-- Produces: a `local` profile that requests `DIDI_TAXI/capacity-service-local.yml` from the selected namespace.
+**接口约定：**
+- 输入：全局接口约定中定义的环境变量。
+- 输出：从选定命名空间请求 `DIDI_TAXI/capacity-service-local.yml` 的 `local` profile。
 
-- [ ] **Step 1: Add the standalone Nacos Config dependency**
+- [ ] **步骤 1：添加独立的 Nacos Config 依赖**
 
-Add this dependency inside `capacity/pom.xml`'s `<dependencies>`:
+在 `capacity/pom.xml` 的 `<dependencies>` 中添加：
 
 ```xml
 <dependency>
@@ -171,11 +171,11 @@ Add this dependency inside `capacity/pom.xml`'s `<dependencies>`:
 </dependency>
 ```
 
-Do not add `spring-cloud-starter-alibaba-nacos-discovery`, `spring-cloud-starter-bootstrap`, or a Spring Cloud Alibaba BOM.
+不要添加 `spring-cloud-starter-alibaba-nacos-discovery`、`spring-cloud-starter-bootstrap` 或 Spring Cloud Alibaba BOM。
 
-- [ ] **Step 2: Replace the main application configuration with application identity**
+- [ ] **步骤 2：将主应用配置精简为应用身份**
 
-Make `capacity/src/main/resources/application.yml` exactly:
+将 `capacity/src/main/resources/application.yml` 精确改为：
 
 ```yaml
 spring:
@@ -183,11 +183,11 @@ spring:
     name: capacity-service
 ```
 
-Keep the pre-change file visible in Git history and the current diff until the Nacos payload has been published; do not create a secret-bearing backup file.
+在 Nacos 配置发布完成前，通过 Git 历史和当前差异保留修改前内容；不要创建包含秘密值的备份文件。
 
-- [ ] **Step 3: Create the local Nacos bootstrap**
+- [ ] **步骤 3：创建本地 Nacos 引导配置**
 
-Create `capacity/src/main/resources/application-local.yml`:
+创建 `capacity/src/main/resources/application-local.yml`：
 
 ```yaml
 spring:
@@ -202,49 +202,49 @@ spring:
       password: "${NACOS_PASSWORD}"
 ```
 
-- [ ] **Step 4: Run the boundary test**
+- [ ] **步骤 4：运行边界测试**
 
-Run:
+执行：
 
 ```bash
 mvn -pl capacity -Dtest=NacosLocalConfigBoundaryTest test
 ```
 
-Expected: PASS, with no Nacos connection attempt.
+预期：PASS，且没有连接 Nacos 的尝试。
 
-- [ ] **Step 5: Inspect dependency convergence**
+- [ ] **步骤 5：检查依赖收敛情况**
 
-Run:
+执行：
 
 ```bash
 mvn -pl capacity dependency:tree '-Dincludes=com.alibaba.cloud:*,com.alibaba.nacos:*'
 ```
 
-Expected:
+预期：
 
-- `com.alibaba.cloud:spring-alibaba-nacos-config:2023.0.3.3` is present.
-- A single Nacos client line is selected by Maven.
-- No discovery starter is present.
+- 存在 `com.alibaba.cloud:spring-alibaba-nacos-config:2023.0.3.3`。
+- Maven 只选择了一个 Nacos Client 版本。
+- 不存在 discovery starter。
 
-Then run:
+然后执行：
 
 ```bash
 mvn -pl capacity dependency:tree -Dverbose
 ```
 
-Inspect Spring Boot, Spring Framework, and Spring Cloud lines. If the new dependency selects older replacements for the parent-managed versions, stop and do not add selective overrides.
+检查 Spring Boot、Spring Framework 和 Spring Cloud 相关依赖。如果新依赖使 Maven 选择了比父 POM 管理版本更旧的替代版本，立即停止，不要通过局部版本覆盖规避。
 
-- [ ] **Step 6: Run all capacity tests**
+- [ ] **步骤 6：运行 capacity 模块的全部测试**
 
-Run:
+执行：
 
 ```bash
 mvn -pl capacity test
 ```
 
-Expected: BUILD SUCCESS; logs must not show a Nacos connection attempt.
+预期：BUILD SUCCESS；日志中不得出现连接 Nacos 的尝试。
 
-- [ ] **Step 7: Commit the client boundary**
+- [ ] **步骤 7：提交客户端配置边界**
 
 ```bash
 git add capacity/pom.xml \
@@ -256,61 +256,61 @@ git commit -m "功能：接入运力服务 Nacos 本地配置入口"
 
 ---
 
-### Task 3: Create the local namespace and publish the complete capacity configuration
+### 任务 3：创建本地命名空间并发布完整运力配置
 
-**Files:**
-- Read from Git parent revision: `capacity/src/main/resources/application.yml`
-- External write: Nacos namespace and configuration
-- Do not create a repository payload file.
+**文件：**
+- 从 Git 历史版本读取：`capacity/src/main/resources/application.yml`
+- 外部写入：Nacos 命名空间和配置
+- 不创建仓库内的配置载荷文件。
 
-**Interfaces:**
-- Consumes: the exact pre-migration base and local profile documents from `capacity/src/main/resources/application.yml`.
-- Produces: Nacos namespace ID and the configuration source `didi-taxi-local / DIDI_TAXI / capacity-service-local.yml`.
+**接口约定：**
+- 输入：迁移前 `capacity/src/main/resources/application.yml` 中精确的基础文档和 local profile 文档。
+- 输出：Nacos namespace ID，以及配置源 `didi-taxi-local / DIDI_TAXI / capacity-service-local.yml`。
 
-- [ ] **Step 1: Open the Nacos 3 console**
+- [ ] **步骤 1：打开 Nacos 3 控制台**
 
-Open:
+打开：
 
 ```text
 http://127.0.0.1:8080
 ```
 
-Log in as `nacos` with the administrator password initialized during installation.
+使用用户名 `nacos` 和安装时初始化的管理员密码登录。
 
-- [ ] **Step 2: Create the namespace**
+- [ ] **步骤 2：创建命名空间**
 
-In Namespace Management, create:
+在命名空间管理中创建：
 
 ```text
 Namespace name: didi-taxi-local
 Description: didi-taxi 本地开发配置
 ```
 
-Read the generated namespace ID from the console into the current zsh session only:
+从控制台读取生成的 namespace ID，只输入当前 zsh 会话：
 
 ```bash
 read -r "NACOS_NAMESPACE?Nacos namespace ID: "
 export NACOS_NAMESPACE
 ```
 
-Enter the runtime ID returned by Nacos. Do not write it into Git-tracked files.
+输入 Nacos 返回的实际 ID，不要把它写入 Git 跟踪文件。
 
-- [ ] **Step 3: Build the remote YAML from the pre-migration source**
+- [ ] **步骤 3：根据迁移前配置构建远程 YAML**
 
-Read the source from the parent revision without restoring it:
+在不恢复文件的情况下，从已确认设计的提交中读取原配置：
 
 ```bash
 git show ad59237:capacity/src/main/resources/application.yml
 ```
 
-Construct the Nacos document with these exact transformation rules:
+严格按照以下规则构建 Nacos 文档：
 
-1. Start with the first YAML document from the old file.
-2. Remove `spring.application.name`.
-3. Remove the commented Nacos discovery block.
-4. Preserve `server`, datasource, Redis, Kafka, logging, MyBatis, service URL, capacity, and XXL-JOB keys and their current scalar values.
-5. Preserve the current database password and other business secret values in the Nacos content; do not copy them into a repository file, terminal transcript, chat message, or commit.
-6. Merge these effective local overrides into the existing `capacity` tree:
+1. 以旧文件的第一个 YAML 文档为基础。
+2. 删除 `spring.application.name`。
+3. 删除已注释的 Nacos discovery 配置块。
+4. 保留 `server`、数据源、Redis、Kafka、日志、MyBatis、服务地址、capacity 和 XXL-JOB 的键及其当前标量值。
+5. 在 Nacos 内容中保留当前数据库密码和其他业务秘密值；不得将其复制到仓库文件、终端记录、聊天消息或提交中。
+6. 将以下实际生效的 local 覆盖项合并到现有 `capacity` 树：
 
 ```yaml
 capacity:
@@ -327,12 +327,12 @@ capacity:
       mock-send-enabled: true
 ```
 
-7. Do not include `---`, `spring.config.activate.on-profile`, or the dev-only SQL logging document.
-8. Ensure the final YAML has one `capacity` mapping: merge nested keys instead of creating duplicate top-level keys.
+7. 不包含 `---`、`spring.config.activate.on-profile` 或仅供 dev 使用的 SQL 日志文档。
+8. 确保最终 YAML 只有一个 `capacity` 映射：合并嵌套键，不创建重复的顶层键。
 
-- [ ] **Step 4: Publish the configuration**
+- [ ] **步骤 4：发布配置**
 
-In Configuration Management, select namespace `didi-taxi-local` and create:
+在配置管理中选择命名空间 `didi-taxi-local`，然后创建：
 
 ```text
 Data ID: capacity-service-local.yml
@@ -341,35 +341,35 @@ Configuration format: YAML
 Description: capacity-service 本地完整配置，修改后重启生效
 ```
 
-Paste the flattened YAML, preview its diff, and publish it.
+粘贴扁平化后的 YAML，预览差异后发布。
 
-- [ ] **Step 5: Verify the published source**
+- [ ] **步骤 5：验证已发布的配置源**
 
-Reopen the configuration detail and confirm:
+重新打开配置详情并确认：
 
-- Namespace is `didi-taxi-local`.
-- Group is `DIDI_TAXI`.
-- Data ID is `capacity-service-local.yml`.
-- The document contains `server.port: 8090`.
-- It contains datasource, Redis, Kafka, MyBatis, `services.order`, `capacity`, and `xxl.job`.
-- It contains the local GEO pin and `mock-send-enabled: true`.
-- It does not contain `spring.application.name`, discovery configuration, profile activation, or multiple YAML documents.
+- Namespace 为 `didi-taxi-local`。
+- Group 为 `DIDI_TAXI`。
+- Data ID 为 `capacity-service-local.yml`。
+- 文档包含 `server.port: 8090`。
+- 文档包含数据源、Redis、Kafka、MyBatis、`services.order`、`capacity` 和 `xxl.job`。
+- 文档包含本地 GEO 固定坐标和 `mock-send-enabled: true`。
+- 文档不包含 `spring.application.name`、discovery 配置、profile 激活配置或多个 YAML 文档。
 
 ---
 
-### Task 4: Add the operational runbook
+### 任务 4：添加运维运行手册
 
-**Files:**
-- Create: `docs/runbooks/capacity-service-Nacos本地配置运行手册.md`
-- Reference: `docs/superpowers/specs/2026-07-27-capacity-nacos-local-config-design.md`
+**文件：**
+- 创建：`docs/runbooks/capacity-service-Nacos本地配置运行手册.md`
+- 参考：`docs/superpowers/specs/2026-07-27-capacity-nacos-local-config-design.md`
 
-**Interfaces:**
-- Consumes: the Nacos resource identity and environment variables established above.
-- Produces: reproducible operator instructions that do not disclose secrets.
+**接口约定：**
+- 输入：前述任务建立的 Nacos 资源标识和环境变量。
+- 输出：不泄露秘密值、可重复执行的运维说明。
 
-- [ ] **Step 1: Write the runbook**
+- [ ] **步骤 1：编写运行手册**
 
-Create the file with these sections and commands:
+创建包含以下章节和命令的文件：
 
 ````markdown
 # capacity-service Nacos 本地配置运行手册
@@ -428,17 +428,17 @@ mvn -pl capacity spring-boot:run -Dspring-boot.run.profiles=local
 Nacos 中的 Data ID 可以保留；客户端不再导入后不会影响应用。
 ````
 
-- [ ] **Step 2: Check the runbook for leaked values**
+- [ ] **步骤 2：检查运行手册是否泄露秘密值**
 
-Run:
+执行：
 
 ```bash
 rg -n 'password:|secret:|access-token:' docs/runbooks/capacity-service-Nacos本地配置运行手册.md
 ```
 
-Expected: no secret value assignments. The word `NACOS_PASSWORD` in explanatory text is allowed.
+预期：不存在秘密值赋值；说明文字中允许出现 `NACOS_PASSWORD`。
 
-- [ ] **Step 3: Commit the runbook**
+- [ ] **步骤 3：提交运行手册**
 
 ```bash
 git add docs/runbooks/capacity-service-Nacos本地配置运行手册.md
@@ -447,29 +447,29 @@ git commit -m "文档：补充运力服务 Nacos 本地运行手册"
 
 ---
 
-### Task 5: Verify success and fail-fast behavior
+### 任务 5：验证成功路径和快速失败行为
 
-**Files:**
-- Verify only; no planned repository modification.
+**文件：**
+- 仅执行验证；不计划修改仓库文件。
 
-**Interfaces:**
-- Consumes: a running Nacos 3.2.3 server and the published capacity Data ID.
-- Produces: captured command output proving normal startup, offline tests, and mandatory-import failure.
+**接口约定：**
+- 输入：运行中的 Nacos 3.2.3 服务和已发布的 capacity Data ID。
+- 输出：能够证明正常启动、离线测试和必选导入失败行为的命令结果。
 
-- [ ] **Step 1: Run clean offline tests**
+- [ ] **步骤 1：运行干净的离线测试**
 
-Run:
+执行：
 
 ```bash
 env -u NACOS_NAMESPACE -u NACOS_USERNAME -u NACOS_PASSWORD \
   mvn -pl capacity clean test
 ```
 
-Expected: BUILD SUCCESS, no request to port 8848.
+预期：BUILD SUCCESS，且没有访问 8848 端口。
 
-- [ ] **Step 2: Start capacity with the local profile**
+- [ ] **步骤 2：使用 local profile 启动 capacity**
 
-Set credentials without putting the password in shell history:
+设置凭据，且不把密码写入 shell history：
 
 ```bash
 read -r "NACOS_NAMESPACE?Nacos namespace ID: "
@@ -480,58 +480,58 @@ export NACOS_PASSWORD
 mvn -pl capacity spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
-Expected:
+预期：
 
-- Nacos Config reports successful loading of `capacity-service-local.yml` from `DIDI_TAXI`.
-- Spring Boot starts on port `8090`.
-- The password is not printed.
+- Nacos Config 报告成功从 `DIDI_TAXI` 加载 `capacity-service-local.yml`。
+- Spring Boot 在 `8090` 端口启动。
+- 日志不打印密码。
 
-- [ ] **Step 3: Verify health and port**
+- [ ] **步骤 3：验证健康状态和端口**
 
-In another terminal:
+在另一个终端中执行：
 
 ```bash
 curl --fail --silent http://127.0.0.1:8090/actuator/health
 lsof -nP -iTCP:8090 -sTCP:LISTEN
 ```
 
-Expected: health returns an HTTP 2xx response and a Java process listens on 8090.
+预期：健康检查返回 HTTP 2xx，并且有 Java 进程监听 8090。
 
-- [ ] **Step 4: Verify one existing read-only endpoint**
+- [ ] **步骤 4：验证一个现有只读接口**
 
 ```bash
 curl --fail --silent http://127.0.0.1:8090/test/sleuth
 ```
 
-Expected: the JSON response has `code` 200 and `data` equal to `Hello sleuth capacity`.
+预期：JSON 响应中的 `code` 为 200，`data` 等于 `Hello sleuth capacity`。
 
-- [ ] **Step 5: Verify restart-based configuration changes**
+- [ ] **步骤 5：验证基于重启的配置变更**
 
-In Nacos, record the current value of:
+在 Nacos 中记录以下配置的当前值：
 
 ```text
 capacity.dispatch.match-radius-meters
 ```
 
-Publish a harmless temporary local value, restart `capacity-service`, and confirm the startup environment or a relevant read-only diagnostic endpoint observes it. Restore the original value, publish again, and restart once more.
+发布一个无害的临时本地值，重启 `capacity-service`，确认启动环境或相关只读诊断接口读取到新值。随后恢复原值、重新发布并再次重启。
 
-Do not use a secret, port, datasource, Redis, Kafka, or XXL-JOB value for this test.
+本测试不得修改秘密值、端口、数据源、Redis、Kafka 或 XXL-JOB 配置。
 
-- [ ] **Step 6: Verify mandatory-import failure**
+- [ ] **步骤 6：验证必选导入失败**
 
-Stop Nacos without deleting its data, then start `capacity-service` again with the same local environment variables:
+停止 Nacos 但不删除其数据，然后使用相同的本地环境变量再次启动 `capacity-service`：
 
 ```bash
 mvn -pl capacity spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
-Expected: startup fails during Config Data loading; the service must not listen on 8090.
+预期：应用在 Config Data 加载阶段启动失败，服务不得监听 8090。
 
-Restart Nacos after capturing the failure and confirm the service starts normally again.
+记录失败证据后重启 Nacos，并确认服务能够再次正常启动。
 
-- [ ] **Step 7: Run final repository checks**
+- [ ] **步骤 7：执行最终仓库检查**
 
-Run:
+执行：
 
 ```bash
 mvn -pl capacity verify
@@ -539,21 +539,21 @@ git diff --check
 git status --short
 ```
 
-Expected:
+预期：
 
-- Maven reports BUILD SUCCESS.
-- `git diff --check` prints nothing.
-- Only the pre-existing unrelated untracked `PassengerSettingsService 2.java` remains; all planned files are committed.
+- Maven 报告 BUILD SUCCESS。
+- `git diff --check` 没有输出。
+- 只剩下原本就存在、与本任务无关的未跟踪文件 `PassengerSettingsService 2.java`；计划内文件均已提交。
 
 ---
 
-## Completion Evidence
+## 完成证据
 
-Before declaring completion, retain these results in the task summary:
+宣布完成前，在任务总结中保留以下结果：
 
-- Dependency tree lines for `spring-alibaba-nacos-config` and the selected Nacos client.
-- `mvn -pl capacity clean test` result with Nacos environment variables removed.
-- Successful local-profile startup log line naming the correct Data ID and Group.
-- `/actuator/health` response and 8090 listener evidence.
-- Mandatory-import failure evidence while Nacos is stopped.
-- Final `mvn -pl capacity verify`, `git diff --check`, and `git status --short` results.
+- `spring-alibaba-nacos-config` 和 Maven 选定 Nacos Client 的依赖树记录。
+- 清除 Nacos 环境变量后执行 `mvn -pl capacity clean test` 的结果。
+- local profile 成功启动时，包含正确 Data ID 和 Group 的日志。
+- `/actuator/health` 响应和 8090 监听证据。
+- Nacos 停止时必选导入失败的证据。
+- 最终 `mvn -pl capacity verify`、`git diff --check` 和 `git status --short` 的结果。
