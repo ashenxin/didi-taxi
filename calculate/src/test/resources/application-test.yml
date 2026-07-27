@@ -13,6 +13,23 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
 
+benefit:
+  sign-in:
+    enabled: true
+    timezone: Asia/Shanghai
+    cycle: MONTHLY
+    display-days: 28
+    sign-days:
+      start-day-of-month: 1
+      end-day-of-month: 28
+    rewards:
+      default:
+        points: 5
+      continuous:
+        - every-days: 7
+          points: 35
+          include-default: false
+
 calculate:
   lifecycle:
     messaging:
