@@ -1,15 +1,10 @@
-# 本地开发：未启动 Zipkin 时使用，避免向 9411 上报失败刷 WARN。
-# 启用方式（任选其一）：
-#   - IntelliJ Run Configuration → Active profiles: local
-#   - VM options: -Dspring.profiles.active=local
-#   - 环境变量: SPRING_PROFILES_ACTIVE=local
-
-management:
-  tracing:
-    export:
-      zipkin:
-        enabled: false
-
-admin:
-  jwt:
-    secret: ${JWT_SECRET_ADMIN:dev-didi-admin-jwt-secret-change-me-32b!!}
+spring:
+  config:
+    import:
+      - nacos:admin-api-local.yml?group=DIDI_TAXI&refreshEnabled=false
+  nacos:
+    config:
+      server-addr: "${NACOS_SERVER_ADDR:127.0.0.1:8848}"
+      namespace: "${NACOS_NAMESPACE}"
+      username: "${NACOS_USERNAME:nacos}"
+      password: "${NACOS_PASSWORD}"
