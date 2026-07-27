@@ -1,4 +1,10 @@
 spring:
+  cloud:
+    discovery:
+      enabled: false
+    nacos:
+      discovery:
+        enabled: false
   kafka:
     consumer:
       group-id: capacity.order.dispatch.requested.test

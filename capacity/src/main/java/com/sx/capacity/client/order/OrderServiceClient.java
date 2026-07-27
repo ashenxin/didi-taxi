@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
 
-@FeignClient(name = "order-service", url = "${services.order.base-url:http://127.0.0.1:8093}")
+@FeignClient(name = "order-service")
 public interface OrderServiceClient {
 
     @GetMapping("/api/v1/orders/internal/pending-dispatch")
