@@ -2,7 +2,7 @@
 
 > **供执行代理使用：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 子技能，逐任务执行本计划。各步骤使用复选框（`- [ ]`）跟踪进度。
 
-**目标：** 在不启用服务发现的前提下，将 `capacity-service` 在本地环境实际生效的完整配置（包括业务秘密值）迁移到 Nacos 的 `didi-taxi-local` 命名空间。
+**目标：** 在不启用服务发现的前提下，将 `capacity-service` 在本地环境实际生效的完整配置（包括业务秘密值）迁移到 Nacos 的 `local` 命名空间。
 
 **架构：** 应用身份和 Nacos Config Data 引导配置保留在本地 classpath 文件中，运行配置从 Nacos 的一个必选 YAML Data ID 加载。Nacos 导入声明只放在 `application-local.yml`，使测试环境保持隔离；发布到 Nacos 的是扁平化后的本地有效配置，配置变更后通过重启服务生效。
 
@@ -11,7 +11,7 @@
 ## 全局约束
 
 - 本次范围仅包括 `capacity-service`。
-- 只创建 Nacos 命名空间 `didi-taxi-local`。
+- 只创建 Nacos 命名空间 `local`。
 - 使用 Group `DIDI_TAXI` 和 Data ID `capacity-service-local.yml`。
 - 客户端配置必须使用生成的 namespace ID，不能使用显示名称。
 - 使用 `spring.config.import`，不创建 `bootstrap.yml`。
@@ -34,7 +34,7 @@
 - 修改 `capacity/src/test/resources/application-test.yml`：显式保留测试上下文启动所需的 Kafka 和 Druid 配置。
 - 创建 `capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`：在不连接 Nacos 的情况下约束本地与远程配置边界。
 - 创建 `docs/runbooks/capacity-service-Nacos本地配置运行手册.md`：记录命名空间、配置发布、启动、验证、故障行为和回滚方式。
-- Nacos 外部状态：创建命名空间 `didi-taxi-local` 并发布 `DIDI_TAXI/capacity-service-local.yml`；仓库中不创建包含秘密值的对应载荷文件。
+- Nacos 外部状态：创建命名空间 `local` 并发布 `DIDI_TAXI/capacity-service-local.yml`；仓库中不创建包含秘密值的对应载荷文件。
 
 ## 接口约定
 
@@ -45,7 +45,7 @@
   - `NACOS_PASSWORD`，必填密码
 - Nacos Config Data 提供与当前 `capacity/src/main/resources/application.yml` 相同的 Spring 属性键。
 - Nacos 资源标识：
-  - Namespace 显示名称：`didi-taxi-local`
+  - Namespace 显示名称：`local`
   - Group：`DIDI_TAXI`
   - Data ID：`capacity-service-local.yml`
   - 类型：YAML
@@ -286,7 +286,7 @@ git commit -m "功能：接入运力服务 Nacos 本地配置入口"
 
 **接口约定：**
 - 输入：迁移前 `capacity/src/main/resources/application.yml` 中精确的基础文档和 local profile 文档。
-- 输出：Nacos namespace ID，以及配置源 `didi-taxi-local / DIDI_TAXI / capacity-service-local.yml`。
+- 输出：Nacos namespace ID，以及配置源 `local / DIDI_TAXI / capacity-service-local.yml`。
 
 - [ ] **步骤 1：打开 Nacos 3 控制台**
 
@@ -303,8 +303,8 @@ http://127.0.0.1:8080
 在命名空间管理中创建：
 
 ```text
-Namespace name: didi-taxi-local
-Description: didi-taxi 本地开发配置
+Namespace name: local
+Description: 本地开发环境
 ```
 
 从控制台读取生成的 namespace ID，只输入当前 zsh 会话：
@@ -353,13 +353,13 @@ capacity:
 
 - [ ] **步骤 4：发布配置**
 
-在配置管理中选择命名空间 `didi-taxi-local`，然后创建：
+在配置管理中选择命名空间 `local`，然后创建：
 
 ```text
 Data ID: capacity-service-local.yml
 Group: DIDI_TAXI
 Configuration format: YAML
-Description: capacity-service 本地完整配置，修改后重启生效
+Description: 运力服务本地开发完整有效配置
 ```
 
 粘贴扁平化后的 YAML，预览差异后发布。
@@ -368,7 +368,7 @@ Description: capacity-service 本地完整配置，修改后重启生效
 
 重新打开配置详情并确认：
 
-- Namespace 为 `didi-taxi-local`。
+- Namespace 为 `local`。
 - Group 为 `DIDI_TAXI`。
 - Data ID 为 `capacity-service-local.yml`。
 - 文档包含 `server.port: 8090`。
@@ -399,7 +399,7 @@ Description: capacity-service 本地完整配置，修改后重启生效
 
 - 控制台：`http://127.0.0.1:8080`
 - 客户端 API：`127.0.0.1:8848`
-- Namespace：`didi-taxi-local`（客户端使用控制台生成的 ID）
+- Namespace：`local`（客户端使用控制台生成的 ID）
 - Group：`DIDI_TAXI`
 - Data ID：`capacity-service-local.yml`
 - 刷新：关闭；发布后重启服务

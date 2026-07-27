@@ -1,0 +1,81 @@
+# capacity-service Nacos 本地配置运行手册
+
+## 配置身份
+
+- 控制台：`http://127.0.0.1:8080`
+- 客户端 API：`127.0.0.1:8848`
+- Namespace：`local`（客户端使用控制台生成的 ID，不使用显示名称）
+- Group：`DIDI_TAXI`
+- Data ID：`capacity-service-local.yml`
+- 格式：YAML
+- 刷新：关闭；配置发布后重启服务生效
+
+## 启动
+
+在 zsh 中执行：
+
+```bash
+read -r "NACOS_NAMESPACE?Nacos namespace ID: "
+export NACOS_NAMESPACE
+export NACOS_USERNAME='nacos'
+read -s "NACOS_PASSWORD?Nacos password "
+export NACOS_PASSWORD
+mvn -pl capacity spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+`NACOS_NAMESPACE` 必须填写控制台生成的 namespace ID。`NACOS_PASSWORD`
+不应写入 shell history、Git、文档或普通聊天消息。
+
+## 正常验证
+
+在另一个终端中执行：
+
+```bash
+curl --fail --silent http://127.0.0.1:8090/actuator/health
+lsof -nP -iTCP:8090 -sTCP:LISTEN
+curl --fail --silent http://127.0.0.1:8090/test/sleuth
+```
+
+启动日志应显示成功加载 `DIDI_TAXI/capacity-service-local.yml`，且不应打印
+Nacos 密码。健康检查应返回 HTTP 2xx，Java 进程应监听 8090；只读测试接口
+响应中的 `code` 应为 200，`data` 应为 `Hello sleuth capacity`。
+
+## 配置变更
+
+1. 在 Nacos 的 `local` 命名空间中编辑并发布
+   `DIDI_TAXI/capacity-service-local.yml`。
+2. 重启 `capacity-service`。
+3. 再次执行健康检查和相关只读接口验证。
+
+第一阶段关闭热刷新。不要通过动态刷新判断配置是否生效。
+
+## 秘密值
+
+业务秘密值可以保存在 Nacos 配置中，例如地图服务密钥、数据库密码和业务访问
+令牌。Nacos 自身的登录密码仍通过 `NACOS_PASSWORD` 注入，不能写入仓库中的
+YAML 文件。
+
+发布秘密值前应确认当前 Nacos 仅在受信任的本地环境中使用，并避免在截图、
+终端日志、提交记录或排障消息中复制配置全文。
+
+## 常见错误
+
+- `NACOS_NAMESPACE` 缺失：设置命名空间 ID，不要填写显示名称 `local`。
+- 认证失败：重新设置 `NACOS_USERNAME` 和 `NACOS_PASSWORD`。
+- Data ID 不存在：核对 namespace ID、Group 和 Data ID 三元组。
+- 8848 不通：检查 Nacos API 进程和端口；8080 仅是 Nacos 3 控制台。
+- 配置发布后没有变化：重启 `capacity-service`；当前未启用热刷新。
+- 启动时缺少业务属性：确认 Nacos 文档是完整的本地有效配置，而不是局部覆盖。
+
+## 回滚
+
+恢复上一提交中的 `capacity/pom.xml` 和
+`capacity/src/main/resources/application.yml`，删除
+`capacity/src/main/resources/application-local.yml` 与边界测试，然后执行：
+
+```bash
+mvn -pl capacity test
+mvn -pl capacity spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+Nacos 中的 Data ID 可以保留；客户端不再导入后不会影响应用。

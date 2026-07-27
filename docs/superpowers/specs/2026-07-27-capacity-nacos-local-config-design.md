@@ -8,7 +8,7 @@
 
 ## 目标
 
-- 为本地环境建立独立的 Nacos 命名空间 `didi-taxi-local`。
+- 为本地环境建立独立的 Nacos 命名空间 `local`。
 - 将 `capacity-service` 当前 local 环境的完整有效运行配置迁移到 Nacos。
 - 将该服务的数据库密码、Redis 密码、内部 Token 等业务秘密值一并存入本地 Nacos，不在本地业务配置文件中保留。
 - 保证应用在配置缺失、认证失败或 Nacos 不可用时快速失败。
@@ -28,7 +28,7 @@
 
 采用“单服务单配置文件 + Spring Config Data 导入”：
 
-- Namespace：`didi-taxi-local`
+- Namespace：`local`
 - Group：`DIDI_TAXI`
 - Data ID：`capacity-service-local.yml`
 - 配置格式：YAML
@@ -88,7 +88,7 @@ spring:
 
 约束：
 
-- `NACOS_NAMESPACE` 必须填写 Nacos 创建命名空间后生成的 namespace ID，不能填写显示名称 `didi-taxi-local`。
+- `NACOS_NAMESPACE` 必须填写 Nacos 创建命名空间后生成的 namespace ID，不能填写显示名称 `local`。
 - `NACOS_PASSWORD` 必须由运行环境传入，不提交到 Git。
 - Nacos 自身的登录密码不能存放在被它保护的远程配置中，否则应用在读取密码前无法登录 Nacos。
 - Data ID 和 Group 固定在导入声明中，避免服务启动时意外读取其他配置。
@@ -169,7 +169,7 @@ Nacos 配置中心提供认证、命名空间和权限隔离，但它不是专�
 
 ### 集成验证
 
-1. 在 Nacos 中创建 `didi-taxi-local` 命名空间并记录 namespace ID。
+1. 在 Nacos 中创建 `local` 命名空间并记录 namespace ID。
 2. 在该命名空间、`DIDI_TAXI` Group 中发布 `capacity-service-local.yml`。
 3. 设置 `NACOS_NAMESPACE`、`NACOS_USERNAME`、`NACOS_PASSWORD`。
 4. 使用 `local` profile 启动 `capacity-service`。
