@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.Map;
 
-@FeignClient(name = "passenger", url = "${services.passenger.base-url:http://127.0.0.1:8092}")
+@FeignClient(name = "passenger-service", contextId = "passengerClient")
 public interface PassengerClient {
 
     @GetMapping("/api/v1/customers/by-phone")
@@ -16,4 +16,3 @@ public interface PassengerClient {
     @GetMapping("/api/v1/customers/{passengerId}")
     Map<String, Object> get(@PathVariable("passengerId") String passengerId);
 }
-

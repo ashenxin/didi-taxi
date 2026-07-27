@@ -18,8 +18,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 
 /** passenger-api 到 passenger 统一生命周期应用边界的 Feign 契约。 */
-@FeignClient(name = "passengerCoreLifecycle",
-        url = "${services.passenger.base-url:http://127.0.0.1:8092}",
+@FeignClient(name = "passenger-service", contextId = "passengerCoreLifecycle",
         configuration = PassengerCoreFeignConfiguration.class)
 public interface PassengerCoreLifecycleClient {
 

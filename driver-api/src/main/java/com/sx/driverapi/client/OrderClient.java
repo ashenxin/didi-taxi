@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
 
-@FeignClient(name = "order", url = "${services.order.base-url:http://127.0.0.1:8093}")
+@FeignClient(name = "order-service")
 public interface OrderClient {
 
     @GetMapping("/api/v1/orders/assigned")

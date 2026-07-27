@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
 
-@FeignClient(name = "wallet", url = "${services.wallet.base-url:http://127.0.0.1:8095}")
+@FeignClient(name = "wallet-service")
 public interface WalletClient {
     @GetMapping("/api/v1/wallet/auto-pay/agreements")
     ResponseVo<List<AutoPayAgreementVO>> listAgreements(@RequestParam("passengerId") Long passengerId);

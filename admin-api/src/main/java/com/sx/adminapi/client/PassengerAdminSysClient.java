@@ -21,7 +21,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
 
-@FeignClient(name = "passengerAdminSys", url = "${services.passenger.base-url:http://127.0.0.1:8092}")
+@FeignClient(name = "passenger-service", contextId = "passengerAdminSysClient")
 public interface PassengerAdminSysClient {
 
     @PostMapping("/api/v1/admin/sys/auth/verify-credentials")

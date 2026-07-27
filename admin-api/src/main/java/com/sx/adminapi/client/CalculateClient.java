@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.Map;
 
-@FeignClient(name = "calculate", url = "${services.calculate.base-url:http://127.0.0.1:8091}")
+@FeignClient(name = "calculate-service")
 public interface CalculateClient {
 
     @GetMapping("/api/v1/fare-rules")

@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import java.math.BigDecimal;
 import java.util.List;
 
-@FeignClient(name = "calculate", url = "${services.calculate.base-url:http://127.0.0.1:8091}")
+@FeignClient(name = "calculate-service")
 public interface CalculateClient {
 
     @PostMapping("/api/v1/calculate/estimate")

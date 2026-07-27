@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
-@FeignClient(name = "capacity-driver", url = "${services.capacity.base-url:http://127.0.0.1:8090}")
+@FeignClient(name = "capacity-service", contextId = "capacityDriver")
 public interface CapacityDriverClient {
 
     @PostMapping("/api/v1/drivers/{driverId}/online")

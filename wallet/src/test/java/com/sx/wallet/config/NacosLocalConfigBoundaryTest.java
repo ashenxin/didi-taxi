@@ -34,12 +34,23 @@ class NacosLocalConfigBoundaryTest {
                 List.of("nacos:wallet-service-local.yml?group=DIDI_TAXI&refreshEnabled=false"),
                 config.get("import")
         );
+        assertDiscoveryConfig(spring);
 
         Map<String, Object> nacosConfig = map(map(spring.get("nacos")).get("config"));
         assertEquals("${NACOS_SERVER_ADDR:127.0.0.1:8848}", nacosConfig.get("server-addr"));
         assertEquals("${NACOS_NAMESPACE}", nacosConfig.get("namespace"));
         assertEquals("${NACOS_USERNAME:nacos}", nacosConfig.get("username"));
         assertEquals("${NACOS_PASSWORD}", nacosConfig.get("password"));
+    }
+
+    private static void assertDiscoveryConfig(Map<String, Object> spring) {
+        Map<String, Object> discovery = map(map(map(spring.get("cloud")).get("nacos")).get("discovery"));
+        assertEquals("${NACOS_SERVER_ADDR:127.0.0.1:8848}", discovery.get("server-addr"));
+        assertEquals("${NACOS_NAMESPACE}", discovery.get("namespace"));
+        assertEquals("DIDI_TAXI", discovery.get("group"));
+        assertEquals("${NACOS_USERNAME:nacos}", discovery.get("username"));
+        assertEquals("${NACOS_PASSWORD}", discovery.get("password"));
+        assertEquals(true, discovery.get("register-enabled"));
     }
 
     @SuppressWarnings("unchecked")

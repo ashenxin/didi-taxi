@@ -19,8 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody;
  * passenger-api 到 passenger 核心服务的设置接口 Feign。
  * 浏览器只访问 BFF；核心服务不直接暴露 token 解析逻辑。
  */
-@FeignClient(name = "passengerCoreSettings",
-        url = "${services.passenger.base-url:http://127.0.0.1:8092}",
+@FeignClient(name = "passenger-service", contextId = "passengerCoreSettings",
         configuration = PassengerCoreFeignConfiguration.class)
 public interface PassengerCoreSettingsClient {
 

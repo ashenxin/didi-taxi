@@ -11,8 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
-@FeignClient(name = "passengerCoreAuthState",
-        url = "${services.passenger.base-url:http://127.0.0.1:8092}",
+@FeignClient(name = "passenger-service", contextId = "passengerCoreAuthState",
         configuration = PassengerCoreFeignConfiguration.class)
 public interface PassengerCoreAuthStateClient {
 

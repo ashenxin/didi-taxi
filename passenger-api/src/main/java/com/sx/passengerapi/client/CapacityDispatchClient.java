@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
-@FeignClient(name = "capacity", url = "${services.capacity.base-url:http://127.0.0.1:8090}")
+@FeignClient(name = "capacity-service")
 public interface CapacityDispatchClient {
 
     @GetMapping("/api/v1/dispatch/nearest-driver")

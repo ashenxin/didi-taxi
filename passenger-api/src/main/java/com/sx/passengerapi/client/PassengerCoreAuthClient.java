@@ -14,8 +14,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 /**
  * 调用 passenger 核心服务的乘客认证接口。
  */
-@FeignClient(name = "passengerCoreAuth",
-        url = "${services.passenger.base-url:http://127.0.0.1:8092}",
+@FeignClient(name = "passenger-service", contextId = "passengerCoreAuth",
         configuration = PassengerCoreFeignConfiguration.class)
 public interface PassengerCoreAuthClient {
 

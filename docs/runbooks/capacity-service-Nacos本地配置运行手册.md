@@ -25,6 +25,49 @@ Namespace、`DIDI_TAXI` Group、单个必选 YAML Data ID，关闭热刷新，�
 下文使用 `capacity-service` 演示操作。其他业务服务只需替换 Data ID、加载标记、
 Maven 模块名、启动类、端口和服务专属验证接口，其余流程相同。
 
+## 服务注册与负载均衡
+
+除 `xxl-job-admin` 外，全部业务服务都采用与 `capacity-service` 相同的 Nacos
+服务注册方式，并统一注册到 `local` Namespace、`DIDI_TAXI` Group：
+
+| 模块 | Nacos 服务名 |
+| --- | --- |
+| `capacity` | `capacity-service` |
+| `calculate` | `calculate-service` |
+| `passenger` | `passenger-service` |
+| `order` | `order-service` |
+| `wallet` | `wallet-service` |
+| `map` | `map-service` |
+| `admin-api` | `admin-api` |
+| `passenger-api` | `passenger-api` |
+| `driver-api` | `driver-api` |
+| `gateway` | `gateway` |
+
+服务间 OpenFeign 调用不再配置固定 IP 和端口，而是直接使用上述 Nacos 服务名，
+由 Spring Cloud LoadBalancer 选择健康实例。同一个服务对应多个 Feign 接口时，
+通过独立 `contextId` 隔离客户端上下文。
+
+`wallet-service` 通知订单服务的 `RestClient` 同样使用负载均衡构建器，其
+`services.order.base-url` 配置为 `http://order-service`。
+
+Gateway 的 Nacos 配置 `gateway-local.yml` 使用以下负载均衡目标：
+
+```yaml
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: admin-bff
+          uri: lb://admin-api
+        - id: passenger-bff
+          uri: lb://passenger-api
+        - id: driver-bff
+          uri: lb://driver-api
+```
+
+路由原有的 `predicates`、CORS、JWT 和管理端点配置必须保留。`lb://` 仅替换
+原来的固定 `http://127.0.0.1:<port>` URI。
+
 ## 配置身份
 
 - 控制台：`http://127.0.0.1:8080`

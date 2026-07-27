@@ -11,7 +11,7 @@ import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
-@FeignClient(name = "capacity-driver-auth", url = "${services.capacity.base-url:http://127.0.0.1:8090}")
+@FeignClient(name = "capacity-service", contextId = "capacityDriverAuth")
 public interface CapacityDriverAuthClient {
 
     @PostMapping("/api/v1/driver/app/auth/sms/send")

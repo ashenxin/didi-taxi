@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.Map;
 
-@FeignClient(name = "capacity-team-change", url = "${services.capacity.base-url:http://127.0.0.1:8090}")
+@FeignClient(name = "capacity-service", contextId = "capacityTeamChange")
 public interface CapacityTeamChangeClient {
 
     @GetMapping("/api/v1/companies")
@@ -32,4 +32,3 @@ public interface CapacityTeamChangeClient {
     @PostMapping("/api/v1/app/driver-team-change-requests/{id}/cancel")
     CoreResponseVo<Void> cancel(@PathVariable("id") Long id, @RequestBody Map<String, Object> body);
 }
-

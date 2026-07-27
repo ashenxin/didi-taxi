@@ -12,7 +12,7 @@ public class OrderSettlementClient {
     private final RestClient restClient;
 
     public OrderSettlementClient(RestClient.Builder builder,
-                                 @Value("${services.order.base-url:http://127.0.0.1:8093}") String baseUrl) {
+                                 @Value("${services.order.base-url:http://order-service}") String baseUrl) {
         this.restClient = builder.baseUrl(baseUrl).build();
     }
 
