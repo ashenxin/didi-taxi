@@ -1,6 +1,7 @@
 package com.sx.capacity;
 
 import com.sx.capacity.config.CapacityDispatchProperties;
+import com.sx.capacity.config.NacosLocalConfigGuard;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -14,6 +15,8 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
 public class CapacitySpringApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(CapacitySpringApplication.class, args);
+        SpringApplication application = new SpringApplication(CapacitySpringApplication.class);
+        application.addListeners(new NacosLocalConfigGuard());
+        application.run(args);
     }
 }

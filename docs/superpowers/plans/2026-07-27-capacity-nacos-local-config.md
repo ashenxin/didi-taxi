@@ -31,8 +31,11 @@
 - 修改 `capacity/pom.xml`：添加独立的 Nacos Config 依赖。
 - 修改 `capacity/src/main/resources/application.yml`：精简为只包含应用身份。
 - 创建 `capacity/src/main/resources/application-local.yml`：只包含 Nacos 引导和导入配置。
+- 修改 `capacity/src/main/java/com/sx/capacity/CapacitySpringApplication.java`：注册 local 配置加载保护。
+- 创建 `capacity/src/main/java/com/sx/capacity/config/NacosLocalConfigGuard.java`：在创建应用上下文前检查远程加载标记。
 - 修改 `capacity/src/test/resources/application-test.yml`：显式保留测试上下文启动所需的 Kafka 和 Druid 配置。
 - 创建 `capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`：在不连接 Nacos 的情况下约束本地与远程配置边界。
+- 创建 `capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigGuardTest.java`：验证 local 快速失败和 test 隔离。
 - 创建 `docs/runbooks/capacity-service-Nacos本地配置运行手册.md`：记录命名空间、配置发布、启动、验证、故障行为和回滚方式。
 - Nacos 外部状态：创建命名空间 `local` 并发布 `DIDI_TAXI/capacity-service-local.yml`；仓库中不创建包含秘密值的对应载荷文件。
 
@@ -330,8 +333,16 @@ git show ad59237:capacity/src/main/resources/application.yml
 2. 删除 `spring.application.name`。
 3. 删除已注释的 Nacos discovery 配置块。
 4. 保留 `server`、数据源、Redis、Kafka、日志、MyBatis、服务地址、capacity 和 XXL-JOB 的键及其当前标量值。
-5. 在 Nacos 内容中保留当前数据库密码和其他业务秘密值；不得将其复制到仓库文件、终端记录、聊天消息或提交中。
-6. 将以下实际生效的 local 覆盖项合并到现有 `capacity` 树：
+5. 在唯一的 `capacity` 映射下添加远程加载标记：
+
+```yaml
+capacity:
+  nacos:
+    config-loaded: true
+```
+
+6. 在 Nacos 内容中保留当前数据库密码和其他业务秘密值；不得将其复制到仓库文件、终端记录、聊天消息或提交中。
+7. 将以下实际生效的 local 覆盖项合并到现有 `capacity` 树：
 
 ```yaml
 capacity:
@@ -348,8 +359,8 @@ capacity:
       mock-send-enabled: true
 ```
 
-7. 不包含 `---`、`spring.config.activate.on-profile` 或仅供 dev 使用的 SQL 日志文档。
-8. 确保最终 YAML 只有一个 `capacity` 映射：合并嵌套键，不创建重复的顶层键。
+8. 不包含 `---`、`spring.config.activate.on-profile` 或仅供 dev 使用的 SQL 日志文档。
+9. 确保最终 YAML 只有一个 `capacity` 映射：合并嵌套键，不创建重复的顶层键。
 
 - [ ] **步骤 4：发布配置**
 
@@ -374,6 +385,7 @@ Description: 运力服务本地开发完整有效配置
 - 文档包含 `server.port: 8090`。
 - 文档包含数据源、Redis、Kafka、MyBatis、`services.order`、`capacity` 和 `xxl.job`。
 - 文档包含本地 GEO 固定坐标和 `mock-send-enabled: true`。
+- 文档包含 `capacity.nacos.config-loaded: true`。
 - 文档不包含 `spring.application.name`、discovery 配置、profile 激活配置或多个 YAML 文档。
 
 ---
@@ -546,7 +558,8 @@ capacity.dispatch.match-radius-meters
 mvn -pl capacity spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
-预期：应用在 Config Data 加载阶段启动失败，服务不得监听 8090。
+预期：如果客户端把不可达或缺失配置报告为空，
+`NacosLocalConfigGuard` 仍会在应用上下文创建前启动失败，服务不得监听 8090。
 
 记录失败证据后重启 Nacos，并确认服务能够再次正常启动。
 

@@ -114,6 +114,7 @@ spring:
 
 原 `application.yml` 中的基础配置和 `local` profile 覆盖项需要合并为一份扁平的 local 配置。具体包括：
 
+- 添加 `capacity.nacos.config-loaded: true` 作为远程配置成功加载标记。
 - 保留当前服务端口 `8090`。
 - 保留当前 MySQL、Redis、Kafka 和 XXL-JOB 本地连接方式。
 - 合并 local profile 的固定 GEO 测试坐标。
@@ -135,8 +136,10 @@ Nacos 配置中心提供认证、命名空间和权限隔离，但它不是专�
 3. Spring Boot 读取 `application-local.yml`，取得 Nacos API 地址、namespace ID 和凭据。
 4. Config Data Loader 从 `DIDI_TAXI` Group 加载 `capacity-service-local.yml`。
 5. 远程配置加入 Spring Environment。
-6. Spring Boot 根据远程配置创建 Web Server、数据源、Redis、Kafka、MyBatis 和 XXL-JOB 相关 Bean。
-7. 服务在 `8090` 端口启动。
+6. `NacosLocalConfigGuard` 在 `local` profile 下校验
+   `capacity.nacos.config-loaded=true`；标记缺失时立即终止启动。
+7. Spring Boot 根据远程配置创建 Web Server、数据源、Redis、Kafka、MyBatis 和 XXL-JOB 相关 Bean。
+8. 服务在 `8090` 端口启动。
 
 ## 刷新策略
 
@@ -152,7 +155,8 @@ Nacos 配置中心提供认证、命名空间和权限隔离，但它不是专�
 
 ## 故障处理
 
-- Nacos API 端口不可达：应用启动失败。
+- Nacos API 端口不可达：Config Data Loader 可能返回空内容；
+  `NacosLocalConfigGuard` 必须在应用上下文创建前终止启动。
 - 用户名或密码错误：应用启动失败并输出认证错误，但日志不得打印密码。
 - namespace ID、Group 或 Data ID 错误：应用启动失败。
 - Nacos 配置 YAML 无法解析：应用启动失败并指出配置来源。
@@ -170,7 +174,8 @@ Nacos 配置中心提供认证、命名空间和权限隔离，但它不是专�
 ### 集成验证
 
 1. 在 Nacos 中创建 `local` 命名空间并记录 namespace ID。
-2. 在该命名空间、`DIDI_TAXI` Group 中发布 `capacity-service-local.yml`。
+2. 在该命名空间、`DIDI_TAXI` Group 中发布 `capacity-service-local.yml`，
+   并包含 `capacity.nacos.config-loaded: true`。
 3. 设置 `NACOS_NAMESPACE`、`NACOS_USERNAME`、`NACOS_PASSWORD`。
 4. 使用 `local` profile 启动 `capacity-service`。
 5. 从启动日志确认目标 namespace、Group 和 Data ID 加载成功。

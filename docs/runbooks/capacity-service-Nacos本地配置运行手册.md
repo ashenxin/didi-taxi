@@ -9,6 +9,7 @@
 - Data ID：`capacity-service-local.yml`
 - 格式：YAML
 - 刷新：关闭；配置发布后重启服务生效
+- 加载标记：`capacity.nacos.config-loaded: true`（不得删除或改为 false）
 
 ## 启动
 
@@ -63,6 +64,7 @@ YAML 文件。
 - `NACOS_NAMESPACE` 缺失：设置命名空间 ID，不要填写显示名称 `local`。
 - 认证失败：重新设置 `NACOS_USERNAME` 和 `NACOS_PASSWORD`。
 - Data ID 不存在：核对 namespace ID、Group 和 Data ID 三元组。
+- 日志提示必选 Nacos 配置未加载：确认远程文档包含加载标记，且配置不是空文档。
 - 8848 不通：检查 Nacos API 进程和端口；8080 仅是 Nacos 3 控制台。
 - 配置发布后没有变化：重启 `capacity-service`；当前未启用热刷新。
 - 启动时缺少业务属性：确认 Nacos 文档是完整的本地有效配置，而不是局部覆盖。
