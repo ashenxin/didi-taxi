@@ -1,6 +1,7 @@
 package com.sx.gateway;
 
 import com.sx.gateway.config.GatewayJwtProperties;
+import com.sx.gateway.config.GatewayNacosLocalConfigGuard;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -10,6 +11,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 public class GatewayApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(GatewayApplication.class, args);
+        SpringApplication application = new SpringApplication(GatewayApplication.class);
+        application.addListeners(new GatewayNacosLocalConfigGuard());
+        application.run(args);
     }
 }
