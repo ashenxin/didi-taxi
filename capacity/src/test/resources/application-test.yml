@@ -1,5 +1,7 @@
 spring:
   kafka:
+    consumer:
+      group-id: capacity.order.dispatch.requested.test
     listener:
       auto-startup: false
   datasource:
@@ -7,6 +9,9 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
+    druid:
+      validation-query: SELECT 1
+      test-while-idle: true
   sql:
     init:
       mode: always

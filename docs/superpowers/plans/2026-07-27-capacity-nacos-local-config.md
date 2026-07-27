@@ -31,6 +31,7 @@
 - 修改 `capacity/pom.xml`：添加独立的 Nacos Config 依赖。
 - 修改 `capacity/src/main/resources/application.yml`：精简为只包含应用身份。
 - 创建 `capacity/src/main/resources/application-local.yml`：只包含 Nacos 引导和导入配置。
+- 修改 `capacity/src/test/resources/application-test.yml`：显式保留测试上下文启动所需的 Kafka 和 Druid 配置。
 - 创建 `capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`：在不连接 Nacos 的情况下约束本地与远程配置边界。
 - 创建 `docs/runbooks/capacity-service-Nacos本地配置运行手册.md`：记录命名空间、配置发布、启动、验证、故障行为和回滚方式。
 - Nacos 外部状态：创建命名空间 `didi-taxi-local` 并发布 `DIDI_TAXI/capacity-service-local.yml`；仓库中不创建包含秘密值的对应载荷文件。
@@ -153,6 +154,7 @@ mvn -pl capacity -Dtest=NacosLocalConfigBoundaryTest test
 - 修改：`capacity/pom.xml`
 - 修改：`capacity/src/main/resources/application.yml`
 - 创建：`capacity/src/main/resources/application-local.yml`
+- 修改：`capacity/src/test/resources/application-test.yml`
 - 测试：`capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java`
 
 **接口约定：**
@@ -202,7 +204,24 @@ spring:
       password: "${NACOS_PASSWORD}"
 ```
 
-- [ ] **步骤 4：运行边界测试**
+- [ ] **步骤 4：显式补齐测试上下文依赖的本地属性**
+
+在 `capacity/src/test/resources/application-test.yml` 中保留已有测试配置，并补充：
+
+```yaml
+spring:
+  kafka:
+    consumer:
+      group-id: capacity.order.dispatch.requested.test
+  datasource:
+    druid:
+      validation-query: SELECT 1
+      test-while-idle: true
+```
+
+测试环境不导入 Nacos；这些属性替代测试过去从基础 `application.yml` 隐式继承的配置。
+
+- [ ] **步骤 5：运行边界测试**
 
 执行：
 
@@ -212,7 +231,7 @@ mvn -pl capacity -Dtest=NacosLocalConfigBoundaryTest test
 
 预期：PASS，且没有连接 Nacos 的尝试。
 
-- [ ] **步骤 5：检查依赖收敛情况**
+- [ ] **步骤 6：检查依赖收敛情况**
 
 执行：
 
@@ -234,7 +253,7 @@ mvn -pl capacity dependency:tree -Dverbose
 
 检查 Spring Boot、Spring Framework 和 Spring Cloud 相关依赖。如果新依赖使 Maven 选择了比父 POM 管理版本更旧的替代版本，立即停止，不要通过局部版本覆盖规避。
 
-- [ ] **步骤 6：运行 capacity 模块的全部测试**
+- [ ] **步骤 7：运行 capacity 模块的全部测试**
 
 执行：
 
@@ -242,14 +261,16 @@ mvn -pl capacity dependency:tree -Dverbose
 mvn -pl capacity test
 ```
 
-预期：BUILD SUCCESS；日志中不得出现连接 Nacos 的尝试。
+预期：BUILD SUCCESS；日志中不得出现连接 Nacos 的尝试，也不得出现 Druid 缺少 `validation-query` 的错误。
 
-- [ ] **步骤 7：提交客户端配置边界**
+- [ ] **步骤 8：提交客户端配置边界**
 
 ```bash
 git add capacity/pom.xml \
   capacity/src/main/resources/application.yml \
   capacity/src/main/resources/application-local.yml \
+  capacity/src/test/resources/application-test.yml \
+  docs/superpowers/plans/2026-07-27-capacity-nacos-local-config.md \
   capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java
 git commit -m "功能：接入运力服务 Nacos 本地配置入口"
 ```
