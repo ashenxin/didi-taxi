@@ -1,3 +1,10 @@
-app:
-  jwt:
-    secret: ${JWT_SECRET_DRIVER:dev-didi-driver-jwt-secret-change-me-32b!!}
+spring:
+  config:
+    import:
+      - nacos:driver-api-local.yml?group=DIDI_TAXI&refreshEnabled=false
+  nacos:
+    config:
+      server-addr: "${NACOS_SERVER_ADDR:127.0.0.1:8848}"
+      namespace: "${NACOS_NAMESPACE}"
+      username: "${NACOS_USERNAME:nacos}"
+      password: "${NACOS_PASSWORD}"

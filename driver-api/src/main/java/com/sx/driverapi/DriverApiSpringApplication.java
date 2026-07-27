@@ -1,5 +1,6 @@
 package com.sx.driverapi;
 
+import com.sx.driverapi.config.DriverApiNacosLocalConfigGuard;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.openfeign.EnableFeignClients;
@@ -9,6 +10,8 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
 public class DriverApiSpringApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(DriverApiSpringApplication.class, args);
+        SpringApplication application = new SpringApplication(DriverApiSpringApplication.class);
+        application.addListeners(new DriverApiNacosLocalConfigGuard());
+        application.run(args);
     }
 }

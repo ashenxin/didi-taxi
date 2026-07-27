@@ -48,6 +48,11 @@
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-alibaba-nacos-config</artifactId>
+            <version>2023.0.3.3</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-websocket</artifactId>
         </dependency>
@@ -113,4 +118,3 @@
         </plugins>
     </build>
 </project>
-
