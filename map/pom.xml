@@ -38,6 +38,15 @@
             <artifactId>spring-alibaba-nacos-config</artifactId>
             <version>2023.0.3.3</version>
         </dependency>
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+            <version>2023.0.3.3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+        </dependency>
         <!-- Zipkin / Brave：暂不接入时注释，避免无 Zipkin 进程时的上报异常；恢复接入时取消注释并启动 9411 -->
         <!--
         <dependency>

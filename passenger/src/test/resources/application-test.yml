@@ -1,4 +1,10 @@
 spring:
+  cloud:
+    discovery:
+      enabled: false
+    nacos:
+      discovery:
+        enabled: false
   kafka:
     bootstrap-servers: 127.0.0.1:9092
     consumer:

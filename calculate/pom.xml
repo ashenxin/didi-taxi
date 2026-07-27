@@ -49,6 +49,15 @@
             <version>2023.0.3.3</version>
         </dependency>
         <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+            <version>2023.0.3.3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.xuxueli</groupId>
             <artifactId>xxl-job-core</artifactId>
         </dependency>

@@ -1,4 +1,10 @@
 spring:
+  cloud:
+    discovery:
+      enabled: false
+    nacos:
+      discovery:
+        enabled: false
   datasource:
     url: jdbc:h2:mem:order_test;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
     driver-class-name: org.h2.Driver
