@@ -11,10 +11,24 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+/**
+ * 生命周期计划的启动期强校验器。
+ *
+ * <p>除了字段格式和范围，还校验关键业务契约：注销必须有且仅有一个位于最后的本地
+ * {@code ACCOUNT_FINALIZE_CANCEL}；换号必须有且仅有一个身份提交步骤，并且不能包含注销终结器。
+ */
 public final class LifecyclePlanValidator {
+    /** 计划代码采用小写短横线格式，便于作为稳定配置标识。 */
     private static final Pattern PLAN_CODE = Pattern.compile("[a-z][a-z0-9-]{2,63}");
+    /** 步骤代码采用大写下划线格式，便于跨服务作为协议枚举使用。 */
     private static final Pattern STEP_CODE = Pattern.compile("[A-Z][A-Z0-9_]{2,63}");
 
+    /**
+     * 校验一份计划的完整结构与操作类型专属约束。
+     *
+     * @param plan 待校验计划
+     * @param source 配置来源名，仅用于错误定位
+     */
     public void validate(LifecyclePlanDefinition plan, String source) {
         require(plan != null, source, "plan is empty");
         require(Integer.valueOf(1).equals(plan.schemaVersion()), source, "schemaVersion must be 1");
@@ -24,6 +38,7 @@ public final class LifecyclePlanValidator {
         require(Set.of("ACTIVE", "INACTIVE").contains(plan.status()), source, "invalid status");
         require(plan.steps() != null && !plan.steps().isEmpty(), source, "steps must not be empty");
 
+        // 步骤代码在同一计划内必须唯一，否则结果事件无法确定对应步骤。
         Set<String> codes = new HashSet<>();
         for (LifecycleStepDefinition step : plan.steps()) {
             require(step != null && step.code() != null && STEP_CODE.matcher(step.code()).matches(), source, "invalid step code");
@@ -47,6 +62,7 @@ public final class LifecyclePlanValidator {
         }
     }
 
+    /** 校验注销最终提交步骤的位置和不可替换契约。 */
     private static void validateCancellationFinalizer(List<LifecycleStepDefinition> steps, String source) {
         List<LifecycleStepDefinition> finalizers = steps.stream()
                 .filter(step -> "ACCOUNT_FINALIZE_CANCEL".equals(step.code())).toList();
@@ -60,10 +76,12 @@ public final class LifecyclePlanValidator {
         require(finalizer.sequence() == maximum, source, "ACCOUNT_FINALIZE_CANCEL must be last");
     }
 
+    /** 对可空 Integer 做闭区间检查。 */
     private static boolean range(Integer value, int min, int max) {
         return value != null && value >= min && value <= max;
     }
 
+    /** 把字符串解析为领域枚举，并转换为包含计划来源的统一异常。 */
     private static <T> T enumValue(java.util.function.Function<String, T> parser, String value,
                                    String source, String field) {
         try {
@@ -73,6 +91,7 @@ public final class LifecyclePlanValidator {
         }
     }
 
+    /** 统一布尔断言，保持所有配置错误的消息格式一致。 */
     private static void require(boolean condition, String source, String reason) {
         if (!condition) throw invalid(source, reason);
     }

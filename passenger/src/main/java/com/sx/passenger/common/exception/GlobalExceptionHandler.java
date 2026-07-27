@@ -4,6 +4,8 @@ import com.sx.passenger.auth.session.AuthEpochConflictException;
 import com.sx.passenger.common.enums.ExceptionCode;
 import com.sx.passenger.common.util.ResultUtil;
 import com.sx.passenger.common.vo.ResponseVo;
+import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
+import com.sx.passenger.lifecycle.api.LifecyclePrecheckUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -26,6 +28,34 @@ import static java.util.stream.Collectors.joining;
 public class GlobalExceptionHandler {
 
     private static final String REQUEST_ID_HEADER = "X-Request-Id";
+
+    @ExceptionHandler(LifecyclePrecheckUnavailableException.class)
+    public ResponseEntity<ResponseVo<?>> lifecyclePrecheckUnavailable(
+            LifecyclePrecheckUnavailableException ignored, HttpServletRequest request) {
+        log.error("account lifecycle precheck unavailable uri={} requestId={} status={}",
+                request.getRequestURI(), request.getHeader(REQUEST_ID_HEADER), 503);
+        return ResponseEntity.status(503)
+                .body(ResultUtil.error(ExceptionCode.SERVICE_UNAVAILABLE.getValue(),
+                        "注销风险检查暂不可用，请稍后重试"));
+    }
+
+    @ExceptionHandler(LifecycleOperationConflictException.class)
+    public ResponseEntity<ResponseVo<?>> lifecycleConflict(
+            LifecycleOperationConflictException ignored, HttpServletRequest request) {
+        log.warn("account lifecycle conflict uri={} requestId={} status={}",
+                request.getRequestURI(), request.getHeader(REQUEST_ID_HEADER), 409);
+        return ResponseEntity.status(409)
+                .body(ResultUtil.error(ExceptionCode.CONFLICT.getValue(), "账号状态已变化，请刷新后重试"));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ResponseVo<?>> lifecycleBadRequest(
+            IllegalArgumentException ignored, HttpServletRequest request) {
+        log.warn("bad request uri={} requestId={} status={}",
+                request.getRequestURI(), request.getHeader(REQUEST_ID_HEADER), 400);
+        return ResponseEntity.badRequest()
+                .body(ResultUtil.error(ExceptionCode.BAD_REQUEST.getValue(), "请求参数有误，请检查后重试"));
+    }
 
     @ExceptionHandler(AuthEpochConflictException.class)
     public ResponseEntity<ResponseVo<?>> authEpochConflictException(

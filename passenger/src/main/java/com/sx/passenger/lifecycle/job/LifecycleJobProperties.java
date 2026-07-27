@@ -4,6 +4,12 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+/**
+ * 生命周期后台任务的批量、超时和恢复参数。
+ *
+ * <p>默认值保证单次执行时间小于 XXL-JOB 外层超时；所有数值必须为正数，
+ * 防止错误配置导致空转、无限等待或全表扫描。
+ */
 @Component
 @ConfigurationProperties(prefix = "passenger.account-lifecycle.jobs")
 public class LifecycleJobProperties {
@@ -36,6 +42,7 @@ public class LifecycleJobProperties {
         }
     }
 
+    /** Outbox 扫描、Kafka 发送和陈旧领取回收参数。 */
     public static class Outbox {
         private int batchSize = 50;
         private int sendTimeoutSeconds = 5;
@@ -75,6 +82,7 @@ public class LifecycleJobProperties {
         }
     }
 
+    /** Operation/Step 恢复批量和整批截止时间参数。 */
     public static class Recovery {
         private int operationBatchSize = 50;
         private int stepBatchSize = 50;

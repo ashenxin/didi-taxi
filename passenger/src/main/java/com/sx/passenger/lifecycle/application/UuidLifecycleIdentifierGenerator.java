@@ -2,6 +2,7 @@ package com.sx.passenger.lifecycle.application;
 
 import java.util.UUID;
 
+/** 使用无短横线 UUID 生成生命周期业务标识的默认实现。 */
 public final class UuidLifecycleIdentifierGenerator implements LifecycleIdentifierGenerator {
     @Override
     public String nextOperationNo() {

@@ -2,12 +2,14 @@
 
 ## 1. 计划状态
 
-- 状态：P4 代码实现与本地验证已完成；待人工执行 P4 数据库补丁，P6 前保持影子模式且不切真实注销流量
+- 状态：P4 代码实现、P6 编排接入和五模块回归已完成；目标环境的 patch/backfill
+  执行结果与投影覆盖率尚未在本文留证，写门禁继续保持 `SHADOW`
 - 前置阶段：P1、P2、P3 已完成代码实现
 - 本阶段模块：`calculate`
 - 联动但暂不切流模块：`passenger`、`passenger-api`、`order`
 - 实施方式：按任务顺序执行；每个任务先补测试，再实现，再执行聚焦验证
-- 约束：P4 只建设参与者能力，不在 P6 前接管真实注销编排，不删除旧 settings 逻辑
+- 历史阶段约束：P4 当时只建设参与者能力；真实编排已在 P6 接通，旧 settings
+  编排已在 P7 收束到独立 Legacy Adapter
 
 ### 1.1 本次执行结果（2026-07-22）
 
@@ -17,6 +19,19 @@
 - `mvn -pl calculate verify` 通过：66 个测试通过，覆盖率门禁通过。
 - `mvn -pl calculate,order,passenger-api,passenger -am verify` 通过：Calculate 66、Passenger 158、Order 106、Passenger API 160，共 490 个测试通过。
 - 按约定跳过 Docker 环境验证。
+
+### 1.2 后续阶段复核（2026-07-27）
+
+- P6 已接通 Passenger 编排、Kafka 命令/回执、超时查询和生命周期持续投影。
+- P7 已将旧 settings 主服务中的券积分注销编排移出，旧路径仅保留在独立
+  `LegacyAccountCancellationAdapter` 作为灰度回退通道。
+- 最新五模块测试库存为 558：Calculate 66、Passenger 177、Order 106、
+  Wallet 35、Passenger API 174；这是后续阶段的累计回归证据，不覆盖下面的 P4
+  历史验证记录。
+- 本仓无法证明目标数据库已经执行
+  `calculate_account_lifecycle_p4_patch.sql` 与
+  `calculate_account_lifecycle_p4_backfill.sql`；切换 `ENFORCE` 前仍须执行覆盖率、
+  状态、版本和重复事件核验。
 
 ## 2. 目标
 

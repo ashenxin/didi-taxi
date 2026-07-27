@@ -5,6 +5,7 @@ import com.sx.passenger.lifecycle.plan.LifecyclePlanRegistry;
 import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 
+/** 启动时验证所有生效计划步骤都有可用参与者适配器。 */
 @Component
 public class LifecycleOrchestrationStartupValidator {
     private final LifecyclePlanRegistry plans;
@@ -16,6 +17,7 @@ public class LifecycleOrchestrationStartupValidator {
         this.participants = participants;
     }
 
+    /** 缺少执行器时启动失败，避免运行后流程停在无法处理的步骤。 */
     @PostConstruct
     void validate() {
         plans.activePlan(LifecycleOperationType.ACCOUNT_CANCEL).steps().stream()

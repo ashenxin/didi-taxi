@@ -13,6 +13,12 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 生命周期参与者结果 Kafka 消费者。
+ *
+ * <p>解析标准结果消息，幂等应用到对应 Step 后立即尝试继续推进 Operation。
+ * 只有消息功能开启时才创建该组件。
+ */
 @Component
 @ConditionalOnProperty(prefix = "passenger.account-lifecycle.messaging",
         name = "enabled", havingValue = "true")
@@ -30,6 +36,7 @@ public class LifecycleResultKafkaConsumer {
         this.orchestrator = orchestrator;
     }
 
+    /** 消费一条参与者结果并恢复对应注销编排。 */
     @KafkaListener(topics = "${passenger.account-lifecycle.messaging.result-topic}")
     public void consume(String payload) {
         ResultMessage message = read(payload);
@@ -47,6 +54,7 @@ public class LifecycleResultKafkaConsumer {
         }
     }
 
+    /** Kafka 结果消息的严格内部反序列化模型。 */
     private record ResultMessage(
             String eventId, String operationNo, String stepCode, long customerId,
             String participantCode, String decision,

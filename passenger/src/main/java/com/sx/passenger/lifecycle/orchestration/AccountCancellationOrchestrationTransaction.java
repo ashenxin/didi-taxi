@@ -25,6 +25,13 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 注销 Saga 的事务决策核心。
+ *
+ * <p>该类在数据库行锁保护下选择下一步骤、登记命令 Outbox、应用参与者结果、
+ * 维护阻断项、安排重试及执行本地最终注销。它不直接发起远程 HTTP 调用，
+ * 从而避免持有数据库事务等待网络。
+ */
 @Service
 public class AccountCancellationOrchestrationTransaction {
     private static final String SYSTEM = "SYSTEM";
@@ -61,6 +68,7 @@ public class AccountCancellationOrchestrationTransaction {
         this.eventTopic = eventTopic;
     }
 
+    /** 锁定 Operation 和 Steps，计算本轮应远程检查、继续、等待还是停止。 */
     @Transactional
     public LifecycleWorkItem prepare(String operationNo) {
         LifecycleOperationEntity operation = requireOperation(operationNo);
@@ -115,6 +123,7 @@ public class AccountCancellationOrchestrationTransaction {
         };
     }
 
+    /** 幂等应用参与者结果并更新 Step、阻断项和 Operation 状态。 */
     @Transactional
     public void applyResult(String operationNo, String stepCode, String commandEventId,
                             LifecycleParticipantResult result) {
@@ -152,6 +161,7 @@ public class AccountCancellationOrchestrationTransaction {
         }
     }
 
+    /** 将超时 RUNNING 步骤转换为一次结果查询命令。 */
     @Transactional
     public LifecycleParticipantCommand prepareTimedOutQuery(long stepId) {
         LifecycleStepEntity requested = steps.selectById(stepId);
@@ -161,6 +171,7 @@ public class AccountCancellationOrchestrationTransaction {
         return command(operation, requested, requested.getCommandEventId(), LocalDateTime.now());
     }
 
+    /** 查询未找到结果时按重试策略重新安排步骤。 */
     @Transactional
     public void handleQueryMiss(String operationNo, String stepCode) {
         LifecycleOperationEntity operation = requireOperation(operationNo);
@@ -172,6 +183,7 @@ public class AccountCancellationOrchestrationTransaction {
         }
     }
 
+    /** 记录人工恢复证据，并把符合条件的 MANUAL_REVIEW 步骤转为可重试。 */
     @Transactional
     public void requestManualRetry(String operationNo, String actor,
                                    String reason, String evidenceId) {
@@ -208,6 +220,7 @@ public class AccountCancellationOrchestrationTransaction {
         if (events.insert(event) != 1) throw new IllegalStateException("人工恢复审计写入失败");
     }
 
+    /** prepare 阶段发生非预期技术异常时记录稳定错误码，供恢复任务继续处理。 */
     @Transactional
     public void recordPreparationFailure(String operationNo, String errorCode) {
         LifecycleOperationEntity operation = requireOperation(operationNo);
@@ -321,6 +334,7 @@ public class AccountCancellationOrchestrationTransaction {
                 "CANCELLING", step.getParticipantCode(), now);
     }
 
+    /** 根据尝试次数计算 nextRetryAt；耗尽后转入 MANUAL_REVIEW。 */
     private void scheduleRetry(LifecycleOperationEntity operation, LifecycleStepEntity step,
                                String errorCode, String errorMessage, LocalDateTime now) {
         if (step.getAttemptCount() >= step.getMaxRetryCount()) {
@@ -341,6 +355,7 @@ public class AccountCancellationOrchestrationTransaction {
         operations.updateById(operation);
     }
 
+    /** 将参与者返回的阻断项按稳定 blockerKey 幂等保存。 */
     private void storeBlockers(LifecycleOperationEntity operation, LifecycleStepEntity step,
                                List<LifecycleParticipantResult.Blocker> found, LocalDateTime now) {
         for (LifecycleParticipantResult.Blocker blocker : found) {
@@ -386,6 +401,7 @@ public class AccountCancellationOrchestrationTransaction {
                 .eq(LifecycleBlockerEntity::getStatus, "ACTIVE")));
     }
 
+    /** 将已到期 RETRY_PENDING 步骤恢复为 PENDING，供本轮重新选择。 */
     private void normalizeDueRetries(List<LifecycleStepEntity> all, LocalDateTime now) {
         all.stream().filter(step -> "RETRY_PENDING".equals(step.getStatus()))
                 .filter(step -> step.getNextRetryAt() == null || !step.getNextRetryAt().isAfter(now))

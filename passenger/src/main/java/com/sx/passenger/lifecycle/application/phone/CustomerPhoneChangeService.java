@@ -52,6 +52,14 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+/**
+ * 更换手机号的原子应用服务。
+ *
+ * <p>在事务外完成幂等检查、占用检查和 OTP 消费；随后在一个数据库事务中完成：
+ * customer 手机号 CAS 更新、auth_epoch/lifecycle_version 递增、绑定历史换代、
+ * Operation/Steps 全部完成、审计事件和 Outbox 写入。任何数据库步骤失败都会整体回滚，
+ * 但已经消费的 OTP 不恢复。
+ */
 @Service
 public class CustomerPhoneChangeService {
     private final AtomicOtpService otp;
@@ -105,12 +113,14 @@ public class CustomerPhoneChangeService {
         this.metrics = metrics;
     }
 
+    /** 执行换号；相同幂等键和请求内容可返回已完成结果。 */
     public ChangeCustomerPhoneResult change(ChangeCustomerPhoneCommand command) {
         Objects.requireNonNull(command, "command must not be null");
         ChangeCustomerPhoneResult result = withoutTransaction.execute(status -> changeOutsideTransaction(command));
         return Objects.requireNonNull(result, "phone change execution returned no result");
     }
 
+    /** 在事务外完成不会随数据库回滚恢复的校验和 OTP 消费。 */
     private ChangeCustomerPhoneResult changeOutsideTransaction(ChangeCustomerPhoneCommand command) {
         String requestHash = hasher.hash(command);
         var prior = snapshots.findByIdempotency(
@@ -137,6 +147,7 @@ public class CustomerPhoneChangeService {
         return Objects.requireNonNull(result, "phone change transaction returned no result");
     }
 
+    /** 在单一事务内提交手机号、绑定历史、运行时快照及完成事件。 */
     private ChangeCustomerPhoneResult applyChange(ChangeCustomerPhoneCommand command, String requestHash) {
         LifecycleRuntimeSnapshot snapshot = snapshotFactory.create(new CreateLifecycleSnapshotCommand(
                 command.customerId(), LifecycleOperationType.PHONE_CHANGE, command.idempotencyKey(), requestHash,
@@ -225,6 +236,7 @@ public class CustomerPhoneChangeService {
                 changed.getLifecycleVersion(), changed.getAuthEpoch(), true);
     }
 
+    /** 追加一次换号 Operation 状态迁移审计事件。 */
     private String insertTransitionEvent(LifecycleOperationEntity operation, String from, String to, String reason,
                                          ChangeCustomerPhoneCommand command, LocalDateTime now) {
         String eventId = identifiers.nextEventId();
@@ -237,6 +249,7 @@ public class CustomerPhoneChangeService {
         return eventId;
     }
 
+    /** 登记换号完成 Outbox，供会话和其他域更新投影。 */
     private void insertCompletedOutbox(LifecycleOperationEntity operation, Customer changed, String causationEventId,
                                        ChangeCustomerPhoneCommand command, LocalDateTime now) {
         String eventId = identifiers.nextEventId();
@@ -258,6 +271,7 @@ public class CustomerPhoneChangeService {
         if (outboxes.insert(outbox) != 1) throw new IllegalStateException("Failed to insert phone changed outbox");
     }
 
+    /** 校验账号活跃、版本未变化、新旧号码不同且不存在其他活动 Operation。 */
     private static void requireChangeAllowed(Customer current, ChangeCustomerPhoneCommand command) {
         if (current == null || !Integer.valueOf(0).equals(current.getIsDeleted())
                 || !"ACTIVE".equals(current.getLifecycleStatus())) {
@@ -274,6 +288,7 @@ public class CustomerPhoneChangeService {
         }
     }
 
+    /** 只允许内容一致且已经 COMPLETED 的历史换号操作被重放。 */
     private static ChangeCustomerPhoneResult replay(LifecycleOperationEntity operation, String requestHash) {
         if (!requestHash.equals(operation.getRequestHash())) {
             throw new LifecycleOperationConflictException("Idempotency key was used for another request");
@@ -286,6 +301,7 @@ public class CustomerPhoneChangeService {
                 operation.getAppliedLifecycleVersion(), operation.getRestrictedAuthEpoch(), true);
     }
 
+    /** 遍历 JDBC 异常链，可靠识别新手机号唯一键冲突。 */
     private static boolean hasConstraint(Throwable failure, String expectedConstraint) {
         Pattern expectedToken = Pattern.compile("(?i)(?<![a-z0-9_])"
                 + Pattern.quote(expectedConstraint) + "(?![a-z0-9_])");

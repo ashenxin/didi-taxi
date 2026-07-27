@@ -2,6 +2,12 @@ package com.sx.passenger.lifecycle.orchestration;
 
 import org.springframework.stereotype.Service;
 
+/**
+ * 注销 Saga 的外层推进循环。
+ *
+ * <p>数据库决策由事务组件完成，远程调用在事务外执行；每次最多内联推进固定步数，
+ * 防止异常计划或状态循环长期占用 XXL-JOB/请求线程。
+ */
 @Service
 public class AccountCancellationOrchestrator {
     private static final int MAX_INLINE_ADVANCES = 32;
@@ -15,6 +21,7 @@ public class AccountCancellationOrchestrator {
         this.participants = participants;
     }
 
+    /** 从持久化状态继续推进指定 Operation，直到等待、停止或达到内联上限。 */
     public void resume(String operationNo) {
         for (int i = 0; i < MAX_INLINE_ADVANCES; i++) {
             LifecycleWorkItem work;

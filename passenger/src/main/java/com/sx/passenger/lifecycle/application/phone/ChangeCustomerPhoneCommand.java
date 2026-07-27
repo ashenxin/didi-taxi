@@ -2,6 +2,14 @@ package com.sx.passenger.lifecycle.application.phone;
 
 import java.time.Instant;
 
+/**
+ * 原子更换账号手机号的命令。
+ *
+ * @param newPhone 待绑定的新手机号
+ * @param expectedLifecycleVersion 发起请求时看到的账号生命周期版本
+ * @param otpCode PHONE_CHANGE_NEW_PHONE 用途验证码
+ * @param idempotencyKey 重试时保持不变的幂等键
+ */
 public record ChangeCustomerPhoneCommand(long customerId,
                                          long expectedLifecycleVersion,
                                          String newPhone,

@@ -18,16 +18,24 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.TreeMap;
 
+/**
+ * 生命周期幂等请求摘要生成器。
+ *
+ * <p>先递归排序 JSON 对象字段，再加入操作类型、账号版本和关键业务输入，
+ * 最后计算 SHA-256。同一幂等键只有摘要相同才允许重放。
+ */
 @Component
 public final class LifecycleRequestHasher {
     private final ObjectMapper json = new ObjectMapper()
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
+    /** 计算注销建栅栏请求摘要。 */
     public String hash(FenceAccountCancellationCommand command) {
         return hash(LifecycleOperationType.ACCOUNT_CANCEL, command.customerId(),
                 command.expectedLifecycleVersion(), command.sanitizedRequestContextJson());
     }
 
+    /** 计算换号请求摘要；新手机号属于请求身份的一部分。 */
     public String hash(ChangeCustomerPhoneCommand command) {
         return digest(LifecycleOperationType.PHONE_CHANGE.name() + "\n" + command.customerId() + "\n"
                 + command.expectedLifecycleVersion() + "\n" + command.newPhone() + "\n"
@@ -53,6 +61,7 @@ public final class LifecycleRequestHasher {
         }
     }
 
+    /** 校验 JSON 并生成字段顺序稳定的紧凑表示。 */
     private String canonicalJson(String value) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("sanitizedRequestContextJson must not be blank");
@@ -64,6 +73,7 @@ public final class LifecycleRequestHasher {
         }
     }
 
+    /** 递归排序对象字段；数组保持原顺序，因为数组顺序具有业务含义。 */
     private JsonNode sort(JsonNode node) {
         if (node.isObject()) {
             ObjectNode sorted = json.createObjectNode();

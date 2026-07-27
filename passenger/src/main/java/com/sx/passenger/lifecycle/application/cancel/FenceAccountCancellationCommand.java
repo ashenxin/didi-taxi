@@ -2,6 +2,14 @@ package com.sx.passenger.lifecycle.application.cancel;
 
 import java.time.Instant;
 
+/**
+ * 消费注销 OTP 并建立账号注销栅栏的命令。
+ *
+ * @param expectedLifecycleVersion 客户端发起时看到的账号生命周期版本
+ * @param otpCode ACCOUNT_CANCEL 用途的一次性验证码
+ * @param idempotencyKey 重试时保持不变的幂等键
+ * @param sanitizedRequestContextJson 已脱敏的设备和请求上下文
+ */
 public record FenceAccountCancellationCommand(long customerId,
                                               long expectedLifecycleVersion,
                                               String otpCode,

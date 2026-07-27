@@ -29,6 +29,7 @@ import static org.mockito.Mockito.when;
 @ActiveProfiles("test")
 class AccountCancellationOrchestratorIntegrationTest {
     private static final long CUSTOMER_ID = 96_001L;
+    private static final long RE_REGISTERED_CUSTOMER_ID = 96_002L;
     private static final String OPERATION_NO = "cancel-p6-integration";
 
     @Autowired AccountCancellationOrchestrator orchestrator;
@@ -49,7 +50,8 @@ class AccountCancellationOrchestratorIntegrationTest {
         steps.delete(null);
         operations.delete(null);
         jdbc.update("DELETE FROM customer_phone_binding_history WHERE customer_id = ?", CUSTOMER_ID);
-        jdbc.update("DELETE FROM customer WHERE id = ?", CUSTOMER_ID);
+        jdbc.update("DELETE FROM customer WHERE id IN (?, ?)",
+                CUSTOMER_ID, RE_REGISTERED_CUSTOMER_ID);
         jdbc.update("""
                 INSERT INTO customer
                     (id, phone, status, lifecycle_status, lifecycle_version, auth_epoch,
@@ -98,6 +100,15 @@ class AccountCancellationOrchestratorIntegrationTest {
         assertThat(jdbc.queryForObject(
                 "SELECT is_deleted FROM customer WHERE id = ?",
                 Integer.class, CUSTOMER_ID)).isEqualTo(1);
+
+        jdbc.update("""
+                INSERT INTO customer
+                    (id, phone, status, lifecycle_status, lifecycle_version, auth_epoch, is_deleted)
+                VALUES (?, ?, 0, 'ACTIVE', 0, 1, 0)
+                """, RE_REGISTERED_CUSTOMER_ID, "13900960001");
+        assertThat(jdbc.queryForObject(
+                "SELECT id FROM customer WHERE phone_active = ?",
+                Long.class, "13900960001")).isEqualTo(RE_REGISTERED_CUSTOMER_ID);
     }
 
     private LifecycleOperationEntity operation() {

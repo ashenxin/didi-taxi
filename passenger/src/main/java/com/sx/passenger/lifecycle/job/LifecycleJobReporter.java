@@ -6,6 +6,12 @@ import org.springframework.stereotype.Component;
 
 import java.util.function.Supplier;
 
+/**
+ * 生命周期 XXL-JOB 的统一执行包装器。
+ *
+ * <p>负责捕获顶层异常、记录标准批次指标和日志，并在存在技术失败或重试耗尽时
+ * 显式调用 XXL-JOB 失败状态，避免任务异常却显示成功。
+ */
 @Component
 @Slf4j
 public class LifecycleJobReporter {
@@ -19,6 +25,7 @@ public class LifecycleJobReporter {
         this.xxl = xxl;
     }
 
+    /** 执行任务主体并统一完成异常兜底和状态上报。 */
     public void execute(String jobName, Supplier<LifecycleJobBatchResult> action) {
         long started = System.nanoTime();
         try {

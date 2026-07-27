@@ -6,6 +6,11 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * 生命周期步骤到远程参与者端点的白名单注册表。
+ *
+ * <p>端点由服务配置和固定内部路径组合，不允许计划直接提供任意 URL。
+ */
 @Component
 public class LifecycleParticipantRegistry {
     private final Map<String, ParticipantEndpoint> byStep;
@@ -23,6 +28,7 @@ public class LifecycleParticipantRegistry {
                 "WALLET_CLOSE_AUTO_PAY", endpoint("WALLET", wallet, "/actions"));
     }
 
+    /** 要求步骤与参与者精确匹配已登记端点。 */
     public ParticipantEndpoint require(String stepCode, String participantCode) {
         ParticipantEndpoint endpoint = byStep.get(stepCode);
         if (endpoint == null || !endpoint.participantCode().equals(participantCode)) {
@@ -31,10 +37,12 @@ public class LifecycleParticipantRegistry {
         return endpoint;
     }
 
+    /** 返回全部由 HTTP 网关处理的步骤代码。 */
     public Set<String> remoteStepCodes() {
         return byStep.keySet();
     }
 
+    /** 判断计划步骤是否存在远程或消息参与者适配器。 */
     public boolean supportsCommand(String stepCode, String participantCode) {
         if ("SESSION_CLOSE_WS".equals(stepCode) && "SESSION".equals(participantCode)) return true;
         ParticipantEndpoint endpoint = byStep.get(stepCode);
@@ -48,6 +56,7 @@ public class LifecycleParticipantRegistry {
         return new ParticipantEndpoint(participant, root + actionPath, root + "/results");
     }
 
+    /** 一个参与者的执行地址和结果查询根地址。 */
     public record ParticipantEndpoint(
             String participantCode, String executeUrl, String resultRootUrl) {}
 }

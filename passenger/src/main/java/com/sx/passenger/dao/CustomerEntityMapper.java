@@ -33,4 +33,10 @@ public interface CustomerEntityMapper extends BaseMapper<Customer> {
                                     @Param("operationNo") String operationNo,
                                     @Param("expectedLifecycleVersion") long expectedLifecycleVersion,
                                     @Param("cancelledAt") LocalDateTime cancelledAt);
+
+    /** 不可逆开始前撤销注销栅栏并再次递增版本和认证代次。 */
+    int abortAccountCancellation(@Param("customerId") long customerId,
+                                 @Param("operationNo") String operationNo,
+                                 @Param("expectedLifecycleVersion") long expectedLifecycleVersion,
+                                 @Param("updatedAt") LocalDateTime updatedAt);
 }

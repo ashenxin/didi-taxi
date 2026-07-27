@@ -13,6 +13,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
+/**
+ * 基于 MyBatis 的快照存储实现。
+ *
+ * <p>保存方法强制要求外部事务，保证 Operation、Steps、Event 和 Outbox
+ * 要么全部提交，要么全部回滚。
+ */
 @Service
 public class MybatisLifecycleSnapshotStore implements LifecycleSnapshotStore {
     private final LifecycleOperationMapper operations;
@@ -41,6 +47,7 @@ public class MybatisLifecycleSnapshotStore implements LifecycleSnapshotStore {
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public void persistNew(LifecycleRuntimeSnapshot snapshot) {
+        // 先插入聚合根取得主键，再回填到步骤、审计事件和 Outbox。
         if (operations.insert(snapshot.operation()) != 1) {
             throw new IllegalStateException("Failed to insert lifecycle operation");
         }

@@ -14,6 +14,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 生命周期故障恢复服务。
+ *
+ * <p>处理两类遗留工作：达到 next_wakeup_at 的 Operation，以及已经超过 timeout_at
+ * 的 RUNNING Step。单条失败不会终止整批，并受批次截止时间约束。
+ */
 @Service
 @Slf4j
 public class LifecycleRecoveryService {
@@ -39,6 +45,7 @@ public class LifecycleRecoveryService {
         this.properties = properties;
     }
 
+    /** 在统一时间预算内依次恢复超时步骤和到期 Operation。 */
     public LifecycleJobBatchResult recover() {
         long started = System.nanoTime();
         long deadline = started + TimeUnit.SECONDS.toNanos(
@@ -57,6 +64,7 @@ public class LifecycleRecoveryService {
                 elapsedMs(started));
     }
 
+    /** 独立恢复指定数量的到期 Operation，主要用于测试和手工调用。 */
     public LifecycleJobBatchResult recoverDueOperations(int limit) {
         long started = System.nanoTime();
         return recoverDueOperations(limit, started + TimeUnit.SECONDS.toNanos(
@@ -92,6 +100,7 @@ public class LifecycleRecoveryService {
                 due.size(), claimed, succeeded, failed, 0, skipped, elapsedMs(started));
     }
 
+    /** 独立处理指定数量的超时 RUNNING Step。 */
     public LifecycleJobBatchResult recoverTimedOutSteps(int limit) {
         long started = System.nanoTime();
         return recoverTimedOutSteps(limit, started + TimeUnit.SECONDS.toNanos(
@@ -141,6 +150,7 @@ public class LifecycleRecoveryService {
                 elapsedMs(started));
     }
 
+    /** 只有提供结果查询接口的远程域才能对超时命令执行查询恢复。 */
     private static boolean isQueryable(String participant) {
         return "ORDER".equals(participant) || "CALCULATE".equals(participant)
                 || "WALLET".equals(participant);

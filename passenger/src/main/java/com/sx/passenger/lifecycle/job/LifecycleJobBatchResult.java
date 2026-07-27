@@ -1,5 +1,16 @@
 package com.sx.passenger.lifecycle.job;
 
+/**
+ * 一次生命周期后台任务批次的标准统计结果。
+ *
+ * @param scanned 扫描到的候选数量
+ * @param claimed 成功领取、由本实例负责的数量
+ * @param succeeded 成功处理数量
+ * @param failed 技术失败数量
+ * @param exhausted 已耗尽自动重试数量
+ * @param skipped 因并发抢占或截止时间跳过数量
+ * @param elapsedMs 批次耗时
+ */
 public record LifecycleJobBatchResult(
         int scanned,
         int claimed,
@@ -25,6 +36,7 @@ public record LifecycleJobBatchResult(
         return new LifecycleJobBatchResult(0, 0, 0, 1, 0, 0, elapsedMs);
     }
 
+    /** 合并两个子批次结果，用于 Recovery 汇总不同扫描阶段。 */
     public LifecycleJobBatchResult merge(LifecycleJobBatchResult other) {
         if (other == null) return this;
         return new LifecycleJobBatchResult(
@@ -37,6 +49,7 @@ public record LifecycleJobBatchResult(
                 elapsedMs + other.elapsedMs);
     }
 
+    /** 是否应把本次 XXL-JOB 标记为失败而不是绿色成功。 */
     public boolean hasTechnicalFailure() {
         return failed > 0 || exhausted > 0;
     }

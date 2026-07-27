@@ -3,6 +3,7 @@ package com.sx.passengerapi.model.settings;
 public class SettingsSmsSendResultVO {
     private String mockCode;
     private String maskedPhone;
+    private Long lifecycleVersion;
 
     public String getMockCode() {
         return mockCode;
@@ -18,5 +19,13 @@ public class SettingsSmsSendResultVO {
 
     public void setMaskedPhone(String maskedPhone) {
         this.maskedPhone = maskedPhone;
+    }
+
+    public Long getLifecycleVersion() {
+        return lifecycleVersion;
+    }
+
+    public void setLifecycleVersion(Long lifecycleVersion) {
+        this.lifecycleVersion = lifecycleVersion;
     }
 }

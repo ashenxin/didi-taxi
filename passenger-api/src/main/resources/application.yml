@@ -30,6 +30,10 @@ passenger:
     enabled: ${PASSENGER_WS_ENABLED:true}
     heartbeat-timeout-ms: 90000
   account-lifecycle:
+    rollout:
+      # 旧 settings 入口灰度转调；新 account-lifecycle API 始终使用新流程。
+      enabled: ${PASSENGER_LIFECYCLE_ROLLOUT_ENABLED:false}
+      percent: ${PASSENGER_LIFECYCLE_ROLLOUT_PERCENT:0}
     messaging:
       enabled: ${ACCOUNT_LIFECYCLE_KAFKA_ENABLED:true}
       command-topic: ${ACCOUNT_LIFECYCLE_COMMAND_TOPIC:account.lifecycle.command.v1}

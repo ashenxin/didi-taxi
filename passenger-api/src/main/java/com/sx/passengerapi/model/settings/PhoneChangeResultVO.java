@@ -4,6 +4,8 @@ public class PhoneChangeResultVO {
     private Boolean changed;
     private Boolean requireLogin;
     private String maskedNewPhone;
+    private String operationNo;
+    private String status;
 
     public Boolean getChanged() {
         return changed;
@@ -27,5 +29,21 @@ public class PhoneChangeResultVO {
 
     public void setMaskedNewPhone(String maskedNewPhone) {
         this.maskedNewPhone = maskedNewPhone;
+    }
+
+    public String getOperationNo() {
+        return operationNo;
+    }
+
+    public void setOperationNo(String operationNo) {
+        this.operationNo = operationNo;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
     }
 }

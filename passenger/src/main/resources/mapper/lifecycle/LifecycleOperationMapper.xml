@@ -69,4 +69,34 @@
         WHERE id = #{id} AND operation_type = 'PHONE_CHANGE'
           AND status = 'EXECUTING' AND row_version = #{expectedRowVersion}
     </update>
+
+    <update id="abortCancellationCas">
+        UPDATE account_lifecycle_operation
+        SET status = 'ABORTED',
+            applied_lifecycle_version = #{appliedLifecycleVersion},
+            restricted_auth_epoch = #{authEpoch},
+            active_blocker_count = 0,
+            aborted_at = #{abortedAt},
+            row_version = row_version + 1,
+            updated_at = #{abortedAt}
+        WHERE id = #{id}
+          AND operation_type = 'ACCOUNT_CANCEL'
+          AND status = #{expectedStatus}
+          AND irreversible_started = 0
+          AND row_version = #{expectedRowVersion}
+    </update>
+
+    <update id="recheckBlockedCas">
+        UPDATE account_lifecycle_operation
+        SET status = 'VALIDATING',
+            active_blocker_count = 0,
+            next_wakeup_at = NULL,
+            row_version = row_version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND operation_type = 'ACCOUNT_CANCEL'
+          AND status = 'BLOCKED'
+          AND irreversible_started = 0
+          AND row_version = #{expectedRowVersion}
+    </update>
 </mapper>

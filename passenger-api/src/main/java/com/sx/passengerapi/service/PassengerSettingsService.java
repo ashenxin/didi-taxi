@@ -3,8 +3,6 @@ package com.sx.passengerapi.service;
 import com.sx.passengerapi.client.CalculateClient;
 import com.sx.passengerapi.client.OrderClient;
 import com.sx.passengerapi.client.PassengerCoreSettingsClient;
-import com.sx.passengerapi.client.dto.AppAccountCancelConfirmRequest;
-import com.sx.passengerapi.client.dto.AppAccountCancelResult;
 import com.sx.passengerapi.client.dto.AppAccountCancelSmsSendResult;
 import com.sx.passengerapi.client.dto.AppPhoneChangeConfirmRequest;
 import com.sx.passengerapi.client.dto.AppPhoneChangeResult;
@@ -14,10 +12,12 @@ import com.sx.passengerapi.client.dto.AppSettingsProfileResponse;
 import com.sx.passengerapi.client.dto.AppSmsSendResult;
 import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
-import com.sx.passengerapi.model.ordercore.OrderPageData;
-import com.sx.passengerapi.model.ordercore.TripOrderRow;
-import com.sx.passengerapi.model.benefit.BenefitClearPointsRequest;
-import com.sx.passengerapi.model.ordercore.UnsettledOrderCheckResult;
+import com.sx.passengerapi.lifecycle.LifecycleRolloutMetrics;
+import com.sx.passengerapi.lifecycle.LifecycleRolloutProperties;
+import com.sx.passengerapi.lifecycle.LifecycleRolloutRouter;
+import com.sx.passengerapi.model.lifecycle.AccountCancellationSubmitRequest;
+import com.sx.passengerapi.model.lifecycle.AccountLifecycleSubmissionVO;
+import com.sx.passengerapi.model.lifecycle.PhoneChangeSubmitRequest;
 import com.sx.passengerapi.model.settings.AccountCancelConfirmRequest;
 import com.sx.passengerapi.model.settings.AccountCancelResultVO;
 import com.sx.passengerapi.model.settings.PhoneChangeConfirmRequest;
@@ -25,208 +25,185 @@ import com.sx.passengerapi.model.settings.PhoneChangeResultVO;
 import com.sx.passengerapi.model.settings.PhoneChangeSmsSendRequest;
 import com.sx.passengerapi.model.settings.SettingsProfileVO;
 import com.sx.passengerapi.model.settings.SettingsSmsSendResultVO;
-import com.sx.passengerapi.model.wallet.CouponInvalidateRequest;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.Collections;
-import java.util.List;
+import java.util.UUID;
 
+/**
+ * 旧 settings 路径的兼容适配层。
+ *
+ * <p>该类只负责 DTO 兼容和灰度路由。跨订单、钱包、券积分的旧注销编排已经隔离到
+ * {@link LegacyAccountCancellationAdapter}，命中新流程时统一交给
+ * {@link PassengerAccountLifecycleService}。
+ */
 @Service
 @Slf4j
 public class PassengerSettingsService {
-    private final PassengerCoreSettingsClient passengerCoreSettingsClient;
-    private final OrderClient orderClient;
-    private final CalculateClient calculateClient;
-    private final PassengerLifecycleOrchestrator lifecycleOrchestrator;
-    private final OrderLifecycleShadowPrecheckService orderLifecycleShadow;
+    private final PassengerCoreSettingsClient core;
+    private final PassengerLifecycleOrchestrator legacyPhoneChange;
+    private final PassengerAccountLifecycleService lifecycle;
+    private final LegacyAccountCancellationAdapter legacyCancellation;
+    private final LifecycleRolloutRouter rollout;
+    private final LifecycleRolloutMetrics metrics;
 
+    @Autowired
     public PassengerSettingsService(
-            PassengerCoreSettingsClient passengerCoreSettingsClient,
-            OrderClient orderClient,
-            CalculateClient calculateClient,
-            PassengerLifecycleOrchestrator lifecycleOrchestrator,
-            OrderLifecycleShadowPrecheckService orderLifecycleShadow) {
-        this.passengerCoreSettingsClient = passengerCoreSettingsClient;
-        this.orderClient = orderClient;
-        this.calculateClient = calculateClient;
-        this.lifecycleOrchestrator = lifecycleOrchestrator;
-        this.orderLifecycleShadow = orderLifecycleShadow;
+            PassengerCoreSettingsClient core,
+            PassengerLifecycleOrchestrator legacyPhoneChange,
+            PassengerAccountLifecycleService lifecycle,
+            LegacyAccountCancellationAdapter legacyCancellation,
+            LifecycleRolloutRouter rollout,
+            LifecycleRolloutMetrics metrics) {
+        this.core = core;
+        this.legacyPhoneChange = legacyPhoneChange;
+        this.lifecycle = lifecycle;
+        this.legacyCancellation = legacyCancellation;
+        this.rollout = rollout;
+        this.metrics = metrics;
+    }
+
+    /** 保留给既有单元测试和迁移期调用方的旧构造入口，默认不命中灰度。 */
+    PassengerSettingsService(
+            PassengerCoreSettingsClient core,
+            OrderClient order,
+            CalculateClient calculate,
+            PassengerLifecycleOrchestrator legacyPhoneChange,
+            OrderLifecycleShadowPrecheckService shadow) {
+        this.core = core;
+        this.legacyPhoneChange = legacyPhoneChange;
+        this.lifecycle = null;
+        this.legacyCancellation =
+                new LegacyAccountCancellationAdapter(order, calculate, legacyPhoneChange, shadow);
+        LifecycleRolloutProperties disabled = new LifecycleRolloutProperties();
+        this.rollout = new LifecycleRolloutRouter(disabled);
+        this.metrics = new LifecycleRolloutMetrics(new SimpleMeterRegistry());
     }
 
     public SettingsProfileVO profile(long customerId) {
-        AppSettingsProfileResponse data = unwrap(passengerCoreSettingsClient.profile(new AppSettingsCustomerIdRequest(customerId)));
-        SettingsProfileVO out = new SettingsProfileVO();
-        out.setCustomerId(data.getCustomerId());
-        out.setMaskedPhone(data.getMaskedPhone());
-        out.setStatus(data.getStatus());
-        out.setDeleted(data.getDeleted());
-        return out;
+        AppSettingsProfileResponse data = unwrap(core.profile(new AppSettingsCustomerIdRequest(customerId)));
+        SettingsProfileVO result = new SettingsProfileVO();
+        result.setCustomerId(data.getCustomerId());
+        result.setMaskedPhone(data.getMaskedPhone());
+        result.setStatus(data.getStatus());
+        result.setDeleted(data.getDeleted());
+        return result;
     }
 
-    public SettingsSmsSendResultVO sendPhoneChangeSms(long customerId, PhoneChangeSmsSendRequest req) {
-        AppSmsSendResult data = unwrap(passengerCoreSettingsClient.sendPhoneChangeSms(
-                new AppPhoneChangeSmsSendRequest(customerId, req.getNewPhone())));
-        SettingsSmsSendResultVO out = new SettingsSmsSendResultVO();
-        out.setMockCode(data == null ? null : data.getMockCode());
-        return out;
+    public SettingsSmsSendResultVO sendPhoneChangeSms(
+            long customerId, PhoneChangeSmsSendRequest request) {
+        AppSmsSendResult data = unwrap(core.sendPhoneChangeSms(
+                new AppPhoneChangeSmsSendRequest(customerId, request.getNewPhone())));
+        SettingsSmsSendResultVO result = new SettingsSmsSendResultVO();
+        result.setMockCode(data == null ? null : data.getMockCode());
+        return result;
     }
 
-    public PhoneChangeResultVO confirmPhoneChange(long customerId, PhoneChangeConfirmRequest req) {
-        AppPhoneChangeResult data = lifecycleOrchestrator.confirmPhoneChange(
-                new AppPhoneChangeConfirmRequest(customerId, req.getNewPhone(), req.getCode()));
-
-        PhoneChangeResultVO out = new PhoneChangeResultVO();
-        out.setChanged(data.getChanged());
-        out.setRequireLogin(data.getRequireLogin());
-        out.setMaskedNewPhone(data.getMaskedNewPhone());
-        log.info("乘客 BFF 更换手机号完成 customerId={}", customerId);
-        return out;
+    public PhoneChangeResultVO confirmPhoneChange(
+            long customerId, PhoneChangeConfirmRequest request) {
+        boolean useLifecycle = rollout.useLifecycle(customerId);
+        String route = useLifecycle ? "lifecycle" : "legacy";
+        try {
+            PhoneChangeResultVO result = useLifecycle
+                    ? lifecyclePhoneChange(customerId, request)
+                    : legacyPhoneChange(customerId, request);
+            metrics.record("phone_change", route, "success");
+            return result;
+        } catch (RuntimeException failure) {
+            metrics.record("phone_change", route, "failure");
+            throw failure;
+        }
     }
 
     public SettingsSmsSendResultVO sendAccountCancelSms(long customerId) {
-        AppAccountCancelSmsSendResult data = unwrap(passengerCoreSettingsClient.sendAccountCancelSms(
-                new AppSettingsCustomerIdRequest(customerId)));
-        SettingsSmsSendResultVO out = new SettingsSmsSendResultVO();
-        out.setMockCode(data.getMockCode());
-        out.setMaskedPhone(data.getMaskedPhone());
-        return out;
+        AppAccountCancelSmsSendResult data = unwrap(
+                core.sendAccountCancelSms(new AppSettingsCustomerIdRequest(customerId)));
+        SettingsSmsSendResultVO result = new SettingsSmsSendResultVO();
+        result.setMockCode(data.getMockCode());
+        result.setMaskedPhone(data.getMaskedPhone());
+        return result;
     }
 
-    public AccountCancelResultVO confirmAccountCancel(long customerId, AccountCancelConfirmRequest req) {
-        LegacyOrderRiskDecision legacyOrderRisk = legacyOrderRisk(customerId);
+    public AccountCancelResultVO confirmAccountCancel(
+            long customerId, AccountCancelConfirmRequest request) {
+        boolean useLifecycle = rollout.useLifecycle(customerId);
+        String route = useLifecycle ? "lifecycle" : "legacy";
         try {
-            orderLifecycleShadow.compare(customerId, legacyOrderRisk);
-        } catch (RuntimeException ex) {
-            log.warn("Order生命周期影子预检异常，继续沿用旧注销裁决 customerId={}", customerId);
-        }
-        if (legacyOrderRisk == LegacyOrderRiskDecision.ACTIVE_ORDER) {
-            throw new BizErrorException(409, "当前存在进行中订单，请先完成或取消订单后再注销");
-        }
-        if (legacyOrderRisk == LegacyOrderRiskDecision.UNSETTLED_ORDER) {
-            throw new BizErrorException(409, "当前存在未结清订单，请结清后再注销");
-        }
-        if (hasLockedCoupon(customerId)) {
-            throw new BizErrorException(409, "当前存在订单锁定中的优惠券，请先完成或取消相关订单后再注销");
-        }
-        AppAccountCancelResult data = lifecycleOrchestrator.confirmAccountCancel(
-                new AppAccountCancelConfirmRequest(customerId, req.getCode(), req.getConfirm()));
-        tryInvalidateUnusedCoupons(customerId);
-        tryClearBenefitPoints(customerId);
-
-        AccountCancelResultVO out = new AccountCancelResultVO();
-        out.setCancelled(data.getCancelled());
-        out.setRequireLogin(data.getRequireLogin());
-        log.info("乘客 BFF 注销账号完成 customerId={}", customerId);
-        return out;
-    }
-
-    private LegacyOrderRiskDecision legacyOrderRisk(long customerId) {
-        if (hasActiveOrder(customerId)) {
-            return LegacyOrderRiskDecision.ACTIVE_ORDER;
-        }
-        return hasUnsettledOrder(customerId)
-                ? LegacyOrderRiskDecision.UNSETTLED_ORDER
-                : LegacyOrderRiskDecision.PASS;
-    }
-
-    private boolean hasActiveOrder(long customerId) {
-        for (TripOrderRow row : loadAllPassengerOrders(customerId)) {
-            Integer st = row.getStatus();
-            if (st == null) {
-                return true;
-            }
-            // 只有已完成和已取消允许注销；未知状态按有风险处理。
-            if (st != 5 && st != 6) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hasUnsettledOrder(long customerId) {
-        ResponseVo<UnsettledOrderCheckResult> resp = orderClient.unsettledExists(customerId);
-        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-            log.warn("注销前查询未结清订单失败 passengerId={} code={} msg={}",
-                    customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-            throw new BizErrorException(502, "订单结算服务暂时不可用，请稍后重试");
-        }
-        UnsettledOrderCheckResult data = resp.getData();
-        return data != null && Boolean.TRUE.equals(data.getExists());
-    }
-
-    private boolean hasLockedCoupon(long customerId) {
-        ResponseVo<Boolean> resp = calculateClient.lockedCouponsExists(customerId);
-        if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-            log.warn("注销前查询锁定优惠券失败 passengerId={} code={} msg={}",
-                    customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-            throw new BizErrorException(502, "优惠券服务暂时不可用，请稍后重试");
-        }
-        return Boolean.TRUE.equals(resp.getData());
-    }
-
-    private void tryInvalidateUnusedCoupons(long customerId) {
-        try {
-            ResponseVo<Integer> resp = calculateClient.invalidateCouponsByPassenger(
-                    new CouponInvalidateRequest(customerId, "ACCOUNT_CANCEL"));
-            if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-                log.error("注销后作废未使用优惠券失败，账号注销结果仍返回成功 passengerId={} code={} msg={}",
-                        customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-                return;
-            }
-            log.info("注销后作废未使用优惠券完成 passengerId={} count={}", customerId, resp.getData());
-        } catch (RuntimeException ex) {
-            log.error("注销后作废未使用优惠券异常，账号注销结果仍返回成功 passengerId={}", customerId, ex);
+            AccountCancelResultVO result = useLifecycle
+                    ? lifecycleCancellation(customerId, request)
+                    : legacyCancellation.confirm(customerId, request);
+            metrics.record("account_cancel", route, "success");
+            log.info("乘客 settings 注销请求已处理 customerId={} route={}", customerId, route);
+            return result;
+        } catch (RuntimeException failure) {
+            metrics.record("account_cancel", route, "failure");
+            throw failure;
         }
     }
 
-    private void tryClearBenefitPoints(long customerId) {
-        try {
-            ResponseVo<Void> resp = calculateClient.clearBenefitPointsByAccountCancel(
-                    new BenefitClearPointsRequest(customerId, "settings-cancel-" + customerId));
-            if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-                log.error("注销后清零福利积分失败，账号注销结果仍返回成功 passengerId={} code={} msg={}",
-                        customerId, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-                return;
-            }
-            log.info("注销后清零福利积分完成 passengerId={}", customerId);
-        } catch (RuntimeException ex) {
-            log.error("注销后清零福利积分异常，账号注销结果仍返回成功 passengerId={}", customerId, ex);
+    private PhoneChangeResultVO lifecyclePhoneChange(
+            long customerId, PhoneChangeConfirmRequest request) {
+        requireLifecycleAvailable();
+        AccountLifecycleSubmissionVO submitted = lifecycle.submitPhoneChange(
+                customerId,
+                new PhoneChangeSubmitRequest(null, request.getNewPhone(), request.getCode()),
+                UUID.randomUUID().toString(),
+                UUID.randomUUID().toString());
+        PhoneChangeResultVO result = new PhoneChangeResultVO();
+        result.setChanged(submitted.completed());
+        result.setRequireLogin(submitted.requireLogin());
+        result.setMaskedNewPhone(submitted.maskedPhone());
+        result.setOperationNo(submitted.operationNo());
+        result.setStatus(submitted.status());
+        return result;
+    }
+
+    private PhoneChangeResultVO legacyPhoneChange(
+            long customerId, PhoneChangeConfirmRequest request) {
+        AppPhoneChangeResult data = legacyPhoneChange.confirmPhoneChange(
+                new AppPhoneChangeConfirmRequest(customerId, request.getNewPhone(), request.getCode()));
+        PhoneChangeResultVO result = new PhoneChangeResultVO();
+        result.setChanged(data.getChanged());
+        result.setRequireLogin(data.getRequireLogin());
+        result.setMaskedNewPhone(data.getMaskedNewPhone());
+        return result;
+    }
+
+    private AccountCancelResultVO lifecycleCancellation(
+            long customerId, AccountCancelConfirmRequest request) {
+        requireLifecycleAvailable();
+        AccountLifecycleSubmissionVO submitted = lifecycle.submitCancellation(
+                customerId,
+                null,
+                new AccountCancellationSubmitRequest(null, request.getCode(), request.getConfirm()),
+                UUID.randomUUID().toString(),
+                UUID.randomUUID().toString());
+        AccountCancelResultVO result = new AccountCancelResultVO();
+        // 旧字段维持“请求已被系统接受”的兼容语义；最终完成态以 status/operationNo 查询。
+        result.setCancelled(true);
+        result.setRequireLogin(submitted.requireLogin());
+        result.setOperationNo(submitted.operationNo());
+        result.setStatus(submitted.status());
+        result.setAccessToken(submitted.accessToken());
+        result.setScope(submitted.scope());
+        return result;
+    }
+
+    private void requireLifecycleAvailable() {
+        if (lifecycle == null) {
+            throw new BizErrorException(503, "账号生命周期服务暂未启用");
         }
     }
 
-    private List<TripOrderRow> loadAllPassengerOrders(Long passengerId) {
-        java.util.ArrayList<TripOrderRow> rows = new java.util.ArrayList<>();
-        final int pageSize = 100;
-        int pageNo = 1;
-        while (true) {
-            ResponseVo<OrderPageData> resp = orderClient.pageOrders(passengerId, pageNo, pageSize);
-            if (resp == null || resp.getCode() == null || resp.getCode() != 200) {
-                log.warn("注销前查询订单失败 passengerId={} pageNo={} code={} msg={}",
-                        passengerId, pageNo, resp == null ? null : resp.getCode(), resp == null ? null : resp.getMsg());
-                throw new BizErrorException(502, "订单服务暂时不可用，请稍后重试");
-            }
-            OrderPageData data = resp.getData();
-            if (data == null || data.getList() == null || data.getList().isEmpty()) {
-                break;
-            }
-            rows.addAll(data.getList());
-            Integer total = data.getTotal();
-            if (total != null && rows.size() >= total) {
-                break;
-            }
-            pageNo++;
-        }
-        return rows.isEmpty() ? Collections.emptyList() : rows;
-    }
-
-    private static <T> T unwrap(ResponseVo<T> body) {
-        if (body == null || body.getCode() == null) {
+    private static <T> T unwrap(ResponseVo<T> response) {
+        if (response == null || response.getCode() == null) {
             throw new BizErrorException(502, "服务暂时不可用，请稍后重试");
         }
-        if (body.getCode() != 200) {
-            throw new BizErrorException(body.getCode(), body.getMsg());
+        if (response.getCode() != 200) {
+            throw new BizErrorException(response.getCode(), response.getMsg());
         }
-        return body.getData();
+        return response.getData();
     }
 }

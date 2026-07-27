@@ -18,6 +18,12 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
+/**
+ * 生命周期内部运维接口。
+ *
+ * <p>提供 Operation 详情、重新推进和带证据的人工恢复，不面向乘客公开；
+ * 服务身份认证由统一内部安全过滤器负责。
+ */
 @RestController
 @RequestMapping("/api/v1/internal/account-lifecycle/operations")
 public class AccountLifecycleInternalController {
@@ -40,12 +46,14 @@ public class AccountLifecycleInternalController {
         this.transaction = transaction;
     }
 
+    /** 尝试从当前持久化状态继续推进 Operation，并返回最新视图。 */
     @PostMapping("/{operationNo}/resume")
     public OperationView resume(@PathVariable String operationNo) {
         orchestrator.resume(operationNo);
         return view(operationNo);
     }
 
+    /** 记录人工恢复审计信息，将可恢复步骤重新置为待执行后继续编排。 */
     @PostMapping("/{operationNo}/manual-recoveries")
     public OperationView manualRecovery(
             @PathVariable String operationNo, @RequestBody ManualRecoveryRequest request) {
@@ -54,6 +62,7 @@ public class AccountLifecycleInternalController {
         return view(operationNo);
     }
 
+    /** 查询 Operation、按顺序排列的 Steps 以及全部阻断项。 */
     @GetMapping("/{operationNo}")
     public OperationView view(@PathVariable String operationNo) {
         LifecycleOperationEntity operation = operations.selectOne(
@@ -71,7 +80,9 @@ public class AccountLifecycleInternalController {
         return new OperationView(operation, stepRows, blockerRows);
     }
 
+    /** 人工恢复所需的操作者、原因和外部证据编号。 */
     public record ManualRecoveryRequest(String actor, String reason, String evidenceId) {}
+    /** 运维查询返回的完整聚合视图。 */
     public record OperationView(LifecycleOperationEntity operation,
                                 List<LifecycleStepEntity> steps,
                                 List<LifecycleBlockerEntity> blockers) {}

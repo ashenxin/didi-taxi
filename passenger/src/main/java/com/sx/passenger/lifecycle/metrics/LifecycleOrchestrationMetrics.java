@@ -16,6 +16,12 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 生命周期编排的 Micrometer 指标出口。
+ *
+ * <p>Gauge 反映当前到期 Operation、超时 Step、Outbox 积压/最老年龄/耗尽/陈旧领取
+ * 和人工审核数量；Counter 记录每个后台任务的处理结果。
+ */
 @Component
 public class LifecycleOrchestrationMetrics {
     private final LifecycleOperationMapper operations;
@@ -53,6 +59,7 @@ public class LifecycleOrchestrationMetrics {
         registry.gauge("passenger.lifecycle.operation.manual_review", manualReview);
     }
 
+    /** 从数据库重新计算全部状态型 Gauge；由诊断任务定期调用。 */
     public void refresh() {
         LocalDateTime now = LocalDateTime.now();
         dueOperations.set(operations.selectCount(new LambdaQueryWrapper<LifecycleOperationEntity>()
@@ -88,6 +95,7 @@ public class LifecycleOrchestrationMetrics {
                 .eq(LifecycleOperationEntity::getStatus, "MANUAL_REVIEW")));
     }
 
+    /** 按任务名和结果类型累计批次处理数量。 */
     public void recordJobResult(String jobName, LifecycleJobBatchResult result) {
         increment(jobName, "succeeded", result.succeeded());
         increment(jobName, "failed", result.failed());

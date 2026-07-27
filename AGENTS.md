@@ -62,7 +62,8 @@
 - 司机 WS：`/driver/ws/**` 同类设计，司机端待确认指派应 WS 优先；HTTP assigned 仅用于首次加载、上线/关键操作后对账和手动刷新，避免依赖高频短轮询。
 - 网关对 `GET /app/ws/**`、`GET /driver/ws/**` 握手放行，实际身份由 BFF 校验小票。
 - 生产不要直连 BFF 端口；本地排障可以直连。
-- 乘客/司机 WS 多实例能力本阶段不开发；当前只验收单实例内存会话与网关 Upgrade 转发，Redis Pub/Sub / Sticky 仅作为未来扩展资料保留。
+- 订单实时通知仍以乘客/司机单实例内存会话为当前验收边界；账号生命周期导致的乘客
+  WS 撤销已通过 P6 Kafka 事件支持 passenger-api 多实例广播关闭。两者不要混为同一能力。
 
 ### 鉴权与身份
 
@@ -75,6 +76,15 @@
 - BFF 中的业务接口读取 `X-User-Id` 作为当前用户；直连 BFF 联调时需手动补头或关闭/绕过相关检查。
 - 本地临时无 token 联调可设置 `GATEWAY_JWT_REQUIRE_AUTH=false`，生产必须为 `true`。
 - 只有 `local/dev/test` profile 允许开发 JWT 密钥；其它 profile（含未指定 profile）启动时会校验网关鉴权、audience、三端独立密钥及优惠券手机号 HMAC 密钥，不安全配置会直接拒绝启动。生产不得使用兼容变量 `JWT_SECRET`。
+
+### 乘客账号生命周期
+
+- `passenger` 是乘客生命周期状态、版本和 `auth_epoch` 的权威来源；手机号只是可变登录凭据，换号不改变 `customer.id`。
+- P1～P7 代码链路已经贯通，新 Lifecycle API 与乘客 H5 已完成适配；旧 settings
+  入口默认灰度关闭、比例为 0，Legacy Adapter 仅作灰度回退。
+- “代码完成”不代表生产切流完成。目标环境 patch/backfill 覆盖率、真实
+  MySQL/Kafka 故障演练和逐级灰度仍须按运行手册验收。
+- 当前阶段状态统一从 `docs/plans/乘客账号生命周期P1-P7执行计划索引.md` 进入。
 
 ### 钱包、优惠券与结算
 
@@ -328,17 +338,24 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 
 ### 完单结算 MVP
 
-- `docs/superpowers/specs/2026-07-17-完单结算_DESIGN.md`
-- `docs/superpowers/plans/2026-07-17-完单结算_PLAN.md`
-- `docs/api/完单结算_API.md`
-- `docs/testing/完单结算_TEST.md`
+- `二期功能/乘客端_完单结算_PRD.md`
+- `二期功能/乘客端_完单结算_TECH.md`
+- `二期功能/乘客端_完单结算_API.md`
+- `二期功能/乘客端_完单结算_TEST.md`
 - `乘客司机端_完单结算方案讨论.md`（历史讨论与决策追溯）
+
+### 乘客账号生命周期
+
+- `docs/plans/乘客账号生命周期P1-P7执行计划索引.md`（当前阶段状态与计划入口）
+- `docs/superpowers/specs/2026-07-20-乘客账号换号与注销统一生命周期_DESIGN.md`
+- `docs/runbooks/乘客账号生命周期P7灰度切换与前向恢复手册.md`
 
 ## 当前已知差距摘录
 
 以 `TODO与差距总览.md` 为准，当前需要注意的后续项：
 
-- 乘客/司机 WS 单实例主路径已收口；Redis Pub/Sub / Sticky 跨实例广播本阶段不开发。
+- 订单实时通知的乘客/司机 WS 单实例主路径已收口；账号生命周期的乘客 WS 撤销已
+  具备 Kafka 多实例广播。订单通知与司机 WS 的通用多实例路由仍未建设。
 - 两段式异步指派、Outbox、Kafka 与核心端侧订单写操作请求级幂等已落地；下单成功重放在地图、运力、计价前短路，接单成功重放在 capacity 校验前短路。后续重点转为后台/运维排障入口、DLQ、指标告警，以及内部管理写接口按风险扩展幂等。
 - 接驾 ETA 仍需实时坐标和 matrix 能力补齐；当前阶段暂不继续接入高德地图服务，先保留为后续体验项。
 - 司机心跳续 GEO 与司机级 Presence 防僵尸策略已落地；XXL `capacityDriverPresenceCleanup` 仍需在运行环境配置启用。

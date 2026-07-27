@@ -84,4 +84,18 @@
           AND current_lifecycle_operation_no = #{operationNo}
     </update>
 
+    <update id="abortAccountCancellation">
+        UPDATE customer
+        SET lifecycle_status = 'ACTIVE',
+            lifecycle_version = lifecycle_version + 1,
+            auth_epoch = auth_epoch + 1,
+            current_lifecycle_operation_no = NULL,
+            updated_at = #{updatedAt}
+        WHERE id = #{customerId}
+          AND is_deleted = 0
+          AND lifecycle_status = 'CANCELLING'
+          AND lifecycle_version = #{expectedLifecycleVersion}
+          AND current_lifecycle_operation_no = #{operationNo}
+    </update>
+
 </mapper>

@@ -32,6 +32,13 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Objects;
 
+/**
+ * 注销流程的建栅栏应用服务。
+ *
+ * <p>先在数据库事务之外完成幂等检查和 OTP 原子消费，再在单一数据库事务中：
+ * 更新 customer 为 CANCELLING、递增认证/生命周期版本、保存运行时快照并把 Operation
+ * 迁移到 FENCED。OTP 一旦消费不会因后续数据库失败而恢复。
+ */
 @Service
 public class AccountCancellationFenceService {
     private final AtomicOtpService otp;
@@ -70,6 +77,7 @@ public class AccountCancellationFenceService {
         this.metrics = metrics;
     }
 
+    /** 建立注销栅栏；同一幂等键和相同请求可安全返回既有结果。 */
     public AccountCancellationFenceResult fence(FenceAccountCancellationCommand command) {
         Objects.requireNonNull(command, "command must not be null");
         AccountCancellationFenceResult result = withoutTransaction.execute(
@@ -77,6 +85,7 @@ public class AccountCancellationFenceService {
         return Objects.requireNonNull(result, "cancellation fence execution returned no result");
     }
 
+    /** 刻意在事务外消费 OTP，避免数据库回滚造成验证码“复活”。 */
     private AccountCancellationFenceResult fenceOutsideTransaction(FenceAccountCancellationCommand command) {
         String requestHash = hasher.hash(command);
         var prior = snapshots.findByIdempotency(
@@ -97,6 +106,7 @@ public class AccountCancellationFenceService {
         return Objects.requireNonNull(result, "cancellation fence transaction returned no result");
     }
 
+    /** 在数据库事务内原子写入账号栅栏、快照和 FENCED 审计事件。 */
     private AccountCancellationFenceResult createFence(FenceAccountCancellationCommand command,
                                                         String requestHash) {
         LifecycleRuntimeSnapshot snapshot = snapshotFactory.create(new CreateLifecycleSnapshotCommand(
@@ -141,6 +151,7 @@ public class AccountCancellationFenceService {
                 fencedCustomer.getLifecycleVersion(), fencedCustomer.getAuthEpoch(), "FENCED");
     }
 
+    /** 校验幂等键对应内容一致且既有操作已完成建栅栏。 */
     private static AccountCancellationFenceResult replay(LifecycleOperationEntity operation, String requestHash) {
         if (!requestHash.equals(operation.getRequestHash())) {
             throw new LifecycleOperationConflictException("Idempotency key was used for another request");

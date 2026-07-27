@@ -17,6 +17,12 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 生命周期 Outbox 的 Kafka 发布器。
+ *
+ * <p>先扫描候选，再通过数据库条件更新竞争领取；Kafka 确认成功后标记 PUBLISHED，
+ * 失败则按重试次数回到待发布或进入耗尽状态。批次同时受大小和代码级截止时间限制。
+ */
 @Service
 @ConditionalOnProperty(prefix = "passenger.account-lifecycle.messaging",
         name = "enabled", havingValue = "true")
@@ -40,6 +46,7 @@ public class KafkaLifecycleOutboxPublisher {
         this.workerId = hostName() + "-" + UUID.randomUUID();
     }
 
+    /** 使用配置的批量大小和时间预算发布一批消息。 */
     public LifecycleJobBatchResult publishBatch() {
         return publishBatch(properties.getOutbox().getBatchSize());
     }
@@ -101,6 +108,7 @@ public class KafkaLifecycleOutboxPublisher {
                 elapsedMs(started));
     }
 
+    /** 仅允许当前 worker 把自己领取的 PROCESSING 记录标记为已发布。 */
     private void markPublished(long id) {
         LifecycleOutboxEntity current = outbox.selectById(id);
         if (current == null || !"PROCESSING".equals(current.getStatus())
@@ -113,6 +121,7 @@ public class KafkaLifecycleOutboxPublisher {
         }
     }
 
+    /** 记录失败并安排下次重试；返回 true 表示已经耗尽重试。 */
     private boolean markFailed(long id, String error) {
         LifecycleOutboxEntity current = outbox.selectById(id);
         if (current == null || !"PROCESSING".equals(current.getStatus())

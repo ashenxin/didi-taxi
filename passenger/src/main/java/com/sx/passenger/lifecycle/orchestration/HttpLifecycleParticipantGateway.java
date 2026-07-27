@@ -12,6 +12,12 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import java.time.Duration;
 import java.util.Optional;
 
+/**
+ * 使用内部 HTTP 接口调用订单、钱包和权益参与者。
+ *
+ * <p>所有请求携带内部服务 Token；响应必须满足统一 envelope 和结果契约，
+ * 非 2xx、空数据或业务码异常都作为技术失败交给编排重试。
+ */
 @Component
 public class HttpLifecycleParticipantGateway implements LifecycleParticipantGateway {
     private static final ParameterizedTypeReference<ResponseEnvelope<LifecycleParticipantResult>> TYPE =
@@ -35,6 +41,7 @@ public class HttpLifecycleParticipantGateway implements LifecycleParticipantGate
     }
 
     @Override
+    /** 调用步骤白名单中的同步检查地址。 */
     public LifecycleParticipantResult executeCheck(LifecycleParticipantCommand command) {
         var endpoint = registry.require(command.stepCode(), command.targetDomain());
         ResponseEnvelope<LifecycleParticipantResult> response = client.post()
@@ -47,6 +54,7 @@ public class HttpLifecycleParticipantGateway implements LifecycleParticipantGate
     }
 
     @Override
+    /** 查询参与者对指定 Operation/Step 的异步执行结果。 */
     public Optional<LifecycleParticipantResult> queryResult(
             String participantCode, String operationNo, String stepCode) {
         var endpoint = registry.require(stepCode, participantCode);
@@ -72,6 +80,7 @@ public class HttpLifecycleParticipantGateway implements LifecycleParticipantGate
         }
     }
 
+    /** 解包统一响应；只有 code=200 且 data 非空才视为成功调用。 */
     private static LifecycleParticipantResult requireSuccess(
             ResponseEnvelope<LifecycleParticipantResult> response) {
         if (response == null || response.code() == null || response.code() != 200

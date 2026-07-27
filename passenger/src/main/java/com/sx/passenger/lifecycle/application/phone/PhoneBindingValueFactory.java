@@ -9,10 +9,17 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 
+/**
+ * 创建 ACTIVE 手机号绑定历史记录。
+ *
+ * <p>当前沿用 legacy-v1 存储方案；该类把密文/摘要产生方式收束在一处，
+ * 便于后续升级加密和摘要密钥，而不把处理逻辑散落到换号服务。
+ */
 @Component
 public final class PhoneBindingValueFactory {
     private static final String CURRENT_HASH_KEY_VERSION = "legacy-v1";
 
+    /** 组装一条从 now 开始生效的新手机号绑定记录。 */
     public CustomerPhoneBindingHistoryEntity active(long customerId, long bindingVersion, String phone,
                                                      String operationNo, LocalDateTime now) {
         return new CustomerPhoneBindingHistoryEntity()
@@ -23,6 +30,7 @@ public final class PhoneBindingValueFactory {
                 .setValidFrom(now).setCreatedAt(now).setUpdatedAt(now);
     }
 
+    /** 生成手机号等值身份摘要；不会作为原文展示。 */
     String identityHash(String phone) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")

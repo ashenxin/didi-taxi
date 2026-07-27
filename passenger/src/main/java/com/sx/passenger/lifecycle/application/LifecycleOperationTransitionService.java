@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
+/** 统一校验并持久化 Operation 状态迁移，同时追加对应审计事件。 */
 @Service
 public class LifecycleOperationTransitionService {
     private final LifecycleOperationMapper operations;
@@ -25,6 +26,7 @@ public class LifecycleOperationTransitionService {
         this.events = events;
     }
 
+    /** 在同一事务中完成状态机校验、CAS 更新和事件追加。 */
     @Transactional
     public void transition(TransitionLifecycleOperationCommand command) {
         LifecycleOperationEntity current = operations.selectById(command.operationId());

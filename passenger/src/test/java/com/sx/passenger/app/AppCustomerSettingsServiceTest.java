@@ -105,9 +105,11 @@ class AppCustomerSettingsServiceTest {
         request.setCustomerId(10001L);
         request.setNewPhone("13912345678");
 
-        ResponseVo<?> response = service.sendPhoneChangeSms(request);
+        ResponseVo<com.sx.passenger.app.dto.AppSmsSendResult> response =
+                service.sendPhoneChangeSms(request);
 
         assertThat(response.getCode()).isEqualTo(200);
+        assertThat(response.getData().getLifecycleVersion()).isEqualTo(9L);
         verify(otpService).store(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE),
                 eq(OtpSubject.phoneChange(10001L, "13912345678", 9L)), anyString(), eq(Duration.ofSeconds(300)));
     }
@@ -122,9 +124,11 @@ class AppCustomerSettingsServiceTest {
         request.setCustomerId(10001L);
         request.setNewPhone("13912345678");
 
-        ResponseVo<?> response = service.sendPhoneChangeSms(request);
+        ResponseVo<com.sx.passenger.app.dto.AppSmsSendResult> response =
+                service.sendPhoneChangeSms(request);
 
         assertThat(response.getCode()).isEqualTo(200);
+        assertThat(response.getData().getLifecycleVersion()).isZero();
         verify(otpService).store(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE),
                 eq(OtpSubject.phoneChange(10001L, "13912345678", 0L)), anyString(), eq(Duration.ofSeconds(300)));
     }
@@ -183,9 +187,11 @@ class AppCustomerSettingsServiceTest {
         when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class))).thenReturn(true);
         when(valueOperations.increment(anyString())).thenReturn(1L);
 
-        ResponseVo<?> response = service.sendAccountCancelSms(10001L);
+        ResponseVo<com.sx.passenger.app.dto.AppAccountCancelSmsSendResult> response =
+                service.sendAccountCancelSms(10001L);
 
         assertThat(response.getCode()).isEqualTo(200);
+        assertThat(response.getData().getLifecycleVersion()).isEqualTo(9L);
         verify(otpService).store(eq(OtpPurpose.ACCOUNT_CANCEL), eq(OtpSubject.accountCancel(10001L, 9L)),
                 anyString(), eq(Duration.ofSeconds(300)));
     }

@@ -9,6 +9,12 @@ import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
 
+/**
+ * 生命周期 XXL-JOB 与消息配置的生产启动校验器。
+ *
+ * <p>非 local/dev/test 环境拒绝弱 Token、首尾空格和 loopback 服务地址；
+ * XXL-JOB 开启但消息发布关闭也会直接启动失败。
+ */
 @Component
 public class LifecycleJobConfigurationValidator implements InitializingBean {
     private static final Set<String> RELAXED_PROFILES = Set.of("local", "dev", "test");
@@ -39,6 +45,7 @@ public class LifecycleJobConfigurationValidator implements InitializingBean {
                 environment.getProperty("xxl.job.executor.address"));
     }
 
+    /** 校验生产 Token 的非空、长度和非默认值约束。 */
     static void validateProductionToken(String token) {
         if (token == null || token.isBlank()) {
             throw new IllegalStateException("XXL_JOB_ACCESS_TOKEN must be configured");
@@ -60,6 +67,7 @@ public class LifecycleJobConfigurationValidator implements InitializingBean {
         }
     }
 
+    /** 校验生产端点非空、格式正确且不指向本机回环地址。 */
     static void validateProductionEndpoint(String name, String endpoint) {
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalStateException(name + " must be configured");

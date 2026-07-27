@@ -7,6 +7,7 @@ import com.xxl.job.core.handler.annotation.XxlJob;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
+/** 生命周期三个 XXL-JOB Handler 的统一入口。 */
 @Component
 public class AccountLifecycleJobs {
     private final LifecycleRecoveryService recovery;
@@ -25,6 +26,7 @@ public class AccountLifecycleJobs {
         this.reporter = reporter;
     }
 
+    /** 发布一批待发送 Outbox；消息功能缺失时明确失败。 */
     @XxlJob("accountLifecycleOutboxPublishJob")
     public void publishOutbox() {
         reporter.execute("outbox", () -> {
@@ -37,11 +39,13 @@ public class AccountLifecycleJobs {
         });
     }
 
+    /** 恢复到期 Operation 和超时 Steps。 */
     @XxlJob("accountLifecycleRecoveryJob")
     public void recover() {
         reporter.execute("recovery", recovery::recover);
     }
 
+    /** 刷新生命周期积压和异常状态 Gauge。 */
     @XxlJob("accountLifecycleDiagnosticsJob")
     public void diagnostics() {
         reporter.execute("diagnostics", () -> {

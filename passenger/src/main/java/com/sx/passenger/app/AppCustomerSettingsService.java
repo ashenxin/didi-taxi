@@ -97,7 +97,8 @@ public class AppCustomerSettingsService {
         if (findActiveByPhone(newPhone) != null) {
             return ResultUtil.error(409, "该手机号已被使用");
         }
-        OtpSubject subject = OtpSubject.phoneChange(current.getId(), newPhone, lifecycleVersion(current));
+        long lifecycleVersion = lifecycleVersion(current);
+        OtpSubject subject = OtpSubject.phoneChange(current.getId(), newPhone, lifecycleVersion);
         String code = createAndSaveCode(
                 KEY_PHONE_CHANGE_GAP_PREFIX + req.getCustomerId() + ":" + newPhone,
                 KEY_PHONE_CHANGE_DAILY_PREFIX + req.getCustomerId() + ":" + newPhone + ":" + LocalDate.now(CN_ZONE),
@@ -109,7 +110,10 @@ public class AppCustomerSettingsService {
         }
         log.info("[乘客设置] 已发送更换手机号验证码 customerId={} newPhone={}",
                 req.getCustomerId(), maskPhone(newPhone));
-        return ResultUtil.success(new com.sx.passenger.app.dto.AppSmsSendResult(smsProps.isMockSendEnabled() ? code : null));
+        com.sx.passenger.app.dto.AppSmsSendResult out =
+                new com.sx.passenger.app.dto.AppSmsSendResult(smsProps.isMockSendEnabled() ? code : null);
+        out.setLifecycleVersion(lifecycleVersion);
+        return ResultUtil.success(out);
     }
 
     @Transactional
@@ -170,7 +174,8 @@ public class AppCustomerSettingsService {
             return ResultUtil.error(404, "账号不存在或已注销");
         }
         String phone = current.getPhone();
-        OtpSubject subject = OtpSubject.accountCancel(current.getId(), lifecycleVersion(current));
+        long lifecycleVersion = lifecycleVersion(current);
+        OtpSubject subject = OtpSubject.accountCancel(current.getId(), lifecycleVersion);
         String code = createAndSaveCode(
                 KEY_ACCOUNT_CANCEL_GAP_PREFIX + customerId,
                 KEY_ACCOUNT_CANCEL_DAILY_PREFIX + customerId + ":" + LocalDate.now(CN_ZONE),
@@ -183,6 +188,7 @@ public class AppCustomerSettingsService {
         AppAccountCancelSmsSendResult out = new AppAccountCancelSmsSendResult();
         out.setMockCode(smsProps.isMockSendEnabled() ? code : null);
         out.setMaskedPhone(maskPhone(phone));
+        out.setLifecycleVersion(lifecycleVersion);
         log.info("[乘客设置] 已发送注销账号验证码 customerId={} phone={}",
                 customerId, maskPhone(phone));
         return ResultUtil.success(out);

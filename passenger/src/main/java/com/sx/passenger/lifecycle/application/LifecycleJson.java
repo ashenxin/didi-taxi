@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+/** 输出属性顺序稳定、Java 时间可读的生命周期内部 JSON。 */
 public final class LifecycleJson {
     private final JsonMapper mapper = JsonMapper.builder()
             .addModule(new JavaTimeModule())
@@ -14,6 +15,7 @@ public final class LifecycleJson {
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
             .build();
 
+    /** 将对象序列化为稳定 JSON，失败时转换为统一参数异常。 */
     public String write(Object value) {
         try {
             return mapper.writeValueAsString(value);
