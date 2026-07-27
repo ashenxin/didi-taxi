@@ -1,5 +1,6 @@
 package com.sx.passenger;
 
+import com.sx.passenger.config.PassengerNacosLocalConfigGuard;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -9,6 +10,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class PassengerSpringApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(PassengerSpringApplication.class, args);
+        SpringApplication application = new SpringApplication(PassengerSpringApplication.class);
+        application.addListeners(new PassengerNacosLocalConfigGuard());
+        application.run(args);
     }
 }

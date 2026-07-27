@@ -1,9 +1,17 @@
 spring:
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092
+    consumer:
+      group-id: passenger-account-lifecycle-result-test
+      auto-offset-reset: earliest
   datasource:
     url: jdbc:h2:mem:passenger_test;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
     driver-class-name: org.h2.Driver
     username: sa
     password:
+    druid:
+      validation-query: SELECT 1
+      test-while-idle: true
   sql:
     init:
       mode: always
@@ -13,13 +21,57 @@ passenger:
   internal-auth:
     token: test-passenger-internal-secret-32bytes
   account-lifecycle:
+    participant-token: test-account-lifecycle-internal-token
     messaging:
       enabled: false
+      command-topic: account.lifecycle.command.v1
+      result-topic: account.lifecycle.result.v1
+      event-topic: account.lifecycle.event.v1
+    jobs:
+      outbox:
+        batch-size: 50
+        send-timeout-seconds: 5
+        batch-deadline-seconds: 25
+        stale-processing-seconds: 120
+      recovery:
+        operation-batch-size: 50
+        step-batch-size: 50
+        batch-deadline-seconds: 55
+    participants:
+      order-base-url: http://127.0.0.1:8093
+      calculate-base-url: http://127.0.0.1:8091
+      wallet-base-url: http://127.0.0.1:8095
+      connect-timeout-ms: 1000
+      read-timeout-ms: 10000
+  admin:
+    security-context-cache:
+      key-prefix: "adm:user:"
+  app:
+    customer-auth:
+      sms:
+        code-ttl-seconds: 300
+        min-interval-seconds: 2
+        daily-limit-per-phone: 100
+        daily-login-fail-limit-per-phone: 100
+        mock-send-enabled: true
 
 xxl:
   job:
     enabled: false
+    access-token: test-token
+    admin:
+      addresses: http://127.0.0.1:8081/xxl-job-admin
+    executor:
+      appname: passenger-lifecycle-executor
+      address: http://127.0.0.1:9995
+      port: 9995
+      log-path: ./logs/xxl-job
+      log-retention-days: 7
 
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+  mapper-locations: classpath*:mapper/**/*.xml
