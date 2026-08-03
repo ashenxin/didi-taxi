@@ -1,5 +1,6 @@
 -- 将 order_event.reason_desc 中历史英文说明改为中文（Navicat / 运维一次性执行）
 -- 库：order；执行前请自行备份。
+-- 状态：ARCHIVE_CANDIDATE；所有环境确认执行后可移动到 sql/archive/，不得并入 seed。
 
 USE `order`;
 

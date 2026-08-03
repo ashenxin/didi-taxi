@@ -77,9 +77,10 @@ public class AccountLifecycleOrderParticipantService {
         String stepCode = command.stepCode().trim();
         String requestHash = hasher.hash(command);
 
-        OrderLifecycleParticipantInbox prior = inboxes.find(operationNo, stepCode);
+        OrderLifecycleParticipantInbox prior = inboxes.findForUpdate(operationNo, stepCode);
         if (prior != null) {
-            OrderLifecycleParticipantResult replay = replayOrConflict(prior, requestHash);
+            OrderLifecycleParticipantResult replay = replayOrRefreshBlocked(
+                    prior, requestHash, command);
             recordDecision(stepCode, replay);
             return replay;
         }
@@ -146,6 +147,32 @@ public class AccountLifecycleOrderParticipantService {
             throw new IllegalStateException("Order生命周期参与者结果尚未完成");
         }
         return fromInbox(prior);
+    }
+
+    /** BLOCKED 是可由用户消除的检查快照；新事件只能在同一栅栏上刷新该快照。 */
+    private OrderLifecycleParticipantResult replayOrRefreshBlocked(
+            OrderLifecycleParticipantInbox prior, String requestHash,
+            OrderLifecycleCommand command) {
+        if (Objects.equals(prior.getRequestHash(), requestHash)) {
+            return replayOrConflict(prior, requestHash);
+        }
+        if (!COMPLETED.equals(prior.getStatus())
+                || !OrderLifecycleDecision.BLOCKED.name().equals(prior.getDecision())
+                || !Objects.equals(prior.getCustomerId(), command.customerId())) {
+            throw new OrderLifecycleCommandConflictException(
+                    "同一operationNo和stepCode不能用于不同生命周期命令");
+        }
+        projections.requireCurrentTarget(command);
+        OrderLifecycleParticipantResult refreshed =
+                mapBlocking(orders.findBlockingOrder(command.customerId()));
+        prior.setRequestHash(requestHash)
+                .setDecision(refreshed.decision().name())
+                .setBlockerSnapshot(writeBlockers(refreshed.blockers()))
+                .setUpdatedAt(LocalDateTime.now());
+        if (inboxes.updateById(prior) != 1) {
+            throw new IllegalStateException("Order生命周期参与者重检结果写入失败");
+        }
+        return refreshed;
     }
 
     private OrderLifecycleParticipantResult fromInbox(OrderLifecycleParticipantInbox inbox) {

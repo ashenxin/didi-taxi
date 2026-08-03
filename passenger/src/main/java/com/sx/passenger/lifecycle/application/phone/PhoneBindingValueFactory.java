@@ -19,14 +19,26 @@ import java.util.HexFormat;
 public final class PhoneBindingValueFactory {
     private static final String CURRENT_HASH_KEY_VERSION = "legacy-v1";
 
+    /** 组装新注册账号的首条手机号绑定记录。 */
+    public CustomerPhoneBindingHistoryEntity initialRegistration(
+            long customerId, String phone, LocalDateTime now) {
+        return active(customerId, 1L, phone, null, "REGISTER", now);
+    }
+
     /** 组装一条从 now 开始生效的新手机号绑定记录。 */
     public CustomerPhoneBindingHistoryEntity active(long customerId, long bindingVersion, String phone,
                                                      String operationNo, LocalDateTime now) {
+        return active(customerId, bindingVersion, phone, operationNo, "PHONE_CHANGE", now);
+    }
+
+    private CustomerPhoneBindingHistoryEntity active(
+            long customerId, long bindingVersion, String phone, String operationNo,
+            String changeReason, LocalDateTime now) {
         return new CustomerPhoneBindingHistoryEntity()
                 .setCustomerId(customerId).setBindingVersion(bindingVersion).setStatus("ACTIVE")
                 .setPhoneCiphertext(phone.getBytes(StandardCharsets.UTF_8))
                 .setPhoneIdentityHash(identityHash(phone)).setHashKeyVersion(CURRENT_HASH_KEY_VERSION)
-                .setChangeOperationNo(operationNo).setChangeReason("PHONE_CHANGE")
+                .setChangeOperationNo(operationNo).setChangeReason(changeReason)
                 .setValidFrom(now).setCreatedAt(now).setUpdatedAt(now);
     }
 

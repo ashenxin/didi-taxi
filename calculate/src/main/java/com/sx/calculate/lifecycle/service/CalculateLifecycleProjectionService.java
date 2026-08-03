@@ -59,6 +59,23 @@ public class CalculateLifecycleProjectionService {
         }
     }
 
+    /** 重检只确认首次终检建立的栅栏仍属于同一 Operation，不重复消费投影事件。 */
+    public void requireCurrentTarget(ApplyCalculateLifecycleProjectionCommand command) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("Calculate生命周期投影校验必须在事务内执行");
+        }
+        CalculateLifecycleStatus status = parseStatus(command.lifecycleStatus());
+        CalculateAccountLifecycleProjection current =
+                projections.selectForUpdate(command.customerId());
+        if (current == null
+                || !Objects.equals(current.getBusinessStatus(), command.businessStatus())
+                || !Objects.equals(current.getLifecycleStatus(), status.name())
+                || !Objects.equals(current.getLifecycleVersion(), command.lifecycleVersion())
+                || !Objects.equals(current.getOperationNo(), blankToNull(command.operationNo()))) {
+            throw conflict("生命周期重检目标与当前Calculate投影不一致");
+        }
+    }
+
     private ProjectionApplyResult applyClaimed(ApplyCalculateLifecycleProjectionCommand command) {
         CalculateLifecycleStatus status = parseStatus(command.lifecycleStatus());
         String requestHash = hasher.hashProjection(normalize(command, status));

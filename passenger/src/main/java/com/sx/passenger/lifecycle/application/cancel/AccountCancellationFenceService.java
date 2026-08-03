@@ -23,13 +23,13 @@ import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.plan.LifecyclePlanRegistry;
 import com.sx.passenger.model.Customer;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.Objects;
 
 /**
@@ -94,6 +94,9 @@ public class AccountCancellationFenceService {
             return replay(prior.get(), requestHash);
         }
 
+        Customer current = customers.selectById(command.customerId());
+        requireFenceAllowed(current, command);
+
         OtpConsumeResult consumed = otp.consume(OtpPurpose.ACCOUNT_CANCEL,
                 OtpSubject.accountCancel(command.customerId(), command.expectedLifecycleVersion()),
                 command.otpCode());
@@ -113,7 +116,7 @@ public class AccountCancellationFenceService {
                 command.customerId(), LifecycleOperationType.ACCOUNT_CANCEL, command.idempotencyKey(), requestHash,
                 command.expectedLifecycleVersion(), LifecycleActorType.CUSTOMER, command.actorId(), command.traceId(),
                 command.sanitizedRequestContextJson(), command.requestedAt()));
-        LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
+        LocalDateTime now = PassengerPersistenceTime.fromInstant(command.requestedAt());
         String operationNo = snapshot.operation().getOperationNo();
         int customerUpdated = customers.fenceAccountCancellation(
                 command.customerId(), command.expectedLifecycleVersion(), operationNo, now);
@@ -162,5 +165,21 @@ public class AccountCancellationFenceService {
         return new AccountCancellationFenceResult(operation.getId(), operation.getOperationNo(),
                 operation.getCustomerId(), operation.getAppliedLifecycleVersion(),
                 operation.getRestrictedAuthEpoch(), operation.getStatus());
+    }
+
+    /** 在消费与账号版本绑定的 OTP 前先返回稳定的生命周期冲突语义。 */
+    private static void requireFenceAllowed(
+            Customer current, FenceAccountCancellationCommand command) {
+        if (current == null || !Integer.valueOf(0).equals(current.getIsDeleted())
+                || !"ACTIVE".equals(current.getLifecycleStatus())) {
+            throw new LifecycleOperationConflictException("Customer is not active");
+        }
+        if (!Long.valueOf(command.expectedLifecycleVersion()).equals(current.getLifecycleVersion())) {
+            throw new LifecycleOperationConflictException("Customer lifecycle version changed");
+        }
+        if (current.getCurrentLifecycleOperationNo() != null) {
+            throw new LifecycleOperationConflictException(
+                    "Customer already has an active lifecycle operation");
+        }
     }
 }

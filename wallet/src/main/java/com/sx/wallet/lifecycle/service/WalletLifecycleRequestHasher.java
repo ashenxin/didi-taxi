@@ -1,5 +1,6 @@
 package com.sx.wallet.lifecycle.service;
 
+import com.sx.wallet.lifecycle.model.ApplyWalletLifecycleProjectionCommand;
 import com.sx.wallet.lifecycle.model.WalletLifecycleCommand;
 import org.springframework.stereotype.Component;
 
@@ -17,9 +18,15 @@ public class WalletLifecycleRequestHasher {
     }
 
     public String hashProjection(WalletLifecycleCommand c) {
-        return hash(Long.toString(c.customerId()), "0", c.targetLifecycleStatus().trim(),
-                Long.toString(c.lifecycleVersion()), blank(c.operationNo()),
-                c.sourceEventId().trim());
+        return hashProjection(new ApplyWalletLifecycleProjectionCommand(
+                c.customerId(), 0, c.targetLifecycleStatus(), c.lifecycleVersion(),
+                c.operationNo(), c.sourceEventId(), c.requestedAt()));
+    }
+
+    public String hashProjection(ApplyWalletLifecycleProjectionCommand c) {
+        return hash(Long.toString(c.customerId()), Integer.toString(c.businessStatus()),
+                c.lifecycleStatus().trim(), Long.toString(c.lifecycleVersion()),
+                blank(c.operationNo()), c.sourceEventId().trim());
     }
 
     private static String hash(String... values) {

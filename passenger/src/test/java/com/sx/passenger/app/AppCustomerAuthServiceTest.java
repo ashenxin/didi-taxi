@@ -10,6 +10,10 @@ import com.sx.passenger.auth.otp.OtpSubject;
 import com.sx.passenger.auth.session.PassengerAuthEpochService;
 import com.sx.passenger.common.vo.ResponseVo;
 import com.sx.passenger.dao.CustomerEntityMapper;
+import com.sx.passenger.lifecycle.application.LifecycleStatusOutboxAppender;
+import com.sx.passenger.lifecycle.application.phone.PhoneBindingValueFactory;
+import com.sx.passenger.lifecycle.persistence.entity.CustomerPhoneBindingHistoryEntity;
+import com.sx.passenger.lifecycle.persistence.mapper.CustomerPhoneBindingHistoryMapper;
 import com.sx.passenger.model.Customer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,13 +40,19 @@ class AppCustomerAuthServiceTest {
     private final ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
     private final AtomicOtpService otpService = mock(AtomicOtpService.class);
     private final PassengerAuthEpochService authEpochService = mock(PassengerAuthEpochService.class);
+    private final LifecycleStatusOutboxAppender lifecycleOutboxes =
+            mock(LifecycleStatusOutboxAppender.class);
+    private final CustomerPhoneBindingHistoryMapper phoneBindings =
+            mock(CustomerPhoneBindingHistoryMapper.class);
+    private final PhoneBindingValueFactory phoneBindingValues = new PhoneBindingValueFactory();
     private AppCustomerAuthService service;
 
     @BeforeEach
     void setUp() {
         when(redis.opsForValue()).thenReturn(valueOperations);
         service = new AppCustomerAuthService(
-                customerMapper, redis, new AppCustomerAuthProperties(), otpService, authEpochService);
+                customerMapper, redis, new AppCustomerAuthProperties(), otpService,
+                authEpochService, lifecycleOutboxes, phoneBindings, phoneBindingValues);
     }
 
     @Test
@@ -90,6 +100,13 @@ class AppCustomerAuthServiceTest {
                 "ACTIVE".equals(customer.getLifecycleStatus())
                         && Long.valueOf(0L).equals(customer.getLifecycleVersion())
                         && Long.valueOf(0L).equals(customer.getAuthEpoch())));
+        verify(phoneBindings).insert(org.mockito.ArgumentMatchers.<CustomerPhoneBindingHistoryEntity>argThat(binding ->
+                Long.valueOf(10001L).equals(binding.getCustomerId())
+                        && Long.valueOf(1L).equals(binding.getBindingVersion())
+                        && "ACTIVE".equals(binding.getStatus())
+                        && "REGISTER".equals(binding.getChangeReason())
+                        && binding.getChangeOperationNo() == null));
+        verify(lifecycleOutboxes).appendInitialActive(eq(10001L), any());
         verify(authEpochService).completeAuthentication(10001L);
     }
 

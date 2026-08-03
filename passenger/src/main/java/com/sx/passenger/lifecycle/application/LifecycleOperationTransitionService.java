@@ -7,11 +7,11 @@ import com.sx.passenger.lifecycle.persistence.entity.LifecycleEventEntity;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 
 /** 统一校验并持久化 Operation 状态迁移，同时追加对应审计事件。 */
 @Service
@@ -34,7 +34,7 @@ public class LifecycleOperationTransitionService {
         LifecycleOperationStatus from = LifecycleOperationStatus.valueOf(current.getStatus());
         stateMachine.requireTransition(LifecycleOperationType.valueOf(current.getOperationType()), from,
                 command.targetStatus(), Integer.valueOf(1).equals(current.getIrreversibleStarted()));
-        LocalDateTime occurredAt = LocalDateTime.ofInstant(command.occurredAt(), ZoneOffset.UTC);
+        LocalDateTime occurredAt = PassengerPersistenceTime.fromInstant(command.occurredAt());
         int updated = operations.updateStatusCas(current.getId(), current.getStatus(), command.expectedRowVersion(),
                 command.targetStatus().name(), occurredAt);
         if (updated != 1) throw new LifecycleOperationConflictException("Lifecycle operation changed concurrently");

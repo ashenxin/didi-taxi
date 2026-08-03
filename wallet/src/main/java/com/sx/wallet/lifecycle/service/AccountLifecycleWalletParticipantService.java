@@ -145,8 +145,8 @@ public class AccountLifecycleWalletParticipantService {
         String operationNo = command.operationNo().trim();
         String stepCode = command.stepCode().trim();
         String requestHash = hasher.hashCommand(command);
-        WalletLifecycleParticipantInbox prior = inboxes.find(operationNo, stepCode);
-        if (prior != null) return replay(prior, requestHash);
+        WalletLifecycleParticipantInbox prior = inboxes.findForUpdate(operationNo, stepCode);
+        if (prior != null) return replayOrRefreshBlocked(prior, requestHash, command);
         LocalDateTime now = LocalDateTime.now();
         WalletLifecycleParticipantInbox inbox = new WalletLifecycleParticipantInbox()
                 .setOperationNo(operationNo).setStepCode(stepCode)
@@ -272,6 +272,29 @@ public class AccountLifecycleWalletParticipantService {
                     "Wallet参与者结果尚未完成", null);
         }
         return fromInbox(prior);
+    }
+
+    private WalletLifecycleParticipantResult replayOrRefreshBlocked(
+            WalletLifecycleParticipantInbox prior, String hash,
+            WalletLifecycleCommand command) {
+        if (Objects.equals(prior.getRequestHash(), hash)) {
+            return replay(prior, hash);
+        }
+        if (!FINAL_CHECK.equals(command.stepCode().trim())
+                || !"COMPLETED".equals(prior.getStatus())
+                || !"BLOCKED".equals(prior.getDecision())
+                || !Objects.equals(prior.getCustomerId(), command.customerId())
+                || !Objects.equals(prior.getLifecycleVersion(), command.lifecycleVersion())) {
+            throw new WalletLifecycleCommandConflictException(
+                    "同一operationNo和stepCode不能用于不同Wallet命令");
+        }
+        projections.requireCurrentTarget(command);
+        WalletLifecycleParticipantResult refreshed =
+                riskDecision(payments.selectLifecycleRisksForUpdate(command.customerId()));
+        prior.setRequestHash(hash);
+        store(prior, refreshed);
+        metrics.participant(command.stepCode().trim(), refreshed.decision());
+        return refreshed;
     }
 
     private WalletLifecycleParticipantResult fromInbox(WalletLifecycleParticipantInbox inbox) {

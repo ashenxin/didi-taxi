@@ -1,9 +1,11 @@
 package com.sx.passenger.lifecycle.orchestration;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
 import com.sx.passenger.lifecycle.application.LifecycleJson;
+import com.sx.passenger.lifecycle.application.LifecycleStatusOutboxAppender;
 import com.sx.passenger.lifecycle.application.UuidLifecycleIdentifierGenerator;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleBlockerEntity;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleEventEntity;
@@ -16,6 +18,7 @@ import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,10 +45,10 @@ public class AccountCancellationOrchestrationTransaction {
     private final LifecycleOutboxMapper outbox;
     private final CustomerEntityMapper customers;
     private final CustomerPhoneBindingHistoryMapper phoneBindings;
+    private final LifecycleStatusOutboxAppender statusOutboxes;
     private final LifecycleJson json = new LifecycleJson();
     private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
     private final String commandTopic;
-    private final String eventTopic;
 
     AccountCancellationOrchestrationTransaction(
             LifecycleOperationMapper operations,
@@ -55,8 +58,8 @@ public class AccountCancellationOrchestrationTransaction {
             LifecycleOutboxMapper outbox,
             CustomerEntityMapper customers,
             CustomerPhoneBindingHistoryMapper phoneBindings,
-            @Value("${passenger.account-lifecycle.messaging.command-topic}") String commandTopic,
-            @Value("${passenger.account-lifecycle.messaging.event-topic}") String eventTopic) {
+            LifecycleStatusOutboxAppender statusOutboxes,
+            @Value("${passenger.account-lifecycle.messaging.command-topic}") String commandTopic) {
         this.operations = operations;
         this.steps = steps;
         this.blockers = blockers;
@@ -64,8 +67,8 @@ public class AccountCancellationOrchestrationTransaction {
         this.outbox = outbox;
         this.customers = customers;
         this.phoneBindings = phoneBindings;
+        this.statusOutboxes = statusOutboxes;
         this.commandTopic = commandTopic;
-        this.eventTopic = eventTopic;
     }
 
     /** 锁定 Operation 和 Steps，计算本轮应远程检查、继续、等待还是停止。 */
@@ -73,7 +76,7 @@ public class AccountCancellationOrchestrationTransaction {
     public LifecycleWorkItem prepare(String operationNo) {
         LifecycleOperationEntity operation = requireOperation(operationNo);
         if (isStopped(operation.getStatus())) return LifecycleWorkItem.of(LifecycleWorkItem.Kind.STOP);
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         if ("FENCED".equals(operation.getStatus())) {
             changeOperationStatus(operation, "VALIDATING", "FINAL_CHECK_STARTED", now);
         }
@@ -85,14 +88,6 @@ public class AccountCancellationOrchestrationTransaction {
         List<LifecycleStepEntity> group = all.stream()
                 .filter(step -> step.getSequenceNo().equals(sequence))
                 .toList();
-        if (group.stream().anyMatch(step -> "BLOCKED".equals(step.getStatus()))) {
-            changeOperationStatus(operation, "BLOCKED", "PARTICIPANT_BLOCKED", now);
-            return LifecycleWorkItem.of(LifecycleWorkItem.Kind.STOP);
-        }
-        if (group.stream().anyMatch(step -> "MANUAL_REVIEW".equals(step.getStatus()))) {
-            changeOperationStatus(operation, "MANUAL_REVIEW", "STEP_MANUAL_REVIEW", now);
-            return LifecycleWorkItem.of(LifecycleWorkItem.Kind.STOP);
-        }
         LifecycleStepEntity step = group.stream()
                 .filter(item -> "PENDING".equals(item.getStatus()))
                 .findFirst().orElse(null);
@@ -102,6 +97,16 @@ public class AccountCancellationOrchestrationTransaction {
             }
             LocalDateTime next = group.stream().map(LifecycleStepEntity::getNextRetryAt)
                     .filter(value -> value != null).min(Comparator.naturalOrder()).orElse(null);
+            if (next == null && group.stream().anyMatch(
+                    item -> "MANUAL_REVIEW".equals(item.getStatus()))) {
+                changeOperationStatus(operation, "MANUAL_REVIEW", "STEP_MANUAL_REVIEW", now);
+                return LifecycleWorkItem.of(LifecycleWorkItem.Kind.STOP);
+            }
+            if (next == null && group.stream().anyMatch(
+                    item -> "BLOCKED".equals(item.getStatus()))) {
+                changeOperationStatus(operation, "BLOCKED", "PARTICIPANT_BLOCKED", now);
+                return LifecycleWorkItem.of(LifecycleWorkItem.Kind.STOP);
+            }
             operation.setStatus("RETRY_PENDING").setNextWakeupAt(next)
                     .setRowVersion(operation.getRowVersion() + 1).setUpdatedAt(now);
             operations.updateById(operation);
@@ -136,7 +141,7 @@ public class AccountCancellationOrchestrationTransaction {
                 && !step.getCommandEventId().equals(commandEventId)) {
             return; // 迟到的旧命令回执不能覆盖新尝试。
         }
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         String decision = result.decision() == null ? "UNKNOWN" : result.decision();
         step.setResultEventId(commandEventId).setResultSnapshot(json.write(result))
                 .setTimeoutAt(null).setUpdatedAt(now);
@@ -154,7 +159,7 @@ public class AccountCancellationOrchestrationTransaction {
                 steps.updateById(step);
                 storeBlockers(operation, step, result.blockers(), now);
                 operation.setActiveBlockerCount(countActiveBlockers(operation.getId()));
-                changeOperationStatus(operation, "BLOCKED", "PARTICIPANT_BLOCKED", now);
+                operations.updateById(operation);
             }
             default -> scheduleRetry(operation, step, "PARTICIPANT_UNKNOWN",
                     "参与方结果未知，等待查询或重试", now);
@@ -168,7 +173,7 @@ public class AccountCancellationOrchestrationTransaction {
         if (requested == null) return null;
         LifecycleOperationEntity operation = operations.selectById(requested.getOperationId());
         if (operation == null || isStopped(operation.getStatus())) return null;
-        return command(operation, requested, requested.getCommandEventId(), LocalDateTime.now());
+        return command(operation, requested, requested.getCommandEventId(), PassengerPersistenceTime.now());
     }
 
     /** 查询未找到结果时按重试策略重新安排步骤。 */
@@ -179,7 +184,7 @@ public class AccountCancellationOrchestrationTransaction {
                 .filter(item -> item.getStepCode().equals(stepCode)).findFirst().orElse(null);
         if (step != null && "RUNNING".equals(step.getStatus())) {
             scheduleRetry(operation, step, "PARTICIPANT_RESULT_NOT_FOUND",
-                    "参与方尚未保存命令结果", LocalDateTime.now());
+                    "参与方尚未保存命令结果", PassengerPersistenceTime.now());
         }
     }
 
@@ -198,7 +203,7 @@ public class AccountCancellationOrchestrationTransaction {
                 .filter(step -> "MANUAL_REVIEW".equals(step.getStatus())
                         || "BLOCKED".equals(step.getStatus()))
                 .findFirst().orElseThrow(() -> new IllegalStateException("当前没有待人工恢复步骤"));
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         target.setStatus("RETRY_PENDING").setNextRetryAt(now)
                 .setLastErrorCode(null).setLastErrorMessage(null).setUpdatedAt(now);
         steps.updateById(target);
@@ -236,7 +241,7 @@ public class AccountCancellationOrchestrationTransaction {
         if (target == null) return;
         target.setAttemptCount(target.getAttemptCount() + 1);
         scheduleRetry(operation, target, errorCode,
-                "编排事务未完成，等待自动恢复", LocalDateTime.now());
+                "编排事务未完成，等待自动恢复", PassengerPersistenceTime.now());
     }
 
     private LifecycleWorkItem prepareRemoteCheck(
@@ -287,28 +292,13 @@ public class AccountCancellationOrchestrationTransaction {
                 json.write(Map.of("stepCode", step.getStepCode())), now);
         if ("ACCOUNT_FINALIZE_CANCEL".equals(step.getStepCode())) {
             operation.setStatus("COMPLETED").setCompletedAt(now).setNextWakeupAt(null)
+                    .setLastErrorCode(null).setLastErrorMessage(null)
                     .setAppliedLifecycleVersion(operation.getAppliedLifecycleVersion() + 1)
                     .setRowVersion(operation.getRowVersion() + 1).setUpdatedAt(now);
             operations.updateById(operation);
-            String completedEventId = identifiers.nextEventId();
-            Map<String, Object> completedPayload = Map.of(
-                    "eventId", completedEventId,
-                    "operationNo", operation.getOperationNo(),
-                    "customerId", operation.getCustomerId(),
-                    "lifecycleVersion", operation.getAppliedLifecycleVersion(),
-                    "lifecycleStatus", "CANCELLED",
-                    "updatedAt", now);
-            LifecycleOutboxEntity completedOutbox = new LifecycleOutboxEntity()
-                    .setEventId(completedEventId).setOperationId(operation.getId())
-                    .setAggregateType("ACCOUNT_LIFECYCLE").setAggregateId(operation.getOperationNo())
-                    .setEventType("ACCOUNT_LIFECYCLE_STATUS_CHANGED").setTopic(eventTopic)
-                    .setPartitionKey(Long.toString(operation.getCustomerId()))
-                    .setPayload(json.write(completedPayload)).setStatus("PENDING")
-                    .setRetryCount(0).setMaxRetryCount(10).setNextRetryAt(now)
-                    .setCreatedAt(now).setUpdatedAt(now);
-            if (outbox.insert(completedOutbox) != 1) {
-                throw new IllegalStateException("注销完成事件Outbox写入失败");
-            }
+            statusOutboxes.append(operation.getId(), operation.getOperationNo(), null,
+                    operation.getCustomerId(), operation.getAppliedLifecycleVersion(),
+                    "CANCELLED", null, null, now);
             audit(operation, "LIFECYCLE_OPERATION_STATUS_CHANGED", "ACCOUNT_CANCEL_COMPLETED",
                     "{\"from\":\"EXECUTING\",\"to\":\"COMPLETED\"}", now);
             return LifecycleWorkItem.of(LifecycleWorkItem.Kind.STOP);
@@ -361,11 +351,28 @@ public class AccountCancellationOrchestrationTransaction {
         for (LifecycleParticipantResult.Blocker blocker : found) {
             String resourceNo = blocker.resourceNo() == null ? "" : blocker.resourceNo();
             String key = blocker.code() + ":" + resourceNo;
-            Long exists = blockers.selectCount(new LambdaQueryWrapper<LifecycleBlockerEntity>()
+            LifecycleBlockerEntity existing = blockers.selectOne(
+                    new LambdaQueryWrapper<LifecycleBlockerEntity>()
                     .eq(LifecycleBlockerEntity::getOperationId, operation.getId())
                     .eq(LifecycleBlockerEntity::getDomainCode, step.getParticipantCode())
                     .eq(LifecycleBlockerEntity::getBlockerKey, key));
-            if (exists > 0) continue;
+            if (existing != null) {
+                blockers.update(null, Wrappers.<LifecycleBlockerEntity>lambdaUpdate()
+                        .eq(LifecycleBlockerEntity::getId, existing.getId())
+                        .set(LifecycleBlockerEntity::getStepId, step.getId())
+                        .set(LifecycleBlockerEntity::getBlockerType, blocker.code())
+                        .set(LifecycleBlockerEntity::getResourceType, blocker.resourceType())
+                        .set(LifecycleBlockerEntity::getResourceId, blocker.resourceNo())
+                        .set(LifecycleBlockerEntity::getStatus, "ACTIVE")
+                        .set(LifecycleBlockerEntity::getResolutionActions,
+                                json.write(List.of(blocker.action())))
+                        .set(LifecycleBlockerEntity::getSnapshotJson, "{}")
+                        .set(LifecycleBlockerEntity::getLastConfirmedAt, now)
+                        .set(LifecycleBlockerEntity::getResolvedAt, null)
+                        .set(LifecycleBlockerEntity::getResolutionReason, null)
+                        .set(LifecycleBlockerEntity::getUpdatedAt, now));
+                continue;
+            }
             LifecycleBlockerEntity entity = new LifecycleBlockerEntity()
                     .setOperationId(operation.getId()).setStepId(step.getId())
                     .setDomainCode(step.getParticipantCode()).setBlockerKey(key)

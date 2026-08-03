@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS `wallet_lifecycle_participant_inbox` (
     KEY `idx_wallet_lifecycle_inbox_customer` (`customer_id`, `created_at`),
     KEY `idx_wallet_lifecycle_inbox_status` (`status`, `updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
-  COMMENT='Wallet 生命周期参与者命令幂等与永久结果';
+  COMMENT='Wallet 生命周期参与者幂等结果；BLOCKED终检允许在同一栅栏上刷新';
 
 CREATE TABLE IF NOT EXISTS `wallet_auto_pay_termination` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,

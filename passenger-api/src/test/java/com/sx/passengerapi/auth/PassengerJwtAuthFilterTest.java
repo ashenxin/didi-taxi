@@ -77,8 +77,24 @@ class PassengerJwtAuthFilterTest {
         MockHttpServletResponse response = execute("POST", "/app/api/v1/orders", chain);
 
         assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getCharacterEncoding()).isEqualTo(StandardCharsets.UTF_8.name());
+        assertThat(response.getContentType()).isEqualTo("application/json;charset=UTF-8");
+        assertThat(response.getContentAsString()).contains("受限会话不可访问该资源");
         verify(chain, never()).doFilter(any(), any());
         verify(authStateClient, times(1)).get(7L);
+    }
+
+    @Test
+    void unauthorizedJsonErrorUsesUtf8ForChineseMessage() throws Exception {
+        FilterChain chain = mock(FilterChain.class);
+
+        MockHttpServletResponse response = execute("GET", "/app/api/v1/orders", chain, false);
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getCharacterEncoding()).isEqualTo(StandardCharsets.UTF_8.name());
+        assertThat(response.getContentType()).isEqualTo("application/json;charset=UTF-8");
+        assertThat(response.getContentAsString()).contains("缺少或非法的 Authorization");
+        verify(chain, never()).doFilter(any(), any());
     }
 
     @Test

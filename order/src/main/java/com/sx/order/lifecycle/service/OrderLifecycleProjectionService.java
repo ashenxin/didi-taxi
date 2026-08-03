@@ -8,6 +8,7 @@ import com.sx.order.lifecycle.model.ApplyOrderLifecycleProjectionCommand;
 import com.sx.order.lifecycle.model.OrderAccountLifecycleProjection;
 import com.sx.order.lifecycle.model.OrderAccountLifecycleEventInbox;
 import com.sx.order.lifecycle.model.OrderLifecycleStatus;
+import com.sx.order.lifecycle.model.OrderLifecycleCommand;
 import com.sx.order.lifecycle.metrics.OrderLifecycleMetrics;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -51,6 +52,21 @@ public class OrderLifecycleProjectionService {
         } catch (RuntimeException ex) {
             metrics.projectionApply(OrderLifecycleMetrics.ProjectionResult.UNKNOWN);
             throw ex;
+        }
+    }
+
+    /** 重检不重复推进版本，只确认首次终检建立的本地栅栏仍精确属于当前 Operation。 */
+    public void requireCurrentTarget(OrderLifecycleCommand command) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("账户生命周期投影校验必须在事务内执行");
+        }
+        OrderAccountLifecycleProjection current = mapper.selectForUpdate(command.customerId());
+        if (current == null
+                || !Objects.equals(current.getBusinessStatus(), 0)
+                || !Objects.equals(current.getLifecycleStatus(), command.targetLifecycleStatus().trim())
+                || !Objects.equals(current.getLifecycleVersion(), command.lifecycleVersion())
+                || !Objects.equals(current.getOperationNo(), command.operationNo().trim())) {
+            throw conflict("账户生命周期重检目标与当前Order投影不一致");
         }
     }
 

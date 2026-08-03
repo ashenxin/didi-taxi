@@ -7,12 +7,15 @@ import com.sx.passengerapi.client.dto.AccountLifecycleOperationData;
 import com.sx.passengerapi.client.dto.AccountLifecycleSubmissionData;
 import com.sx.passengerapi.client.dto.AppAccountCancelSmsSendResult;
 import com.sx.passengerapi.client.dto.AppSmsSendResult;
+import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.lifecycle.AccountCancellationSubmitRequest;
 import com.sx.passengerapi.model.lifecycle.AccountLifecycleOperationVO;
 import com.sx.passengerapi.model.lifecycle.AccountLifecycleSubmissionVO;
+import com.sx.passengerapi.model.lifecycle.PhoneChangeSubmitRequest;
 import com.sx.passengerapi.model.settings.SettingsSmsSendResultVO;
 import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
+import feign.FeignException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -20,6 +23,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -105,5 +109,20 @@ class PassengerAccountLifecycleServiceTest {
 
         assertThat(cancellationResult.getLifecycleVersion()).isEqualTo(12L);
         assertThat(phoneChangeResult.getLifecycleVersion()).isEqualTo(13L);
+    }
+
+    @Test
+    void phoneChangeFeignConflictRemainsConflictAtLifecycleBoundary() {
+        FeignException conflict = mock(FeignException.class);
+        when(conflict.status()).thenReturn(409);
+        when(core.submitPhoneChange(anyString(), anyString(), any())).thenThrow(conflict);
+
+        assertThatThrownBy(() -> service.submitPhoneChange(
+                7L, new PhoneChangeSubmitRequest(12L, "13900139000", "123456"),
+                "idem-conflict", "request-conflict"))
+                .isInstanceOfSatisfying(BizErrorException.class, error -> {
+                    assertThat(error.getErrorCode()).isEqualTo(409);
+                    assertThat(error.getErrorMessage()).isEqualTo("账号状态已变化，请刷新后重试");
+                });
     }
 }

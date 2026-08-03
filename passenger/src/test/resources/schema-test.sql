@@ -142,7 +142,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_lifecycle_event_id
 CREATE TABLE IF NOT EXISTS account_lifecycle_outbox (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     event_id VARCHAR(64) NOT NULL,
-    operation_id BIGINT NOT NULL,
+    operation_id BIGINT NULL,
     aggregate_type VARCHAR(32) NOT NULL DEFAULT 'ACCOUNT_LIFECYCLE',
     aggregate_id VARCHAR(64) NOT NULL,
     event_type VARCHAR(64) NOT NULL,

@@ -26,6 +26,10 @@ public class OrderLifecycleStatusKafkaConsumer {
     @KafkaListener(topics = "${order.lifecycle.messaging.event-topic}")
     public void consume(String payload) {
         LifecycleStatusEvent event = read(payload);
+        if (event.isInitialActive()) {
+            projections.seedActive(event.customerId(), event.eventId(), event.updatedAt());
+            return;
+        }
         projections.apply(new ApplyOrderLifecycleProjectionCommand(
                 event.customerId(), 0, event.lifecycleStatus(), event.lifecycleVersion(),
                 event.operationNo(), event.eventId(), event.updatedAt()));
@@ -41,5 +45,9 @@ public class OrderLifecycleStatusKafkaConsumer {
 
     private record LifecycleStatusEvent(String eventId, String operationNo, long customerId,
                                         long lifecycleVersion, String lifecycleStatus,
-                                        LocalDateTime updatedAt) {}
+                                        LocalDateTime updatedAt) {
+        private boolean isInitialActive() {
+            return operationNo == null && lifecycleVersion == 0 && "ACTIVE".equals(lifecycleStatus);
+        }
+    }
 }

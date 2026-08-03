@@ -6,6 +6,7 @@ import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleStepEntity;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -74,7 +75,7 @@ public class LifecycleRecoveryService {
     private LifecycleJobBatchResult recoverDueOperations(int limit, long deadline) {
         long started = System.nanoTime();
         List<LifecycleOperationEntity> due =
-                operations.findDueForRecovery(LocalDateTime.now(), limit);
+                operations.findDueForRecovery(PassengerPersistenceTime.now(), limit);
         int claimed = 0;
         int succeeded = 0;
         int failed = 0;
@@ -109,7 +110,7 @@ public class LifecycleRecoveryService {
 
     private LifecycleJobBatchResult recoverTimedOutSteps(int limit, long deadline) {
         long started = System.nanoTime();
-        List<LifecycleStepEntity> timedOut = steps.findTimedOutRunning(LocalDateTime.now(), limit);
+        List<LifecycleStepEntity> timedOut = steps.findTimedOutRunning(PassengerPersistenceTime.now(), limit);
         int claimed = 0;
         int succeeded = 0;
         int failed = 0;

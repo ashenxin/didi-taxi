@@ -9,9 +9,9 @@ import com.sx.passenger.lifecycle.persistence.entity.LifecycleStepEntity;
 import com.sx.passenger.lifecycle.plan.LifecyclePlanRegistry;
 import com.sx.passenger.lifecycle.plan.LifecycleStepDefinition;
 import com.sx.passenger.lifecycle.plan.ValidatedLifecyclePlan;
+import com.sx.passenger.time.PassengerPersistenceTime;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -91,8 +91,8 @@ public final class LifecycleRuntimeSnapshotFactory {
          */
         ValidatedLifecyclePlan plan = plans.activePlan(command.operationType());
 
-        // 持久化层统一使用 UTC 的 LocalDateTime，保证各实体的业务时间来自同一个 requestedAt。
-        LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
+        // Passenger 的 DATETIME 统一使用上海本地时间，并保证各实体来自同一个 requestedAt。
+        LocalDateTime now = PassengerPersistenceTime.fromInstant(command.requestedAt());
 
         // operationNo 是生命周期操作对外使用的稳定业务编号，不依赖数据库自增主键。
         String operationNo = identifiers.nextOperationNo();

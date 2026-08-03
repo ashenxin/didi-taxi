@@ -1,6 +1,8 @@
 package com.sx.passenger.lifecycle.persistence.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
@@ -29,13 +31,17 @@ public class LifecycleStepEntity {
     private Integer retryInitialSeconds;
     private Integer timeoutSeconds;
     /** 下一次可重试时间和当前运行超时边界。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private LocalDateTime nextRetryAt;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private LocalDateTime timeoutAt;
     /** 本次命令与已应用结果事件 ID，用于消息关联和幂等。 */
     private String commandEventId;
     private String resultEventId;
     /** 最近失败的稳定错误码与诊断摘要。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String lastErrorCode;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String lastErrorMessage;
     /** 计划配置、实际命令和参与者结果的脱敏 JSON 快照。 */
     private String stepConfig;

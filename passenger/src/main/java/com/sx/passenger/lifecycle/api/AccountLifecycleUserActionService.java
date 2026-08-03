@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.lifecycle.application.LifecycleIdentifierGenerator;
 import com.sx.passenger.lifecycle.application.LifecycleOperationConflictException;
+import com.sx.passenger.lifecycle.application.LifecycleStatusOutboxAppender;
 import com.sx.passenger.lifecycle.application.UuidLifecycleIdentifierGenerator;
 import com.sx.passenger.lifecycle.domain.LifecycleActorType;
 import com.sx.passenger.lifecycle.domain.LifecycleOperationStateMachine;
@@ -18,6 +19,7 @@ import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
 import com.sx.passenger.model.Customer;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +33,7 @@ public class AccountLifecycleUserActionService {
     private final LifecycleBlockerMapper blockers;
     private final LifecycleEventMapper events;
     private final CustomerEntityMapper customers;
+    private final LifecycleStatusOutboxAppender statusOutboxes;
     private final LifecycleOperationStateMachine stateMachine = new LifecycleOperationStateMachine();
     private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
 
@@ -39,12 +42,14 @@ public class AccountLifecycleUserActionService {
             LifecycleStepMapper steps,
             LifecycleBlockerMapper blockers,
             LifecycleEventMapper events,
-            CustomerEntityMapper customers) {
+            CustomerEntityMapper customers,
+            LifecycleStatusOutboxAppender statusOutboxes) {
         this.operations = operations;
         this.steps = steps;
         this.blockers = blockers;
         this.events = events;
         this.customers = customers;
+        this.statusOutboxes = statusOutboxes;
     }
 
     @Transactional
@@ -54,7 +59,7 @@ public class AccountLifecycleUserActionService {
         stateMachine.requireTransition(
                 LifecycleOperationType.ACCOUNT_CANCEL, from, LifecycleOperationStatus.ABORTED,
                 Integer.valueOf(1).equals(operation.getIrreversibleStarted()));
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         if (customers.abortAccountCancellation(
                 customerId, operationNo, operation.getAppliedLifecycleVersion(), now) != 1) {
             throw new LifecycleOperationConflictException("账号注销栅栏已变化，无法撤销");
@@ -76,6 +81,8 @@ public class AccountLifecycleUserActionService {
                 .set(LifecycleStepEntity::getUpdatedAt, now));
         resolveBlockers(operation.getId(), "USER_ABORTED", now);
         event(operation, operation.getStatus(), "ABORTED", "ACCOUNT_CANCEL_ABORTED", now);
+        statusOutboxes.append(operation.getId(), operation.getOperationNo(), null, customerId,
+                customer.getLifecycleVersion(), "ACTIVE", null, null, now);
     }
 
     @Transactional
@@ -86,7 +93,7 @@ public class AccountLifecycleUserActionService {
                 LifecycleOperationStatus.valueOf(operation.getStatus()),
                 LifecycleOperationStatus.VALIDATING,
                 Integer.valueOf(1).equals(operation.getIrreversibleStarted()));
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         int reset = steps.update(null, Wrappers.<LifecycleStepEntity>lambdaUpdate()
                 .eq(LifecycleStepEntity::getOperationId, operation.getId())
                 .eq(LifecycleStepEntity::getStatus, "BLOCKED")

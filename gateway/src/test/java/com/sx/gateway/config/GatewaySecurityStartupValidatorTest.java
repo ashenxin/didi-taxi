@@ -16,9 +16,10 @@ class GatewaySecurityStartupValidatorTest {
         properties.setSecretAdmin("dev-didi-admin-jwt-secret-change-me-32b!!");
         properties.setSecretApp("dev-didi-app-jwt-secret-change-me-32b!!");
         properties.setSecretDriver("dev-didi-driver-jwt-secret-change-me-32b!!");
+        PassengerWsPrecheckProperties ws = secureWsProperties();
 
         assertThrows(IllegalStateException.class,
-                () -> GatewaySecurityStartupValidator.validateStrict(properties));
+                () -> GatewaySecurityStartupValidator.validateStrict(properties, ws));
     }
 
     @Test
@@ -30,7 +31,8 @@ class GatewaySecurityStartupValidatorTest {
         properties.setSecretApp("app-4Km8Qp2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG");
         properties.setSecretDriver("driver-9Rt3Wq7Km2Pv8Ls4Hc6Nz1Fy5Bj0XdAG");
 
-        assertDoesNotThrow(() -> GatewaySecurityStartupValidator.validateStrict(properties));
+        assertDoesNotThrow(() -> GatewaySecurityStartupValidator.validateStrict(
+                properties, secureWsProperties()));
     }
 
     @Test
@@ -39,7 +41,17 @@ class GatewaySecurityStartupValidatorTest {
         environment.setActiveProfiles("local");
         GatewayJwtProperties properties = new GatewayJwtProperties();
 
-        assertDoesNotThrow(() -> new GatewaySecurityStartupValidator(properties, environment)
+        assertDoesNotThrow(() -> new GatewaySecurityStartupValidator(
+                properties, new PassengerWsPrecheckProperties(), environment)
                 .afterPropertiesSet());
+    }
+
+    private static PassengerWsPrecheckProperties secureWsProperties() {
+        PassengerWsPrecheckProperties properties = new PassengerWsPrecheckProperties();
+        properties.setEnabled(true);
+        properties.setInternalToken("passenger-internal-7ZQx9vPk2mRt6Nc4Hs8Wd3Lf");
+        properties.setServiceBaseUrl("http://passenger-api");
+        properties.setTimeoutMillis(2000);
+        return properties;
     }
 }

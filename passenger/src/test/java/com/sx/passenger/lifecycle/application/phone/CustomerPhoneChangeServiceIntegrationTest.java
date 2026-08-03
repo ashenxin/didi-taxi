@@ -1,6 +1,8 @@
 package com.sx.passenger.lifecycle.application.phone;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.passenger.auth.otp.AtomicOtpService;
 import com.sx.passenger.auth.otp.OtpConsumeResult;
 import com.sx.passenger.auth.otp.OtpPurpose;
@@ -50,6 +52,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -79,6 +82,7 @@ class CustomerPhoneChangeServiceIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate outerTransactions;
     @Autowired MeterRegistry meterRegistry;
+    @Autowired ObjectMapper objectMapper;
     @MockBean AtomicOtpService otp;
 
     @BeforeEach
@@ -128,7 +132,7 @@ class CustomerPhoneChangeServiceIntegrationTest {
     }
 
     @Test
-    void createsCompletedOperationStepsEventsAndOutboxes() {
+    void createsCompletedOperationStepsEventsAndOutboxes() throws Exception {
         ChangeCustomerPhoneResult out = service.change(command("idem-runtime", NEW_PHONE, "{}"));
 
         Map<String, Object> operation = jdbc.queryForMap("""
@@ -144,11 +148,27 @@ class CustomerPhoneChangeServiceIntegrationTest {
         assertThat(count("SELECT COUNT(*) FROM account_lifecycle_event WHERE operation_id = ?", out.operationId()))
                 .isEqualTo(3L);
         assertThat(count("SELECT COUNT(*) FROM account_lifecycle_outbox WHERE operation_id = ?", out.operationId()))
-                .isEqualTo(2L);
+                .isEqualTo(3L);
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM account_lifecycle_outbox
                 WHERE operation_id = ? AND topic = 'account.lifecycle.phone-changed.v1'
                 """, Long.class, out.operationId())).isEqualTo(1L);
+        Map<String, Object> projectionOutbox = jdbc.queryForMap("""
+                SELECT event_id, event_type, topic, partition_key, payload, status, causation_event_id
+                FROM account_lifecycle_outbox
+                WHERE operation_id = ? AND event_type = 'ACCOUNT_LIFECYCLE_STATUS_CHANGED'
+                """, out.operationId());
+        assertThat(projectionOutbox).containsEntry("event_type", "ACCOUNT_LIFECYCLE_STATUS_CHANGED")
+                .containsEntry("topic", "account.lifecycle.event.v1")
+                .containsEntry("partition_key", Long.toString(CUSTOMER_ID))
+                .containsEntry("status", "PENDING");
+        assertThat(projectionOutbox.get("causation_event_id")).isNotNull();
+        JsonNode payload = objectMapper.readTree((String) projectionOutbox.get("payload"));
+        assertThat(payload.path("eventId").asText()).isEqualTo(projectionOutbox.get("event_id"));
+        assertThat(payload.path("operationNo").isNull()).isTrue();
+        assertThat(payload.path("customerId").asLong()).isEqualTo(CUSTOMER_ID);
+        assertThat(payload.path("lifecycleVersion").asLong()).isEqualTo(4L);
+        assertThat(payload.path("lifecycleStatus").asText()).isEqualTo("ACTIVE");
     }
 
     @Test
@@ -316,6 +336,19 @@ class CustomerPhoneChangeServiceIntegrationTest {
         verify(otp, never()).store(any(), any(), any(), any());
         assertThat(epochCount("success") - successBefore).isZero();
         assertThat(epochCount("failure") - failureBefore).isEqualTo(3);
+    }
+
+    @Test
+    void projectionOutboxFailureRollsBackPhoneChangeButNeverRestoresOtp() {
+        doThrow(new IllegalStateException("projection outbox unavailable"))
+                .when(outboxes).insert(argThat((LifecycleOutboxEntity outbox) ->
+                        "ACCOUNT_LIFECYCLE_STATUS_CHANGED".equals(outbox.getEventType())));
+
+        assertThatThrownBy(() -> service.change(command("idem-projection-outbox-fail", NEW_PHONE, "{}")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("projection outbox");
+        assertEverythingRolledBack();
+        verify(otp).consume(eq(OtpPurpose.PHONE_CHANGE_NEW_PHONE), any(), any());
     }
 
     @Test

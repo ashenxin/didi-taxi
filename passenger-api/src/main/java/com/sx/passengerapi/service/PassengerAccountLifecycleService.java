@@ -19,10 +19,12 @@ import com.sx.passengerapi.model.lifecycle.AccountLifecycleSubmissionVO;
 import com.sx.passengerapi.model.lifecycle.PhoneChangeSubmitRequest;
 import com.sx.passengerapi.model.settings.SettingsSmsSendResultVO;
 import com.sx.passengerapi.ws.PassengerWsSessionRegistry;
+import feign.FeignException;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /** passenger-api 的生命周期 DTO、会话签发和核心服务转调边界。 */
 @Service
@@ -41,8 +43,8 @@ public class PassengerAccountLifecycleService {
     }
 
     public SettingsSmsSendResultVO sendCancellationSms(long customerId) {
-        AppAccountCancelSmsSendResult data = unwrap(
-                core.sendCancellationSms(new AccountLifecycleSmsRequest(customerId, null)));
+        AppAccountCancelSmsSendResult data = invokeLifecycle(
+                () -> core.sendCancellationSms(new AccountLifecycleSmsRequest(customerId, null)));
         SettingsSmsSendResultVO result = new SettingsSmsSendResultVO();
         result.setMockCode(data.getMockCode());
         result.setMaskedPhone(data.getMaskedPhone());
@@ -51,8 +53,8 @@ public class PassengerAccountLifecycleService {
     }
 
     public AccountLifecyclePrecheckVO precheckCancellation(long customerId) {
-        AccountLifecyclePrecheckData data = unwrap(
-                core.precheckCancellation(new AccountLifecycleSmsRequest(customerId, null)));
+        AccountLifecyclePrecheckData data = invokeLifecycle(
+                () -> core.precheckCancellation(new AccountLifecycleSmsRequest(customerId, null)));
         if (data == null || data.decision() == null) {
             throw new BizErrorException(502, "账号生命周期预检返回不完整");
         }
@@ -65,8 +67,8 @@ public class PassengerAccountLifecycleService {
     }
 
     public SettingsSmsSendResultVO sendPhoneChangeSms(long customerId, String newPhone) {
-        AppSmsSendResult data = unwrap(
-                core.sendPhoneChangeSms(new AccountLifecycleSmsRequest(customerId, newPhone)));
+        AppSmsSendResult data = invokeLifecycle(
+                () -> core.sendPhoneChangeSms(new AccountLifecycleSmsRequest(customerId, newPhone)));
         SettingsSmsSendResultVO result = new SettingsSmsSendResultVO();
         result.setMockCode(data == null ? null : data.getMockCode());
         result.setLifecycleVersion(data == null ? null : data.getLifecycleVersion());
@@ -79,7 +81,7 @@ public class PassengerAccountLifecycleService {
             AccountCancellationSubmitRequest request,
             String idempotencyKey,
             String requestId) {
-        AccountLifecycleSubmissionData data = unwrap(core.submitCancellation(
+        AccountLifecycleSubmissionData data = invokeLifecycle(() -> core.submitCancellation(
                 requireIdempotencyKey(idempotencyKey), requestId(requestId),
                 new AccountLifecycleSubmitRequest(customerId, request.expectedLifecycleVersion(),
                         null, request.code(), request.confirm())));
@@ -105,7 +107,7 @@ public class PassengerAccountLifecycleService {
             PhoneChangeSubmitRequest request,
             String idempotencyKey,
             String requestId) {
-        AccountLifecycleSubmissionData data = unwrap(core.submitPhoneChange(
+        AccountLifecycleSubmissionData data = invokeLifecycle(() -> core.submitPhoneChange(
                 requireIdempotencyKey(idempotencyKey), requestId(requestId),
                 new AccountLifecycleSubmitRequest(customerId, request.expectedLifecycleVersion(),
                         request.newPhone(), request.code(), null)));
@@ -117,17 +119,18 @@ public class PassengerAccountLifecycleService {
     }
 
     public AccountLifecycleOperationVO operation(long customerId, String operationNo) {
-        return toOperation(unwrap(core.operation(operationNo, customerId)));
+        return toOperation(invokeLifecycle(() -> core.operation(operationNo, customerId)));
     }
 
     public AccountLifecycleOperationVO abort(long customerId, String operationNo) {
-        AccountLifecycleOperationVO result = toOperation(unwrap(core.abort(operationNo, customerId)));
+        AccountLifecycleOperationVO result = toOperation(
+                invokeLifecycle(() -> core.abort(operationNo, customerId)));
         sessions.closeCustomerSessions(customerId, "auth_epoch_changed");
         return result;
     }
 
     public AccountLifecycleOperationVO recheck(long customerId, String operationNo) {
-        return toOperation(unwrap(core.recheck(operationNo, customerId)));
+        return toOperation(invokeLifecycle(() -> core.recheck(operationNo, customerId)));
     }
 
     private static AccountLifecycleOperationVO toOperation(AccountLifecycleOperationData data) {
@@ -178,6 +181,17 @@ public class PassengerAccountLifecycleService {
             throw new BizErrorException(response.getCode(), response.getMsg());
         }
         return response.getData();
+    }
+
+    private static <T> T invokeLifecycle(Supplier<ResponseVo<T>> invocation) {
+        try {
+            return unwrap(invocation.get());
+        } catch (FeignException exception) {
+            if (exception.status() == 409) {
+                throw new BizErrorException(409, "账号状态已变化，请刷新后重试");
+            }
+            throw exception;
+        }
     }
 
     private static <T> List<T> safe(List<T> values) {

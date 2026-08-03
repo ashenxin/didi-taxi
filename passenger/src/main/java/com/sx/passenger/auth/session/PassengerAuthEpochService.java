@@ -7,11 +7,11 @@ import com.sx.passenger.lifecycle.persistence.entity.LifecycleOperationEntity;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.model.Customer;
 import com.sx.passenger.auth.metrics.PassengerAuthMetrics;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.Set;
 
 @Service
@@ -46,7 +46,7 @@ public class PassengerAuthEpochService {
         AuthSessionScope scope = scopeOf(current);
         if (scope == AuthSessionScope.LIFECYCLE_RESTRICTED
                 && operations.updateRestrictedAuthEpoch(customerId, current.getCurrentLifecycleOperationNo(),
-                current.getAuthEpoch(), LocalDateTime.now(ZoneOffset.UTC)) != 1) {
+                current.getAuthEpoch(), PassengerPersistenceTime.now()) != 1) {
             throw new AuthStateRejectedException();
         }
         return AppAuthCustomerBrief.from(current, scope.name());

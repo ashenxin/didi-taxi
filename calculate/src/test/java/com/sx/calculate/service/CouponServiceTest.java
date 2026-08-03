@@ -10,6 +10,7 @@ import com.sx.calculate.model.UserCoupon;
 import com.sx.calculate.model.CouponUseRecord;
 import com.sx.calculate.model.dto.CouponLockRequest;
 import com.sx.calculate.model.dto.CouponLockResult;
+import com.sx.calculate.model.dto.CouponPageVO;
 import com.sx.calculate.model.dto.CouponUseRequest;
 import com.sx.calculate.lifecycle.service.CalculateAccountWriteFence;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,6 +74,23 @@ class CouponServiceTest {
         assertThat(result.getCouponId()).isNull();
         assertThat(result.getDiscountAmount()).isEqualByComparingTo("0.00");
         assertThat(result.getPayableAmount()).isEqualByComparingTo("30.00");
+    }
+
+    @Test
+    void couponPageDefaultsToUnusedAndFiltersExpiredCouponsInDatabase() {
+        when(userCouponMapper.selectCount(any(Wrapper.class))).thenReturn(0L);
+        when(userCouponMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+
+        CouponPageVO result = service.page(10001L, null, 1, 20);
+
+        ArgumentCaptor<Wrapper<UserCoupon>> countQuery = ArgumentCaptor.forClass(Wrapper.class);
+        verify(userCouponMapper).selectCount(countQuery.capture());
+        assertThat(countQuery.getValue().getSqlSegment())
+                .contains("status")
+                .contains("valid_end_at")
+                .contains(">");
+        assertThat(result.getTotal()).isZero();
+        assertThat(result.getList()).isEmpty();
     }
 
     @Test

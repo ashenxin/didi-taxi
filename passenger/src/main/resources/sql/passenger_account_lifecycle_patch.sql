@@ -176,9 +176,9 @@ CREATE TABLE IF NOT EXISTS `account_lifecycle_event` (
 CREATE TABLE IF NOT EXISTS `account_lifecycle_outbox` (
     `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
     `event_id` VARCHAR(64) NOT NULL COMMENT '全局唯一事件ID，同时作为消费者去重键',
-    `operation_id` BIGINT NOT NULL COMMENT 'account_lifecycle_operation.id',
+    `operation_id` BIGINT NULL COMMENT 'account_lifecycle_operation.id；注册初始化事件为空',
     `aggregate_type` VARCHAR(32) NOT NULL DEFAULT 'ACCOUNT_LIFECYCLE' COMMENT '聚合类型：ACCOUNT_LIFECYCLE账号生命周期',
-    `aggregate_id` VARCHAR(64) NOT NULL COMMENT 'operation_no',
+    `aggregate_id` VARCHAR(64) NOT NULL COMMENT 'operation_no或CUSTOMER:{customerId}',
     `event_type` VARCHAR(64) NOT NULL COMMENT '命令或领域事件类型',
     `causation_event_id` VARCHAR(64) NULL COMMENT '触发本消息的 account_lifecycle_event.event_id',
     `trace_id` VARCHAR(64) NULL COMMENT '全链路追踪ID',

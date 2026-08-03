@@ -59,10 +59,12 @@ class AccountLifecycleWalletParticipantIntegrationTest {
     }
 
     @Test
-    void finalCheckBlocksActivePaymentAndReplaysPermanently() {
+    void finalCheckReplaysSameEventAndRefreshesResolvedBlocker() {
         long customerId = 51001L;
         projections.seedActive(customerId, "seed-wallet-51001", LocalDateTime.now());
-        payments.insert(payment(customerId, "PAY-RISK-1", "CONFIRMING", "idem-risk"));
+        WalletPaymentOrder payment = payment(
+                customerId, "PAY-RISK-1", "CONFIRMING", "idem-risk");
+        payments.insert(payment);
 
         var first = participant.fence(command("op-risk", "WALLET_FINAL_CHECK",
                 customerId, "event-risk"));
@@ -74,6 +76,16 @@ class AccountLifecycleWalletParticipantIntegrationTest {
                 .satisfies(b -> assertThat(b.code()).isEqualTo("PAYMENT_IN_PROGRESS"));
         assertThat(replay).isEqualTo(first);
         assertThat(inboxes.selectCount(null)).isEqualTo(1);
+
+        payment.setStatus("SUCCESS").setUpdatedAt(LocalDateTime.now());
+        payments.updateById(payment);
+        var refreshed = participant.fence(command("op-risk", "WALLET_FINAL_CHECK",
+                customerId, "event-risk-recheck"));
+
+        assertThat(refreshed.decision()).isEqualTo("PASS");
+        assertThat(refreshed.blockers()).isEmpty();
+        assertThat(inboxes.selectCount(null)).isEqualTo(1);
+        assertThat(projectionMapper.selectById(customerId).getLifecycleVersion()).isEqualTo(1L);
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.sx.passenger.lifecycle.job.LifecycleJobBatchResult;
 import com.sx.passenger.lifecycle.job.LifecycleJobProperties;
 import com.sx.passenger.lifecycle.persistence.entity.LifecycleOutboxEntity;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -55,7 +56,7 @@ public class KafkaLifecycleOutboxPublisher {
         long started = System.nanoTime();
         long deadline = started + TimeUnit.SECONDS.toNanos(
                 properties.getOutbox().getBatchDeadlineSeconds());
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         List<LifecycleOutboxEntity> candidates =
                 outbox.findPublishCandidates(now,
                         now.minusSeconds(properties.getOutbox().getStaleProcessingSeconds()),
@@ -72,8 +73,8 @@ public class KafkaLifecycleOutboxPublisher {
             }
             LifecycleOutboxEntity candidate = candidates.get(index);
             Boolean claimed = transactions.execute(status ->
-                    outbox.claim(candidate.getId(), LocalDateTime.now(),
-                            LocalDateTime.now().minusSeconds(properties.getOutbox()
+                    outbox.claim(candidate.getId(), PassengerPersistenceTime.now(),
+                            PassengerPersistenceTime.now().minusSeconds(properties.getOutbox()
                                     .getStaleProcessingSeconds()), workerId) == 1);
             if (!Boolean.TRUE.equals(claimed)) {
                 skipped++;
@@ -113,7 +114,7 @@ public class KafkaLifecycleOutboxPublisher {
         LifecycleOutboxEntity current = outbox.selectById(id);
         if (current == null || !"PROCESSING".equals(current.getStatus())
                 || !workerId.equals(current.getProcessingBy())) return;
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         current.setStatus("PUBLISHED").setPublishedAt(now).setProcessingAt(null)
                 .setProcessingBy(null).setLastError(null).setUpdatedAt(now);
         if (outbox.updateById(current) != 1) {
@@ -126,7 +127,7 @@ public class KafkaLifecycleOutboxPublisher {
         LifecycleOutboxEntity current = outbox.selectById(id);
         if (current == null || !"PROCESSING".equals(current.getStatus())
                 || !workerId.equals(current.getProcessingBy())) return false;
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         int retries = current.getRetryCount() + 1;
         boolean exhausted = retries >= current.getMaxRetryCount();
         current.setStatus("FAILED").setRetryCount(retries)

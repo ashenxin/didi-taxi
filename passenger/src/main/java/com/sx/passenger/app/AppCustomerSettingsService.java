@@ -17,6 +17,7 @@ import com.sx.passenger.common.util.ResultUtil;
 import com.sx.passenger.common.vo.ResponseVo;
 import com.sx.passenger.dao.CustomerEntityMapper;
 import com.sx.passenger.model.Customer;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -30,7 +31,6 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -207,7 +207,7 @@ public class AppCustomerSettingsService {
         }
 
         // 逻辑删除后 phone_active 生成列应变为 NULL，旧手机号允许重新注册成新的 customer.id。
-        LocalDateTime cancelledAt = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime cancelledAt = PassengerPersistenceTime.now();
         int updated = customerMapper.cancelAccountCas(
                 req.getCustomerId(), lifecycleVersion(current), cancelledAt);
         if (updated != 1) {

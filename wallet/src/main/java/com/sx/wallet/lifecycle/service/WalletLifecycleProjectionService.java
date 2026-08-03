@@ -4,6 +4,7 @@ import com.sx.wallet.lifecycle.dao.WalletLifecycleEventInboxMapper;
 import com.sx.wallet.lifecycle.dao.WalletLifecycleProjectionMapper;
 import com.sx.wallet.lifecycle.exception.WalletLifecycleProjectionConflictException;
 import com.sx.wallet.lifecycle.exception.WalletLifecycleUnknownException;
+import com.sx.wallet.lifecycle.model.ApplyWalletLifecycleProjectionCommand;
 import com.sx.wallet.lifecycle.model.WalletLifecycleCommand;
 import com.sx.wallet.lifecycle.model.WalletLifecycleEventInbox;
 import com.sx.wallet.lifecycle.model.WalletLifecycleProjection;
@@ -35,15 +36,19 @@ public class WalletLifecycleProjectionService {
     }
 
     @Transactional
-    public String apply(WalletLifecycleCommand command) {
+    public String apply(ApplyWalletLifecycleProjectionCommand command) {
         return applyUnderLock(command);
     }
 
     public String applyUnderLock(WalletLifecycleCommand command) {
+        return applyUnderLock(toProjectionCommand(command));
+    }
+
+    public String applyUnderLock(ApplyWalletLifecycleProjectionCommand command) {
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("Wallet生命周期投影更新必须在事务内执行");
         }
-        WalletLifecycleStatus target = parse(command.targetLifecycleStatus());
+        WalletLifecycleStatus target = parse(command.lifecycleStatus());
         String hash = hasher.hashProjection(command);
         WalletLifecycleEventInbox event = events.selectById(command.sourceEventId().trim());
         if (event != null) {
@@ -61,7 +66,7 @@ public class WalletLifecycleProjectionService {
                     .setCustomerId(command.customerId())
                     .setLifecycleVersion(command.lifecycleVersion())
                     .setRequestHash(hash)
-                    .setCreatedAt(command.requestedAt()));
+                    .setCreatedAt(command.updatedAt()));
         } catch (DuplicateKeyException ex) {
             WalletLifecycleEventInbox raced = events.selectForUpdate(command.sourceEventId().trim());
             if (raced == null) throw new WalletLifecycleUnknownException("投影事件并发结果未知", ex);
@@ -86,10 +91,26 @@ public class WalletLifecycleProjectionService {
         return "APPLIED";
     }
 
+    /** 重检只确认既有栅栏仍精确属于当前 Operation，不再次推进生命周期版本。 */
+    public void requireCurrentTarget(WalletLifecycleCommand command) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("Wallet生命周期投影校验必须在事务内执行");
+        }
+        WalletLifecycleStatus target = parse(command.targetLifecycleStatus());
+        WalletLifecycleProjection current = projections.selectForUpdate(command.customerId());
+        if (current == null
+                || !Objects.equals(current.getBusinessStatus(), 0)
+                || !Objects.equals(current.getLifecycleStatus(), target.name())
+                || !Objects.equals(current.getLifecycleVersion(), command.lifecycleVersion())
+                || !Objects.equals(current.getOperationNo(), blank(command.operationNo()))) {
+            throw conflict("生命周期重检目标与当前Wallet投影不一致");
+        }
+    }
+
     @Transactional
     public String seedActive(long customerId, String sourceEventId, LocalDateTime now) {
-        WalletLifecycleCommand command = new WalletLifecycleCommand("P5-SEED-" + customerId,
-                "WALLET_SEED_ACTIVE", customerId, 0, "ACTIVE", sourceEventId, now);
+        ApplyWalletLifecycleProjectionCommand command = new ApplyWalletLifecycleProjectionCommand(
+                customerId, 0, "ACTIVE", 0, null, sourceEventId, now);
         String hash = hasher.hashProjection(command);
         WalletLifecycleEventInbox event = events.selectById(sourceEventId);
         if (event != null) {
@@ -110,13 +131,20 @@ public class WalletLifecycleProjectionService {
     }
 
     private static WalletLifecycleProjection toProjection(
-            WalletLifecycleCommand command, WalletLifecycleStatus status) {
+            ApplyWalletLifecycleProjectionCommand command, WalletLifecycleStatus status) {
         return new WalletLifecycleProjection().setCustomerId(command.customerId())
-                .setBusinessStatus(0).setLifecycleStatus(status.name())
+                .setBusinessStatus(command.businessStatus()).setLifecycleStatus(status.name())
                 .setLifecycleVersion(command.lifecycleVersion())
                 .setOperationNo(blank(command.operationNo()))
                 .setSourceEventId(command.sourceEventId().trim())
-                .setRowVersion(0L).setUpdatedAt(command.requestedAt());
+                .setRowVersion(0L).setUpdatedAt(command.updatedAt());
+    }
+
+    private static ApplyWalletLifecycleProjectionCommand toProjectionCommand(
+            WalletLifecycleCommand command) {
+        return new ApplyWalletLifecycleProjectionCommand(
+                command.customerId(), 0, command.targetLifecycleStatus(), command.lifecycleVersion(),
+                command.operationNo(), command.sourceEventId(), command.requestedAt());
     }
 
     private static void replayOrConflict(WalletLifecycleEventInbox event, String hash) {

@@ -15,6 +15,7 @@ import com.sx.passenger.lifecycle.application.LifecycleRequestHasher;
 import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshot;
 import com.sx.passenger.lifecycle.application.LifecycleRuntimeSnapshotFactory;
 import com.sx.passenger.lifecycle.application.LifecycleSnapshotStore;
+import com.sx.passenger.lifecycle.application.LifecycleStatusOutboxAppender;
 import com.sx.passenger.lifecycle.application.UuidLifecycleIdentifierGenerator;
 import com.sx.passenger.lifecycle.domain.LifecycleActorType;
 import com.sx.passenger.lifecycle.domain.LifecycleOperationType;
@@ -31,6 +32,7 @@ import com.sx.passenger.lifecycle.persistence.mapper.LifecycleEventMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import com.sx.passenger.lifecycle.plan.LifecyclePlanRegistry;
 import com.sx.passenger.model.Customer;
 import org.springframework.dao.DuplicateKeyException;
@@ -42,7 +44,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.lang.reflect.Method;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -73,6 +74,7 @@ public class CustomerPhoneChangeService {
     private final PhoneBindingValueFactory bindingValues;
     private final LifecycleRequestHasher hasher;
     private final LifecycleRuntimeSnapshotFactory snapshotFactory;
+    private final LifecycleStatusOutboxAppender statusOutboxes;
     private final LifecycleIdentifierGenerator identifiers = new UuidLifecycleIdentifierGenerator();
     private final LifecycleJson json = new LifecycleJson();
     private final LifecycleOperationStateMachine operationStateMachine = new LifecycleOperationStateMachine();
@@ -92,6 +94,7 @@ public class CustomerPhoneChangeService {
                                       PhoneBindingValueFactory bindingValues,
                                       LifecycleRequestHasher hasher,
                                       LifecyclePlanRegistry plans,
+                                      LifecycleStatusOutboxAppender statusOutboxes,
                                       PlatformTransactionManager transactionManager,
                                       PassengerAuthMetrics metrics) {
         this.otp = otp;
@@ -106,6 +109,7 @@ public class CustomerPhoneChangeService {
         this.hasher = hasher;
         this.snapshotFactory = new LifecycleRuntimeSnapshotFactory(
                 plans, new UuidLifecycleIdentifierGenerator(), new LifecycleJson());
+        this.statusOutboxes = statusOutboxes;
         this.withoutTransaction = new TransactionTemplate(transactionManager);
         this.withoutTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
         this.databaseTransaction = new TransactionTemplate(transactionManager);
@@ -153,7 +157,7 @@ public class CustomerPhoneChangeService {
                 command.customerId(), LifecycleOperationType.PHONE_CHANGE, command.idempotencyKey(), requestHash,
                 command.expectedLifecycleVersion(), LifecycleActorType.CUSTOMER, command.actorId(), command.traceId(),
                 command.sanitizedRequestContextJson(), command.requestedAt()));
-        LocalDateTime now = LocalDateTime.ofInstant(command.requestedAt(), ZoneOffset.UTC);
+        LocalDateTime now = PassengerPersistenceTime.fromInstant(command.requestedAt());
         LifecycleOperationEntity operation = snapshot.operation();
 
         int customerUpdated;
@@ -179,7 +183,7 @@ public class CustomerPhoneChangeService {
 
         if (bindings.replaceActive(command.customerId(), operation.getOperationNo(), now) != 1) {
             metrics.lifecycleCasConflict(LifecycleOperationType.PHONE_CHANGE);
-            throw new LifecycleOperationConflictException("Active phone binding changed concurrently");
+            throw new IllegalStateException("Active phone binding history is missing or inconsistent");
         }
         Long maxVersion = bindings.selectMaxBindingVersion(command.customerId());
         long nextVersion = maxVersion == null ? 1L : maxVersion + 1L;
@@ -231,6 +235,9 @@ public class CustomerPhoneChangeService {
         String completedEventId = insertTransitionEvent(operation, "EXECUTING", "COMPLETED",
                 "PHONE_CHANGE_COMPLETED", command, now);
         insertCompletedOutbox(operation, changed, completedEventId, command, now);
+        statusOutboxes.append(operation.getId(), operation.getOperationNo(), null, changed.getId(),
+                changed.getLifecycleVersion(), changed.getLifecycleStatus(), completedEventId,
+                command.traceId(), now);
 
         return new ChangeCustomerPhoneResult(operation.getId(), operation.getOperationNo(), command.customerId(),
                 changed.getLifecycleVersion(), changed.getAuthEpoch(), true);

@@ -110,6 +110,18 @@ class AccountLifecycleCalculateParticipantIntegrationTest {
                 .extracting("resourceNo").isEqualTo("ORDER-LOCKED-1");
         assertThat(participant.findResult("op-locked", "CALCULATE_FINAL_CHECK"))
                 .isEqualTo(result);
+
+        locked.setStatus("INVALID").setUpdatedAt(LocalDateTime.now());
+        userCoupons.updateById(locked);
+        var refreshed = participant.fence(new CalculateLifecycleCommand(
+                "op-locked", "CALCULATE_FINAL_CHECK", CUSTOMER_ID, 1,
+                "CANCELLING", "op-locked-CALCULATE_FINAL_CHECK-recheck",
+                LocalDateTime.now()));
+
+        assertThat(refreshed.decision()).isEqualTo(CalculateLifecycleDecision.PASS);
+        assertThat(refreshed.blockers()).isEmpty();
+        assertThat(participantInboxes.selectCount(null)).isEqualTo(1L);
+        assertThat(lifecycleProjections.selectById(CUSTOMER_ID).getLifecycleVersion()).isEqualTo(1L);
     }
 
     private static UserCoupon unusedCoupon(long templateId) {

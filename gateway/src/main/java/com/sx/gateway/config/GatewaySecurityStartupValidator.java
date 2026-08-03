@@ -18,10 +18,14 @@ public class GatewaySecurityStartupValidator implements InitializingBean {
     private static final Profiles RELAXED_PROFILES = Profiles.of("local", "dev", "test");
 
     private final GatewayJwtProperties properties;
+    private final PassengerWsPrecheckProperties wsPrecheckProperties;
     private final Environment environment;
 
-    public GatewaySecurityStartupValidator(GatewayJwtProperties properties, Environment environment) {
+    public GatewaySecurityStartupValidator(GatewayJwtProperties properties,
+                                           PassengerWsPrecheckProperties wsPrecheckProperties,
+                                           Environment environment) {
         this.properties = properties;
+        this.wsPrecheckProperties = wsPrecheckProperties;
         this.environment = environment;
     }
 
@@ -30,10 +34,11 @@ public class GatewaySecurityStartupValidator implements InitializingBean {
         if (environment.acceptsProfiles(RELAXED_PROFILES)) {
             return;
         }
-        validateStrict(properties);
+        validateStrict(properties, wsPrecheckProperties);
     }
 
-    static void validateStrict(GatewayJwtProperties properties) {
+    static void validateStrict(GatewayJwtProperties properties,
+                               PassengerWsPrecheckProperties wsPrecheckProperties) {
         List<String> errors = new ArrayList<>();
         if (!properties.isRequireAuth()) {
             errors.add("GATEWAY_JWT_REQUIRE_AUTH must be true");
@@ -60,6 +65,17 @@ public class GatewaySecurityStartupValidator implements InitializingBean {
         validateAudience("gateway.jwt.audience-admin", properties.getAudienceAdmin(), errors);
         validateAudience("gateway.jwt.audience-app", properties.getAudienceApp(), errors);
         validateAudience("gateway.jwt.audience-driver", properties.getAudienceDriver(), errors);
+        if (!wsPrecheckProperties.isEnabled()) {
+            errors.add("gateway.passenger-ws-precheck.enabled must be true");
+        }
+        validateSecret("PASSENGER_INTERNAL_TOKEN", wsPrecheckProperties.getInternalToken(), errors);
+        if (wsPrecheckProperties.getServiceBaseUrl() == null
+                || !wsPrecheckProperties.getServiceBaseUrl().startsWith("http://")) {
+            errors.add("gateway.passenger-ws-precheck.service-base-url must use http:// service discovery URL");
+        }
+        if (wsPrecheckProperties.getTimeoutMillis() < 100) {
+            errors.add("gateway.passenger-ws-precheck.timeout-millis must be at least 100");
+        }
 
         if (!errors.isEmpty()) {
             throw new IllegalStateException("Production security validation failed: " + String.join("; ", errors));

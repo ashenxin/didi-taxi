@@ -44,6 +44,10 @@ public class CalculateLifecycleKafkaConsumer {
             groupId = "${spring.kafka.consumer.group-id}")
     public void consumeStatusEvent(String payload) {
         LifecycleStatusEvent event = readStatusEvent(payload);
+        if (event.isInitialActive()) {
+            projections.seedActive(event.customerId(), event.eventId(), event.updatedAt());
+            return;
+        }
         projections.apply(new ApplyCalculateLifecycleProjectionCommand(
                 event.customerId(), 0, event.lifecycleStatus(), event.lifecycleVersion(),
                 event.operationNo(), event.eventId(), event.updatedAt()));
@@ -90,5 +94,9 @@ public class CalculateLifecycleKafkaConsumer {
 
     private record LifecycleStatusEvent(String eventId, String operationNo, long customerId,
                                         long lifecycleVersion, String lifecycleStatus,
-                                        LocalDateTime updatedAt) {}
+                                        LocalDateTime updatedAt) {
+        private boolean isInitialActive() {
+            return operationNo == null && lifecycleVersion == 0 && "ACTIVE".equals(lifecycleStatus);
+        }
+    }
 }

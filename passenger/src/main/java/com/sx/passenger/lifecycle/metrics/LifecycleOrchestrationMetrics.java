@@ -9,6 +9,7 @@ import com.sx.passenger.lifecycle.job.LifecycleJobProperties;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOperationMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleOutboxMapper;
 import com.sx.passenger.lifecycle.persistence.mapper.LifecycleStepMapper;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 
@@ -61,7 +62,7 @@ public class LifecycleOrchestrationMetrics {
 
     /** 从数据库重新计算全部状态型 Gauge；由诊断任务定期调用。 */
     public void refresh() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = PassengerPersistenceTime.now();
         dueOperations.set(operations.selectCount(new LambdaQueryWrapper<LifecycleOperationEntity>()
                 .in(LifecycleOperationEntity::getStatus,
                         "FENCED", "VALIDATING", "EXECUTING", "RETRY_PENDING")

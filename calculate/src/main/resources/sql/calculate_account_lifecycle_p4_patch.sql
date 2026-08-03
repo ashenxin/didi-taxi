@@ -51,4 +51,4 @@ CREATE TABLE IF NOT EXISTS `calculate_lifecycle_participant_inbox` (
     KEY `idx_calculate_lifecycle_inbox_customer` (`customer_id`, `created_at`),
     KEY `idx_calculate_lifecycle_inbox_status` (`status`, `updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
-  COMMENT='Calculate 生命周期参与者命令幂等与永久结果';
+  COMMENT='Calculate 生命周期参与者幂等结果；BLOCKED终检允许在同一栅栏上刷新';

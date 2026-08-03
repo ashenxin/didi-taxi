@@ -64,13 +64,18 @@ public class CouponService {
     public CouponPageVO page(Long passengerId, String status, int pageNo, int pageSize) {
         int safePageNo = Math.max(pageNo, 1);
         int safePageSize = Math.min(Math.max(pageSize, 1), 50);
+        String safeStatus = status == null || status.isBlank()
+                ? UNUSED : status.trim().toUpperCase();
         LambdaQueryWrapper<UserCoupon> countWrapper = Wrappers.<UserCoupon>lambdaQuery()
-                .eq(UserCoupon::getPassengerId, passengerId);
+                .eq(UserCoupon::getPassengerId, passengerId)
+                .eq(UserCoupon::getStatus, safeStatus);
         LambdaQueryWrapper<UserCoupon> wrapper = Wrappers.<UserCoupon>lambdaQuery()
-                .eq(UserCoupon::getPassengerId, passengerId);
-        if (status != null && !status.isBlank()) {
-            countWrapper.eq(UserCoupon::getStatus, status);
-            wrapper.eq(UserCoupon::getStatus, status);
+                .eq(UserCoupon::getPassengerId, passengerId)
+                .eq(UserCoupon::getStatus, safeStatus);
+        if (UNUSED.equals(safeStatus)) {
+            LocalDateTime now = LocalDateTime.now();
+            countWrapper.gt(UserCoupon::getValidEndAt, now);
+            wrapper.gt(UserCoupon::getValidEndAt, now);
         }
         long offset = (long) (safePageNo - 1) * safePageSize;
         wrapper.orderByAsc(UserCoupon::getValidEndAt)

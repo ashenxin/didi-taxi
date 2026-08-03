@@ -47,7 +47,7 @@ public class HttpLifecycleParticipantGateway implements LifecycleParticipantGate
         ResponseEnvelope<LifecycleParticipantResult> response = client.post()
                 .uri(endpoint.executeUrl())
                 .header("X-Internal-Token", token)
-                .body(command)
+                .body(LifecycleParticipantHttpCommand.from(command))
                 .retrieve()
                 .body(TYPE);
         return requireSuccess(response);

@@ -2,6 +2,7 @@ package com.sx.wallet.lifecycle.messaging;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sx.wallet.lifecycle.model.ApplyWalletLifecycleProjectionCommand;
 import com.sx.wallet.lifecycle.model.WalletLifecycleParticipantResult;
 import com.sx.wallet.lifecycle.service.AccountLifecycleWalletParticipantService;
 import com.sx.wallet.lifecycle.service.WalletLifecycleProjectionService;
@@ -43,9 +44,13 @@ public class WalletLifecycleKafkaConsumer {
             groupId = "${spring.kafka.consumer.group-id}")
     public void consumeStatusEvent(String payload) {
         LifecycleStatusEvent event = readStatusEvent(payload);
-        projections.apply(new com.sx.wallet.lifecycle.model.WalletLifecycleCommand(
-                event.operationNo(), "WALLET_PROJECT_CANCELLED", event.customerId(),
-                event.lifecycleVersion(), event.lifecycleStatus(), event.eventId(), event.updatedAt()));
+        if (event.isInitialActive()) {
+            projections.seedActive(event.customerId(), event.eventId(), event.updatedAt());
+            return;
+        }
+        projections.apply(new ApplyWalletLifecycleProjectionCommand(
+                event.customerId(), 0, event.lifecycleStatus(), event.lifecycleVersion(),
+                event.operationNo(), event.eventId(), event.updatedAt()));
     }
 
     @KafkaListener(topics = "${wallet.lifecycle.messaging.command-topic}")
@@ -89,5 +94,9 @@ public class WalletLifecycleKafkaConsumer {
 
     private record LifecycleStatusEvent(String eventId, String operationNo, long customerId,
                                         long lifecycleVersion, String lifecycleStatus,
-                                        LocalDateTime updatedAt) {}
+                                        LocalDateTime updatedAt) {
+        private boolean isInitialActive() {
+            return operationNo == null && lifecycleVersion == 0 && "ACTIVE".equals(lifecycleStatus);
+        }
+    }
 }

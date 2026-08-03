@@ -160,7 +160,6 @@
 | `POST` | `/driver/api/v1/orders/{orderNo}/arrive` | 到达上车点；必须携带 `Idempotency-Key` |
 | `POST` | `/driver/api/v1/orders/{orderNo}/start` | 开始行程；必须携带 `Idempotency-Key` |
 | `POST` | `/driver/api/v1/orders/{orderNo}/finish` | 完单；必须携带 `Idempotency-Key` |
-| `POST` | `/driver/api/v1/orders/{orderNo}/finish` | 完成行程 |
 
 ### 后台常用接口
 
@@ -207,7 +206,8 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 
 按模块功能不同，可能需要：
 
-- MySQL：各服务的业务库，配置在对应 `application.yml`。
+- Nacos：除 `xxl-job-admin` 外，业务服务的 `local` 运行配置、服务注册和负载均衡已统一接入 Nacos；启动前参考 `docs/runbooks/capacity-service-Nacos本地配置运行手册.md`。
+- MySQL：各服务使用独立业务库；`local` 连接参数位于对应 Nacos Data ID，不再以模块 `application.yml` 为完整运行配置。
 - MySQL 业务库目前包括 `capacity`、`calculate`、`order`、`passenger`、`wallet`、`xxl_job` 等；钱包二期 SQL 见 `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TECH.md`。
 - Redis：乘客/司机 token version、司机 GEO 池、WS/调度辅助键。
 - Kafka：order outbox / 派单异步化相关；乘客下单主链路已切换为创建订单后由 Outbox + Kafka + capacity consumer 异步派单。
@@ -234,6 +234,9 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 
 ## 开发约定
 
+- 不默认认同用户提出的问题、判断、方案或结论。先根据代码、数据库、日志、测试和既有设计核验前提，再给出结论。
+- 当用户的说法与事实、既定业务边界、安全要求或一致性约束冲突时，必须明确指出并反驳，说明证据、风险和正确做法；不得为了迎合而作全面支持或模糊附和。
+- 区分“用户选择”与“事实判断”：对产品偏好和已授权范围予以尊重，但技术正确性、数据一致性、资金安全和上线验收结论必须以证据为准。
 - 修改接口前先查对应 API 文档，避免文档与实现分叉。
 - 新增或修改状态推进时，优先在 `order` 增加权威逻辑，BFF 只编排调用。
 - 涉及订单状态并发的写操作，必须使用状态条件更新或等价 CAS。
@@ -251,6 +254,7 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 
 - `README.md`
 - `TODO与差距总览.md`
+- `docs/sql/README.md`（数据库基线、迁移、回填、诊断与归档状态）
 - 各专项 `*_TEST.md`。
 
 ### 乘客/司机闭环

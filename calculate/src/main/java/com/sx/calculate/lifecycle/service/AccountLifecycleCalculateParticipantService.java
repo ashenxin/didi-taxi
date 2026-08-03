@@ -121,8 +121,8 @@ public class AccountLifecycleCalculateParticipantService {
         String operationNo = command.operationNo().trim();
         String stepCode = command.stepCode().trim();
         String requestHash = hasher.hashCommand(command);
-        CalculateLifecycleParticipantInbox prior = inboxes.find(operationNo, stepCode);
-        if (prior != null) return replayOrConflict(prior, requestHash);
+        CalculateLifecycleParticipantInbox prior = inboxes.findForUpdate(operationNo, stepCode);
+        if (prior != null) return replayOrRefreshBlocked(prior, requestHash, command);
 
         LocalDateTime now = LocalDateTime.now();
         CalculateLifecycleParticipantInbox inbox = new CalculateLifecycleParticipantInbox()
@@ -229,6 +229,38 @@ public class AccountLifecycleCalculateParticipantService {
             throw new IllegalStateException("Calculate生命周期参与者结果尚未完成");
         }
         return fromInbox(prior);
+    }
+
+    private CalculateLifecycleParticipantResult replayOrRefreshBlocked(
+            CalculateLifecycleParticipantInbox prior, String requestHash,
+            CalculateLifecycleCommand command) {
+        if (Objects.equals(prior.getRequestHash(), requestHash)) {
+            return replayOrConflict(prior, requestHash);
+        }
+        if (!FINAL_CHECK.equals(command.stepCode().trim())
+                || !COMPLETED.equals(prior.getStatus())
+                || !CalculateLifecycleDecision.BLOCKED.name().equals(prior.getDecision())
+                || !Objects.equals(prior.getCustomerId(), command.customerId())
+                || !Objects.equals(prior.getLifecycleVersion(), command.lifecycleVersion())) {
+            throw new CalculateLifecycleCommandConflictException(
+                    "同一operationNo和stepCode不能用于不同Calculate生命周期命令");
+        }
+        projections.requireCurrentTarget(command.toProjectionCommand());
+        CalculateLifecycleParticipantResult refreshed = lockedCouponDecision(
+                coupons.inspectLockedCouponsForUpdate(command.customerId()));
+        prior.setRequestHash(requestHash)
+                .setDecision(refreshed.decision().name())
+                .setBlockerSnapshot(write(refreshed.blockers()))
+                .setResultSnapshot(write(refreshed.result()))
+                .setUpdatedAt(LocalDateTime.now());
+        if (inboxes.updateById(prior) != 1) {
+            throw new IllegalStateException("Calculate生命周期参与者重检结果写入失败");
+        }
+        metrics.participantCommand(command.stepCode().trim(),
+                refreshed.decision() == CalculateLifecycleDecision.BLOCKED
+                        ? CalculateLifecycleMetrics.ParticipantDecision.BLOCKED
+                        : CalculateLifecycleMetrics.ParticipantDecision.PASS);
+        return refreshed;
     }
 
     private CalculateLifecycleParticipantResult fromInbox(

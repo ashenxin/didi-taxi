@@ -67,16 +67,19 @@ public final class LifecycleOperationStateMachine {
                 EnumSet.of(LifecycleOperationStatus.VALIDATING, LifecycleOperationStatus.ABORTED));
         cancellation.put(LifecycleOperationStatus.VALIDATING,
                 EnumSet.of(LifecycleOperationStatus.BLOCKED, LifecycleOperationStatus.EXECUTING,
-                        LifecycleOperationStatus.RETRY_PENDING, LifecycleOperationStatus.MANUAL_REVIEW));
+                        LifecycleOperationStatus.RETRY_PENDING, LifecycleOperationStatus.MANUAL_REVIEW,
+                        LifecycleOperationStatus.ABORTED));
         cancellation.put(LifecycleOperationStatus.BLOCKED,
                 EnumSet.of(LifecycleOperationStatus.VALIDATING, LifecycleOperationStatus.ABORTED));
         cancellation.put(LifecycleOperationStatus.EXECUTING,
                 EnumSet.of(LifecycleOperationStatus.RETRY_PENDING, LifecycleOperationStatus.MANUAL_REVIEW,
-                        LifecycleOperationStatus.COMPLETED));
+                        LifecycleOperationStatus.COMPLETED, LifecycleOperationStatus.ABORTED));
         cancellation.put(LifecycleOperationStatus.RETRY_PENDING,
-                EnumSet.of(LifecycleOperationStatus.EXECUTING, LifecycleOperationStatus.MANUAL_REVIEW));
+                EnumSet.of(LifecycleOperationStatus.EXECUTING, LifecycleOperationStatus.MANUAL_REVIEW,
+                        LifecycleOperationStatus.ABORTED));
         cancellation.put(LifecycleOperationStatus.MANUAL_REVIEW,
-                EnumSet.of(LifecycleOperationStatus.EXECUTING, LifecycleOperationStatus.COMPLETED));
+                EnumSet.of(LifecycleOperationStatus.EXECUTING, LifecycleOperationStatus.COMPLETED,
+                        LifecycleOperationStatus.ABORTED));
         byType.put(LifecycleOperationType.ACCOUNT_CANCEL, immutable(cancellation));
 
         // 换号不需要注销式栅栏和阻断阶段，受理后直接执行提交。

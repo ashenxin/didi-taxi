@@ -171,6 +171,17 @@ class AccountCancellationFenceServiceIntegrationTest {
     }
 
     @Test
+    void staleLifecycleVersionConflictsBeforeOtpConsumption() {
+        jdbc.update("UPDATE customer SET lifecycle_version = 1 WHERE id = ?", CUSTOMER_ID);
+
+        assertThatThrownBy(() -> service.fence(command("idem-stale", "111111", "{}")))
+                .isInstanceOf(LifecycleOperationConflictException.class)
+                .hasMessageContaining("version changed");
+
+        verifyNoInteractions(otp);
+    }
+
+    @Test
     void sameIdempotencyAndHashReturnsExistingWithoutConsumingOtp() {
         AccountCancellationFenceResult first = service.fence(command("idem-replay", "111111", "{\"source\":\"app\"}"));
         AccountCancellationFenceResult replay = service.fence(command("idem-replay", "expired", "{\"source\":\"app\"}"));

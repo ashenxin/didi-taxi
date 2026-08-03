@@ -110,7 +110,8 @@ class AccountLifecycleOrderParticipantIntegrationTest {
     @Test
     void fenceAdvancesProjectionEvenWhenActiveOrderBlocksCancellation() {
         seedActive(12003L);
-        orderMapper.insert(order(12003L, "ACTIVE-12003", 2));
+        TripOrder active = order(12003L, "ACTIVE-12003", 2);
+        orderMapper.insert(active);
 
         var result = participant.fence(command("op-active", 12003L, 3L, "event-active"));
 
@@ -118,6 +119,16 @@ class AccountLifecycleOrderParticipantIntegrationTest {
         assertThat(result.blockers()).containsExactly(new OrderLifecycleBlocker(
                 "ACTIVE_ORDER", "ORDER", "ACTIVE-12003", "CANCEL_ORDER"));
         assertThat(projectionMapper.selectById(12003L).getLifecycleStatus()).isEqualTo("CANCELLING");
+        assertThat(projectionMapper.selectById(12003L).getLifecycleVersion()).isEqualTo(3L);
+
+        active.setStatus(6).setBlocksNewOrder(null).setUpdatedAt(LocalDateTime.now());
+        orderMapper.updateById(active);
+        var refreshed = participant.fence(
+                command("op-active", 12003L, 3L, "event-active-recheck"));
+
+        assertThat(refreshed.decision()).isEqualTo(OrderLifecycleDecision.PASS);
+        assertThat(refreshed.blockers()).isEmpty();
+        assertThat(inboxMapper.selectCount(null)).isEqualTo(1);
         assertThat(projectionMapper.selectById(12003L).getLifecycleVersion()).isEqualTo(3L);
     }
 

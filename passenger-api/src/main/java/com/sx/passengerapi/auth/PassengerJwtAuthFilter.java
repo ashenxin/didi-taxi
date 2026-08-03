@@ -25,6 +25,7 @@ import org.springframework.web.util.pattern.PathPattern;
 import org.springframework.web.util.pattern.PathPatternParser;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;
 import java.util.List;
@@ -190,6 +191,7 @@ public class PassengerJwtAuthFilter extends OncePerRequestFilter {
 
     private void writeJsonError(HttpServletResponse response, int httpStatus, String msg) throws IOException {
         response.setStatus(httpStatus);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getWriter().write(objectMapper.writeValueAsString(Map.of("code", httpStatus, "msg", msg)));
     }

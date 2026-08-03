@@ -11,6 +11,9 @@ import com.sx.passenger.auth.otp.OtpPurpose;
 import com.sx.passenger.auth.otp.OtpSubject;
 import com.sx.passenger.auth.session.PassengerAuthEpochService;
 import com.sx.passenger.dao.CustomerEntityMapper;
+import com.sx.passenger.lifecycle.application.LifecycleStatusOutboxAppender;
+import com.sx.passenger.lifecycle.application.phone.PhoneBindingValueFactory;
+import com.sx.passenger.lifecycle.persistence.mapper.CustomerPhoneBindingHistoryMapper;
 import com.sx.passenger.model.Customer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.concurrent.TimeUnit;
 
@@ -59,18 +63,27 @@ public class AppCustomerAuthService {
     private final AppCustomerAuthProperties smsProps;
     private final AtomicOtpService otpService;
     private final PassengerAuthEpochService authEpochService;
+    private final LifecycleStatusOutboxAppender lifecycleOutboxes;
+    private final CustomerPhoneBindingHistoryMapper phoneBindings;
+    private final PhoneBindingValueFactory phoneBindingValues;
 
     public AppCustomerAuthService(
             CustomerEntityMapper customerMapper,
             StringRedisTemplate redis,
             AppCustomerAuthProperties smsProps,
             AtomicOtpService otpService,
-            PassengerAuthEpochService authEpochService) {
+            PassengerAuthEpochService authEpochService,
+            LifecycleStatusOutboxAppender lifecycleOutboxes,
+            CustomerPhoneBindingHistoryMapper phoneBindings,
+            PhoneBindingValueFactory phoneBindingValues) {
         this.customerMapper = customerMapper;
         this.redis = redis;
         this.smsProps = smsProps;
         this.otpService = otpService;
         this.authEpochService = authEpochService;
+        this.lifecycleOutboxes = lifecycleOutboxes;
+        this.phoneBindings = phoneBindings;
+        this.phoneBindingValues = phoneBindingValues;
     }
 
     public ResponseVo<AppAuthCustomerBrief> loginPassword(AppLoginPasswordRequest req) {
@@ -152,13 +165,21 @@ public class AppCustomerAuthService {
             c.setLifecycleVersion(0L);
             c.setAuthEpoch(0L);
             c.setIsDeleted(0);
+            boolean registered = false;
             try {
                 customerMapper.insert(c);
+                registered = true;
             } catch (DuplicateKeyException e) {
                 c = findActiveByPhone(req.getPhone());
                 if (c == null) {
                     return ResultUtil.error(500, "注册失败，请重试");
                 }
+            }
+            if (registered) {
+                LocalDateTime registeredAt = LocalDateTime.now();
+                phoneBindings.insert(phoneBindingValues.initialRegistration(
+                        c.getId(), c.getPhone(), registeredAt));
+                lifecycleOutboxes.appendInitialActive(c.getId(), registeredAt);
             }
         }
         if (c.getStatus() != null && c.getStatus() != 0) {

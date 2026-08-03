@@ -1,6 +1,8 @@
 package com.sx.passenger.lifecycle.persistence.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
@@ -36,9 +38,12 @@ public class LifecycleOperationEntity {
     private Integer activeBlockerCount;
     private Long rowVersion;
     /** RETRY_PENDING 下一次可被恢复任务唤醒的时间。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private LocalDateTime nextWakeupAt;
     /** 最近失败摘要。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String lastErrorCode;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String lastErrorMessage;
     /** 创建请求的脱敏上下文。 */
     private String requestContext;

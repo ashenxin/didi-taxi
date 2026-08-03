@@ -14,6 +14,7 @@ import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -166,6 +167,14 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ResponseVo<?>> missingServletRequestParameterExceptionHandler(MissingServletRequestParameterException e, HttpServletRequest request) {
         String errMsg = String.format("参数[%s]不能为空", e.getParameterName());
         log.warn("缺少请求参数 path={} msg={}", request.getRequestURI(), errMsg);
+        return entity(ResultUtil.requestError(errMsg));
+    }
+
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ResponseVo<?>> missingRequestHeaderExceptionHandler(
+            MissingRequestHeaderException e, HttpServletRequest request) {
+        String errMsg = String.format("请求头[%s]不能为空", e.getHeaderName());
+        log.warn("缺少请求头 path={} msg={}", request.getRequestURI(), errMsg);
         return entity(ResultUtil.requestError(errMsg));
     }
 
