@@ -48,6 +48,8 @@ Capacity 当前没有增量 patch；不要为了统一形式创建空迁移文�
 | `order_account_lifecycle_p3_patch.sql` | ACTIVE | 存量库增加生命周期投影和参与者表 |
 | `order_account_lifecycle_p3_backfill.sql` | BACKFILL | 从 Passenger 权威数据回填 Order 投影 |
 | `order_trip_settlement_schema_sync_patch.sql` | ACTIVE | 补齐冻结计价、结算恢复字段及索引 |
+| `order_driver_trip_patch.sql` | ACTIVE | 新增逐次接单司机服务记录；所有目标环境建表并核验前保留 |
+| `order_driver_trip_backfill.sql` | BACKFILL | 从接单及后续状态事件重建可证明的历史服务片段；需暂停订单写流量后执行 |
 | `order_settlement_payment_patch.sql` | SUPERSEDED | 已被综合同步补丁覆盖，只保留历史追溯 |
 | `order_event_reason_desc_zh_patch.sql` | ARCHIVE_CANDIDATE | 一次性历史文案修正；确认所有环境执行后归档 |
 

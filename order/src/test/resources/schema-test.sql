@@ -179,3 +179,42 @@ CREATE TABLE IF NOT EXISTS trip_order_settlement (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_trip_order_settlement_order_no ON trip_order_settlement (order_no);
+
+-- 司机行程记录
+CREATE TABLE IF NOT EXISTS driver_trip_record (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '司机服务记录ID；前端作为tripId字符串使用',
+    order_id BIGINT NOT NULL COMMENT '订单主键；关联trip_order.id',
+    order_no VARCHAR(64) NOT NULL COMMENT '乘客订单号；同一订单可对应多名司机或多次服务',
+    source_key VARCHAR(128) NOT NULL COMMENT '创建来源唯一键；event:接单事件ID或legacy存量补录标识',
+    driver_id BIGINT NOT NULL COMMENT '本次成功接单司机ID；改派后保留原值',
+    car_id BIGINT NULL COMMENT '本次服务车辆ID快照；历史不可证明时为空',
+    company_id BIGINT NULL COMMENT '本次承运公司或车队ID快照；不跟随司机后续换队',
+    city_code VARCHAR(32) NULL COMMENT '服务城市行政区划编码',
+    product_code VARCHAR(64) NULL COMMENT '服务产品编码，如ECONOMY',
+    origin_address VARCHAR(255) NULL COMMENT '本次订单上车点地址快照',
+    dest_address VARCHAR(255) NULL COMMENT '本次订单目的地地址快照',
+    status INT NOT NULL COMMENT '司机服务状态：2已接单、3已到达、4行程中、5已完成、6已取消',
+    active_flag TINYINT NULL COMMENT '活动服务为1，完成或取消为NULL；配合唯一约束限制同单一条活动服务',
+    estimated_amount DECIMAL(10,2) NULL COMMENT '接单时订单预估车费，单位元；不得作为最终车费参与运营金额汇总',
+    distance_meters BIGINT NULL COMMENT '下单冻结路线里程，单位米；当前为Mock数据，未知为NULL',
+    distance_source VARCHAR(32) NULL COMMENT '里程来源，如LOCAL_MOCK_ROUTE；未知为NULL',
+    ordered_at TIMESTAMP NULL COMMENT '乘客下单时间，按Asia/Shanghai本地时间保存',
+    accepted_at TIMESTAMP NOT NULL COMMENT '本次司机成功接单时间；行程列表默认排序与日期筛选依据',
+    arrived_at TIMESTAMP NULL COMMENT '本次司机到达上车点时间；未发生或历史缺失为NULL',
+    started_at TIMESTAMP NULL COMMENT '本次服务开始时间；未发生或历史缺失为NULL',
+    finished_at TIMESTAMP NULL COMMENT '本次完单时间；今日完成数及金额按此归属自然日',
+    cancelled_at TIMESTAMP NULL COMMENT '本次司机服务取消时间；不是改派后订单最终取消时间',
+    service_duration_seconds BIGINT NULL COMMENT '开始至完单的非负时长，单位秒；不等于Mock计费时长',
+    cancel_by INT NULL COMMENT '本次服务取消方：1乘客、2司机含登出释单、3系统；未知为NULL',
+    cancel_reason VARCHAR(255) NULL COMMENT '本次取消原因码或描述；不读取改派后其他司机的原因',
+    updated_at TIMESTAMP NOT NULL COMMENT '记录最后更新时间，按Asia/Shanghai本地时间保存',
+    CONSTRAINT uk_driver_trip_source UNIQUE (source_key),
+    CONSTRAINT uk_driver_trip_active UNIQUE (order_no, active_flag),
+    CONSTRAINT fk_driver_trip_order FOREIGN KEY (order_id) REFERENCES trip_order(id) ON DELETE CASCADE
+);
+-- 列表按司机+接单时间+ID稳定查询。
+CREATE INDEX IF NOT EXISTS idx_driver_trip_accepted ON driver_trip_record(driver_id, accepted_at, id);
+-- 完成统计索引。
+CREATE INDEX IF NOT EXISTS idx_driver_trip_finished ON driver_trip_record(driver_id, status, finished_at, id);
+-- 取消统计索引。
+CREATE INDEX IF NOT EXISTS idx_driver_trip_cancelled ON driver_trip_record(driver_id, status, cancelled_at, id);

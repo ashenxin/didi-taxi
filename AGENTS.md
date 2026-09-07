@@ -2,6 +2,12 @@
 
 本文档给后续协作者和 AI coding agent 快速建立项目上下文。它不是替代详细 PRD/API/TECH 文档，而是项目地图：先读这里，再按链接进入专项文档。
 
+## 修改授权约定
+
+- 探索代码、读取配置、查询日志和其他只读排查可以直接进行。
+- 新增、编辑或删除代码、配置、SQL、测试及文档前，必须先向用户说明拟修改范围并获得明确确认；分析或排查请求本身不视为修改授权。
+- 用户明确回复“改”“执行”“确认”等内容后，只能在当次确认的范围内写入，不得扩展到尚未讨论的功能。
+
 ## 项目定位
 
 `didi-taxi` 是一个仿滴滴出行后端项目，采用 Java 21、Spring Boot 3.3.5、Spring Cloud 2023.0.5、Maven 多模块组织。当前核心目标是支撑乘客下单、订单派发、司机听单接单、后台管理、计价、钱包支付、地图路线、网关鉴权与 WebSocket 通知等能力。
@@ -82,8 +88,9 @@
 - `passenger` 是乘客生命周期状态、版本和 `auth_epoch` 的权威来源；手机号只是可变登录凭据，换号不改变 `customer.id`。
 - P1～P7 代码链路已经贯通，新 Lifecycle API 与乘客 H5 已完成适配；旧 settings
   入口默认灰度关闭、比例为 0，Legacy Adapter 仅作灰度回退。
-- “代码完成”不代表生产切流完成。目标环境 patch/backfill 覆盖率、真实
-  MySQL/Kafka 故障演练和逐级灰度仍须按运行手册验收。
+- 生命周期已于 2026-08-03 按约定范围完成生产验收，2026-09-06 用户再次确认。
+  本次范围不含旧入口灰度观察与双 MySQL 并发专项；继续按运行手册监控和推进
+  Legacy Adapter 下线，不再作为司机端开发的前置验收待办。
 - 当前阶段状态统一从 `docs/plans/乘客账号生命周期P1-P7执行计划索引.md` 进入。
 
 ### 钱包、优惠券与结算
@@ -160,6 +167,9 @@
 | `POST` | `/driver/api/v1/orders/{orderNo}/arrive` | 到达上车点；必须携带 `Idempotency-Key` |
 | `POST` | `/driver/api/v1/orders/{orderNo}/start` | 开始行程；必须携带 `Idempotency-Key` |
 | `POST` | `/driver/api/v1/orders/{orderNo}/finish` | 完单；必须携带 `Idempotency-Key` |
+| `GET` | `/driver/api/v1/profile/orders` | 当前司机行程记录分页；身份只取可信 `X-User-Id` |
+| `GET` | `/driver/api/v1/profile/orders/{tripId}` | 当前司机某次接单服务详情；越权与不存在统一 404 |
+| `GET` | `/driver/api/v1/dashboard/today` | 上海自然日运营看板；金额是优惠前最终订单金额，不代表司机净收入 |
 
 ### 后台常用接口
 
@@ -234,6 +244,8 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 
 ## 开发约定
 
+- 后端服务日常由用户通过 IDEA 的运行配置启动和自动重启。完成代码修改、编译或测试后，不得自行停止、重启或拉起任何后端进程。
+- 只有用户明确要求“启动”“重启”或“停止”后端服务时，才允许操作相应进程；排查服务状态默认只做端口、健康检查和日志等只读检查。
 - 不默认认同用户提出的问题、判断、方案或结论。先根据代码、数据库、日志、测试和既有设计核验前提，再给出结论。
 - 当用户的说法与事实、既定业务边界、安全要求或一致性约束冲突时，必须明确指出并反驳，说明证据、风险和正确做法；不得为了迎合而作全面支持或模糊附和。
 - 区分“用户选择”与“事实判断”：对产品偏好和已授权范围予以尊重，但技术正确性、数据一致性、资金安全和上线验收结论必须以证据为准。
@@ -338,7 +350,7 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 - `二期功能/乘客端_券包与登录领券_{PRD,TECH,API,TEST}.md`
 - `二期功能/乘客端_福利签到_{PRD,TECH,API,SQL,TEST}.md`
 - `二期功能/乘客端_福利签到_异常补偿_TECH.md`
-- `二期功能/司机端_下周开发_TODO.md`
+- `二期功能/司机端_行程记录与今日运营看板_{PRD,TECH,API,TEST,SQL}.md`
 
 ### 完单结算 MVP
 
@@ -367,4 +379,5 @@ mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
 - 完单结算 MVP 已落地为本地 mock 闭环；支付渠道仍是 mock。接真实支付宝/微信前还需完成第三方签约、回调验签、退款、对账和财务评审；支付失败不由后台定时自动重试。
 - 车队营销优惠券后台、目标表结构、领券、锁券/核销与结算快照已经落地；司机金额展示和车队/运营公司固定金额或比例分成仍需独立设计、实现和财务评审。
 - 福利签到积分与异常对账补偿已落地；XXL-Job Handler 为 `benefitSignReconciliation`，Redis Bitmap 可自动收敛，MySQL 差异只写入 `benefit_reconciliation_issue` 供人工处理，不自动改积分。
-- 当前重点见 `TODO与差距总览.md` §2：司机端近期功能、后台派单诊断聚合、DLQ 与真实支付闭环。
+- 司机端行程记录、详情和今日运营看板已完成代码与自动化回归；生产启用前需手工执行建表及按需回填 SQL。
+- 当前重点见 `TODO与差距总览.md` §2：后台派单诊断聚合、DLQ 与真实支付闭环。

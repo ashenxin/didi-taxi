@@ -95,6 +95,7 @@ public class TripOrderWriteService {
     private final DriverPassengerMatchBlockService matchBlockService;
     private final PassengerOrderChangedNotifier passengerOrderChangedNotifier;
     private final AccountWriteFence accountWriteFence;
+    private final DriverTripService driverTripService;
 
     public TripOrderWriteService(TripOrderEntityMapper tripOrderEntityMapper,
                                  OrderEventEntityMapper orderEventEntityMapper,
@@ -104,7 +105,7 @@ public class TripOrderWriteService {
                                  ObjectMapper objectMapper,
                                  DriverPassengerMatchBlockService matchBlockService,
                                  PassengerOrderChangedNotifier passengerOrderChangedNotifier,
-                                 AccountWriteFence accountWriteFence) {
+                                 AccountWriteFence accountWriteFence, DriverTripService driverTripService) {
         this.tripOrderEntityMapper = tripOrderEntityMapper;
         this.orderEventEntityMapper = orderEventEntityMapper;
         this.orderOutboxEventMapper = orderOutboxEventMapper;
@@ -114,6 +115,7 @@ public class TripOrderWriteService {
         this.matchBlockService = matchBlockService;
         this.passengerOrderChangedNotifier = passengerOrderChangedNotifier;
         this.accountWriteFence = accountWriteFence;
+        this.driverTripService = driverTripService;
     }
 
     /**
@@ -806,6 +808,7 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
+        driverTripService.advanced(existing, 6, now, 1, body.getCancelReason());
         log.info("乘客已取消订单 orderNo={} passengerId={}", orderNo, body.getPassengerId());
     }
 
@@ -1226,7 +1229,8 @@ public class TripOrderWriteService {
             throw new IllegalArgumentException("接单失败，请重试");
         }
 
-        insertDriverEvent(orderNo, driverId, "ORDER_ACCEPTED", fromStatus, STATUS_ACCEPTED, now);
+        long acceptedEventId = insertDriverEvent(orderNo, driverId, "ORDER_ACCEPTED", fromStatus, STATUS_ACCEPTED, now);
+        driverTripService.accepted(existing, acceptedEventId, now);
         cancelOtherPendingAssignsForDriver(driverId, orderNo, now);
         log.info("司机已接单 orderNo={} driverId={}", orderNo, driverId);
     }
@@ -1317,6 +1321,7 @@ public class TripOrderWriteService {
         if (updated != 1) {
             throw new IllegalArgumentException("司机取消失败，请重试");
         }
+        driverTripService.advanced(existing, 6, now, 2, code);
         String payloadJson = driverReasonPayloadJson(code);
         insertDriverEventWithReason(orderNo, driverId, "ORDER_DRIVER_CANCELLED_BEFORE_ARRIVE",
                 STATUS_ACCEPTED, STATUS_CREATED, now, code, "司机到达前取消", payloadJson);
@@ -1550,6 +1555,7 @@ public class TripOrderWriteService {
         }
 
         insertDriverEvent(orderNo, driverId, "ORDER_DRIVER_ARRIVED", STATUS_ACCEPTED, STATUS_ARRIVED, now);
+        driverTripService.advanced(existing, 3, now, null, null);
         log.info("司机已到达上车点 orderNo={} driverId={}", orderNo, driverId);
     }
 
@@ -1592,6 +1598,7 @@ public class TripOrderWriteService {
         }
 
         insertDriverEvent(orderNo, driverId, "ORDER_TRIP_STARTED", STATUS_ARRIVED, STATUS_STARTED, now);
+        driverTripService.advanced(existing, 4, now, null, null);
         log.info("行程已开始 orderNo={} driverId={}", orderNo, driverId);
     }
 
@@ -1650,6 +1657,7 @@ public class TripOrderWriteService {
         tripOrderSettlementMapper.insert(settlement);
 
         insertDriverEvent(orderNo, driverId, "ORDER_FINISHED", STATUS_STARTED, STATUS_FINISHED, now);
+        driverTripService.advanced(existing, 5, now, null, null);
         insertSettlementRequestedOutbox(orderNo, now);
         insertOrderChangedOutbox(orderNo, existing.getPassengerId(), now);
         log.info("订单已完单，结算任务已登记 orderNo={} driverId={}", orderNo, driverId);
@@ -1703,13 +1711,13 @@ public class TripOrderWriteService {
         }
     }
 
-    private void insertDriverEvent(String orderNo, Long driverId, String eventType,
+    private long insertDriverEvent(String orderNo, Long driverId, String eventType,
                                    Integer fromStatus, Integer toStatus, LocalDateTime now) {
-        insertDriverEventWithReason(orderNo, driverId, eventType, fromStatus, toStatus, now,
+        return insertDriverEventWithReason(orderNo, driverId, eventType, fromStatus, toStatus, now,
                 null, null, "{}");
     }
 
-    private void insertDriverEventWithReason(String orderNo, Long driverId, String eventType,
+    private long insertDriverEventWithReason(String orderNo, Long driverId, String eventType,
                                              Integer fromStatus, Integer toStatus, LocalDateTime now,
                                              String reasonCode, String reasonDesc, String eventPayload) {
         TripOrder after = tripOrderEntityMapper.selectOne(Wrappers.<TripOrder>lambdaQuery()
@@ -1733,5 +1741,6 @@ public class TripOrderWriteService {
                 .setOccurredAt(now)
                 .setCreatedAt(now);
         orderEventEntityMapper.insert(event);
+        return event.getId();
     }
 }

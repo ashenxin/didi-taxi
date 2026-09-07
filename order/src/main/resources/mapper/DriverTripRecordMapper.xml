@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sx.order.dao.DriverTripRecordMapper">
+  <!-- 已取消服务绝不关联后续承运司机的账单。 -->
+  <sql id="joins">
+    FROM driver_trip_record r
+    LEFT JOIN trip_order o ON o.id = r.order_id AND r.status = 5 AND o.status = 5 AND o.driver_id = r.driver_id
+    LEFT JOIN trip_order_settlement s ON s.order_no = o.order_no
+  </sql>
+  <sql id="columns">
+    r.*, s.final_amount, s.coupon_discount_amount AS discount_amount,
+    CASE WHEN s.final_amount IS NOT NULL THEN s.payable_amount END AS payable_amount,
+    s.paid_amount, s.settlement_status, s.manual_action_required,
+    o.mock_actual_duration_seconds AS billing_duration_seconds
+  </sql>
+  <sql id="filter">
+    WHERE r.driver_id = #{f.driverId} AND r.id &lt;= #{f.snapshotId}
+    <choose>
+      <when test="f.status == 'IN_PROGRESS'">AND r.status IN (2,3,4)</when>
+      <when test="f.status == 'FINISHED'">AND r.status = 5</when>
+      <when test="f.status == 'CANCELLED'">AND r.status = 6</when>
+    </choose>
+    <if test="f.start != null">AND <include refid="dateColumn"/> &gt;= #{f.start}</if>
+    <if test="f.end != null">AND <include refid="dateColumn"/> &lt; #{f.end}</if>
+  </sql>
+  <sql id="dateColumn"><choose>
+    <when test="f.dateField == 'FINISHED'">r.finished_at</when>
+    <when test="f.dateField == 'CANCELLED'">r.cancelled_at</when>
+    <otherwise>r.accepted_at</otherwise>
+  </choose></sql>
+  <select id="maxId" resultType="long">SELECT COALESCE(MAX(id),0) FROM driver_trip_record WHERE driver_id=#{driverId}</select>
+  <select id="countTrips" resultType="long">SELECT COUNT(*) FROM driver_trip_record r <include refid="filter"/></select>
+  <select id="pageTrips" resultType="com.sx.order.model.dto.DriverTripView">
+    SELECT <include refid="columns"/> <include refid="joins"/> <include refid="filter"/>
+    ORDER BY r.accepted_at DESC, r.id DESC LIMIT #{f.limit} OFFSET #{f.offset}
+  </select>
+  <select id="detail" resultType="com.sx.order.model.dto.DriverTripView">
+    SELECT <include refid="columns"/> <include refid="joins"/> WHERE r.driver_id=#{driverId} AND r.id=#{id}
+  </select>
+  <select id="latest" resultType="com.sx.order.model.dto.DriverTripView">
+    SELECT <include refid="columns"/> <include refid="joins"/>
+    WHERE r.driver_id=#{driverId} AND r.status=5 AND r.finished_at &gt;= #{start} AND r.finished_at &lt; #{end}
+    ORDER BY r.finished_at DESC, r.id DESC LIMIT 1
+  </select>
+  <select id="today" resultType="com.sx.order.model.dto.DriverTodaySummary">
+    SELECT
+    COALESCE(SUM(CASE WHEN r.status=5 THEN 1 ELSE 0 END),0) AS completed_count,
+    COALESCE(SUM(CASE WHEN r.status=6 THEN 1 ELSE 0 END),0) AS cancelled_count,
+    COALESCE(SUM(CASE WHEN r.status=6 AND r.cancel_by=2 THEN 1 ELSE 0 END),0) AS driver_cancelled_count,
+    COALESCE(SUM(CASE WHEN r.status=6 AND r.cancel_by=1 THEN 1 ELSE 0 END),0) AS passenger_cancelled_count,
+    COALESCE(SUM(CASE WHEN r.status=6 AND r.cancel_by=3 THEN 1 ELSE 0 END),0) AS system_cancelled_count,
+    COALESCE(SUM(CASE WHEN r.status=5 AND s.final_amount IS NULL THEN 1 ELSE 0 END),0) AS unpriced_count,
+    COALESCE(SUM(CASE WHEN r.status=5 AND s.manual_action_required=1 THEN 1 ELSE 0 END),0) AS abnormal_settlement_count,
+    COALESCE(SUM(CASE WHEN r.status=5 AND (r.distance_meters IS NULL OR r.distance_meters &lt; 0) THEN 1 ELSE 0 END),0) AS missing_distance_count,
+    COALESCE(SUM(CASE WHEN r.status=5 AND (r.service_duration_seconds IS NULL OR r.service_duration_seconds &lt; 0) THEN 1 ELSE 0 END),0) AS missing_duration_count,
+    COALESCE(SUM(CASE WHEN r.status=5 AND s.final_amount &gt;= 0 AND COALESCE(s.manual_action_required,0)=0 THEN s.final_amount ELSE 0 END),0) AS order_amount,
+    COALESCE(SUM(CASE WHEN r.status=5 AND r.distance_meters &gt;= 0 THEN r.distance_meters ELSE 0 END),0) AS distance_meters,
+    COALESCE(SUM(CASE WHEN r.status=5 AND r.service_duration_seconds &gt;= 0 THEN r.service_duration_seconds ELSE 0 END),0) AS service_duration_seconds
+    <include refid="joins"/>
+    WHERE r.driver_id=#{driverId} AND
+      ((r.status=5 AND r.finished_at &gt;= #{start} AND r.finished_at &lt; #{end})
+       OR (r.status=6 AND r.cancelled_at &gt;= #{start} AND r.cancelled_at &lt; #{end}))
+  </select>
+</mapper>

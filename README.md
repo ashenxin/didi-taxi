@@ -22,6 +22,8 @@
 
 常用启动命令：
 
+后端服务日常通过 IDEA 的运行配置启动，并由 IDEA 负责代码变更后的自动重启。代码修改、编译和测试本身不触发任何后端进程操作；只有收到明确的启动、重启或停止指令时，才手动执行下方命令或操作对应进程。
+
 本地联调统一显式激活 `local` profile；不要依赖应用默认 profile。`dev` 仅用于需要开发级调试配置时手动替换。
 除 `xxl-job-admin` 外，当前业务服务的 `local` 完整运行配置均从 Nacos 必选 Data ID 加载，并通过 Nacos 进行服务注册发现。首次启动前必须先按
 `docs/runbooks/capacity-service-Nacos本地配置运行手册.md` 准备 Namespace、Group、10 个 Data ID 及 `NACOS_NAMESPACE` / `NACOS_USERNAME` / `NACOS_PASSWORD`；否则服务会按设计快速启动失败。
@@ -113,7 +115,7 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 - `docs/plans/乘客账号生命周期P1-P7执行计划索引.md`
 - `docs/runbooks/乘客账号生命周期P7灰度切换与前向恢复手册.md`
 
-当前 P1～P7 代码和 H5 链路已贯通，但仍需完成目标环境 patch/backfill 核验、真实 MySQL/Kafka 故障演练和逐级灰度。详细优先级以 `TODO与差距总览.md` 为准。
+当前 P1～P7 代码和 H5 链路已贯通，并已于 2026-08-03 按约定范围完成生命周期生产验收（2026-09-06 用户再次确认）。该次范围不含旧入口灰度观察与双 MySQL 并发专项；后续按运行监控和 Legacy Adapter 下线计划推进，不再将生命周期验收作为司机端开发的前置待办。详细优先级以 `TODO与差距总览.md` 为准。
 
 ### 乘客/司机闭环
 
@@ -197,7 +199,11 @@ mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sq
 - `二期功能/司机_换队功能_PRD.md`
 - `二期功能/司机_换队功能_TECH.md`
 - `二期功能/司机_换队功能_API.md`
-- `二期功能/司机端_下周开发_TODO.md`
+- `二期功能/司机端_行程记录与今日运营看板_PRD.md`
+- `二期功能/司机端_行程记录与今日运营看板_TECH.md`
+- `二期功能/司机端_行程记录与今日运营看板_API.md`
+- `二期功能/司机端_行程记录与今日运营看板_TEST.md`
+- `二期功能/司机端_行程记录与今日运营看板_SQL.md`
 - `二期功能/车队营销优惠券_PRD.md`
 - `二期功能/车队营销优惠券_TECH.md`
 - `二期功能/车队营销优惠券_API.md`

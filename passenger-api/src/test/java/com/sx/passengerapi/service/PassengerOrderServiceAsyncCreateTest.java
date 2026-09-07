@@ -106,6 +106,28 @@ class PassengerOrderServiceAsyncCreateTest {
     }
 
     @Test
+    void noAvailableDriverReportsCapacityErrorBeforeFareEstimate() {
+        when(orderClient.createPreflight(eq("idem-no-driver"), any()))
+                .thenReturn(ResponseVo.success(allowCreate()));
+        RouteResponse route = new RouteResponse();
+        route.setDistanceMeters(12_000L);
+        route.setDurationSeconds(1_500L);
+        route.setProvider("LOCAL_MOCK_ROUTE");
+        route.setVersion("mock-route-v1");
+        when(mapClient.drivingRoute(any())).thenReturn(ResponseVo.success(route));
+        when(capacityDispatchClient.nearestDriver(anyString(), anyString(), anyDouble(), anyDouble(), anyLong()))
+                .thenReturn(new ResponseVo<>(404, "无可接单在线司机"));
+
+        assertThatThrownBy(() -> service.createTwoPhase(body(), "idem-no-driver"))
+                .isInstanceOf(BizErrorException.class)
+                .satisfies(ex -> assertThat(((BizErrorException) ex).getErrorCode()).isEqualTo(404))
+                .hasMessage("附近暂无可接单在线司机，请稍后重试");
+
+        verify(calculateClient, never()).estimate(any());
+        verify(orderClient, never()).create(anyString(), any());
+    }
+
+    @Test
     void lostSuccessResponseCanRetryWithSameKeyAndRecoverOriginalOrder() {
         String key = "lost-response-key";
         CreateOrderPreflightResult allow = new CreateOrderPreflightResult();

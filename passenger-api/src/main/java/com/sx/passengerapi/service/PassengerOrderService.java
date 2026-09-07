@@ -273,7 +273,7 @@ public class PassengerOrderService {
     }
 
     /**
-     * 对外“两段式 create”：路线预估 →（可选）最近司机用于 company 维度估价 → 创建订单；
+     * 对外“两段式 create”：路线预估 → 最近司机用于 company 维度估价 → 创建订单；
      * 不做同步指派与打开确认窗口。
      */
     public CreateOrderResultV1 createTwoPhase(CreateAndAssignOrderBody body, String idempotencyKey) {
@@ -284,7 +284,10 @@ public class PassengerOrderService {
         }
         RouteResponse route = route(body);
         NearestDriverResult nearest = searchNearestDriver(body);
-        Long companyId = nearest == null ? null : nearest.getCompanyId();
+        if (nearest == null) {
+            throw new BizErrorException(404, "附近暂无可接单在线司机，请稍后重试");
+        }
+        Long companyId = nearest.getCompanyId();
         EstimateFareResult estimate = estimate(body, route, companyId);
         CreateOrderResult created = createOrder(body, route, estimate, idempotencyKey);
         String orderNo = created == null ? null : created.getOrderNo();
