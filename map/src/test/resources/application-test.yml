@@ -5,3 +5,7 @@ spring:
     nacos:
       discovery:
         enabled: false
+  ai:
+    dashscope:
+      # 单元测试无 DashScope API Key，关闭自动装配避免启动失败
+      enabled: false

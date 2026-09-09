@@ -10,7 +10,7 @@
 
 ## 项目定位
 
-`didi-taxi` 是一个仿滴滴出行后端项目，采用 Java 21、Spring Boot 3.3.5、Spring Cloud 2023.0.5、Maven 多模块组织。当前核心目标是支撑乘客下单、订单派发、司机听单接单、后台管理、计价、钱包支付、地图路线、网关鉴权与 WebSocket 通知等能力。
+`didi-taxi` 是一个仿滴滴出行后端项目，采用 Java 21、Spring Boot 3.5.16、Spring Cloud 2025.0.3、Spring Cloud Alibaba 2025.0.0.0（nacos starter 版本由根 BOM 统一管理，各模块不写死版本号）、Maven 多模块组织。当前核心目标是支撑乘客下单、订单派发、司机听单接单、后台管理、计价、钱包支付、地图路线、网关鉴权与 WebSocket 通知等能力。
 
 主要设计原则：
 
