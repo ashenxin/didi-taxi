@@ -1,5 +1,7 @@
 # 运力服务 Nacos 本地配置实施计划
 
+> 执行状态（2026-09-16）：本计划对应的 capacity 本地 Nacos 配置迁移已经完成，后续又完成了全业务服务的配置与服务发现接入。本文保留原始步骤和当时的 Boot 3.3.5 / Cloud 2023.0.5 基线；当前状态以根 README 和 `docs/runbooks/capacity-service-Nacos本地配置运行手册.md` 为准。
+
 > **供执行代理使用：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 子技能，逐任务执行本计划。各步骤使用复选框（`- [ ]`）跟踪进度。
 
 **目标：** 在不启用服务发现的前提下，将 `capacity-service` 在本地环境实际生效的完整配置（包括业务秘密值）迁移到 Nacos 的 `local` 命名空间。
@@ -275,7 +277,7 @@ git add capacity/pom.xml \
   capacity/src/test/resources/application-test.yml \
   docs/superpowers/plans/2026-07-27-capacity-nacos-local-config.md \
   capacity/src/test/java/com/sx/capacity/config/NacosLocalConfigBoundaryTest.java
-git commit -m "功能：接入运力服务 Nacos 本地配置入口"
+git commit -m "feat(capacity): 接入 Nacos 本地配置入口"
 ```
 
 ---
@@ -475,7 +477,7 @@ rg -n 'password:|secret:|access-token:' docs/runbooks/capacity-service-Nacos本�
 
 ```bash
 git add docs/runbooks/capacity-service-Nacos本地配置运行手册.md
-git commit -m "文档：补充运力服务 Nacos 本地运行手册"
+git commit -m "docs(capacity): 补充 Nacos 本地运行手册"
 ```
 
 ---

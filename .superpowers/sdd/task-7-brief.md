@@ -97,6 +97,5 @@ snapshots.persistNew(snapshot);
 
 ```bash
 git add passenger/src/main passenger/src/test
-git commit -m "功能：建立乘客同身份换号事务"
+git commit -m "feat(passenger-auth): 建立同身份换号事务"
 ```
-

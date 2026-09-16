@@ -1,7 +1,9 @@
 package com.sx.map.model.dto;
 
+import java.util.List;
+
 /**
- * 路线规划结果（MVP 版：先返回里程/时长，后续可扩展 polyline、途径点、费用等）。
+ * 路线规划结果。
  */
 public class RouteResponse {
     /**
@@ -17,6 +19,11 @@ public class RouteResponse {
      * 来源：第三方地图 route 接口的 duration，或你们自研 ETA 结果。
      */
     private Long durationSeconds;
+
+    /**
+     * 路线折线坐标，按车辆行驶顺序排列；地图提供方未返回时为空。
+     */
+    private List<Point> polyline;
 
     /**
      * 数据提供方标识。
@@ -49,6 +56,14 @@ public class RouteResponse {
 
     public void setDurationSeconds(Long durationSeconds) {
         this.durationSeconds = durationSeconds;
+    }
+
+    public List<Point> getPolyline() {
+        return polyline;
+    }
+
+    public void setPolyline(List<Point> polyline) {
+        this.polyline = polyline;
     }
 
     public String getProvider() {

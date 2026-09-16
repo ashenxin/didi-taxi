@@ -110,7 +110,7 @@ passenger-api 与 passenger 使用同一环境变量名。非 `local/dev/test` �
 
 ```bash
 git add passenger passenger-api docs/superpowers/specs docs/superpowers/contracts
-git commit -m "重构：完成乘客认证代次P2切换"
+git commit -m "refactor(passenger-auth): 完成认证代次 P2 切换"
 ```
 
 ## 最终验收矩阵

@@ -313,5 +313,21 @@ Content-Type: application/json
 
 ## 5. 当前实现状态
 
-- 本文档为待开发接口契约。
-- 接口路径、字段和错误码以后端实际落地为准，但不得违背 PRD 中关于用户 ID、历史订单保留、逻辑删除、重新注册的核心口径。
+- 设置摘要及本文记录的旧 `settings` 兼容接口已经实现；换号与注销的当前推荐入口已迁移到 `/app/api/v1/account-lifecycle/**`，支持预检、短信、提交、Operation 查询、撤销和重检。
+- P1～P7 已按约定范围验收。旧 `settings` 入口仅作为灰度兼容层，当前接口和阶段索引见 `docs/plans/乘客账号生命周期P1-P7执行计划索引.md`；后续仍需观察旧入口并下线 Legacy Adapter。
+- 无论使用新入口还是兼容入口，都必须保持用户 ID 稳定、历史订单隔离、逻辑注销、受限会话和重新注册等既定边界。
+
+当前推荐接口：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/app/api/v1/account-lifecycle/cancellations/precheck` | 注销前置检查 |
+| `POST` | `/app/api/v1/account-lifecycle/cancellations/sms/send` | 发送注销验证码 |
+| `POST` | `/app/api/v1/account-lifecycle/cancellations` | 幂等提交注销，返回 Operation |
+| `POST` | `/app/api/v1/account-lifecycle/phone-changes/sms/send` | 发送换号验证码 |
+| `POST` | `/app/api/v1/account-lifecycle/phone-changes` | 幂等提交换号 |
+| `GET` | `/app/api/v1/account-lifecycle/operations/{operationNo}` | 查询当前乘客的 Operation |
+| `POST` | `/app/api/v1/account-lifecycle/operations/{operationNo}/abort` | 在允许阶段撤销 Operation |
+| `POST` | `/app/api/v1/account-lifecycle/operations/{operationNo}/recheck` | 重新执行前置检查 |
+
+换号和注销提交必须携带稳定的 `Idempotency-Key`；注销提交返回 HTTP 202。Operation 只能由所属乘客查询或操作。

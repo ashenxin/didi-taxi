@@ -127,6 +127,5 @@ WS 仅接受 `NORMAL + audit=2`，并调用同一 auth-state client 校验 ACTIV
 
 ```bash
 git add passenger-api/src/main passenger-api/src/test
-git commit -m "功能：以认证代次强校验乘客HTTP与WS令牌"
+git commit -m "feat(passenger-auth): 强校验乘客 HTTP 与 WS 令牌"
 ```
-

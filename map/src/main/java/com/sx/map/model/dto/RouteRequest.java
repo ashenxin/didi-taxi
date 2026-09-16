@@ -13,6 +13,12 @@ public class RouteRequest {
     @Valid
     private Point dest;
 
+    /**
+     * 可选的单个途经点；为空时保持普通起终点算路。
+     */
+    @Valid
+    private Point waypoint;
+
     public Point getOrigin() {
         return origin;
     }
@@ -28,5 +34,12 @@ public class RouteRequest {
     public void setDest(Point dest) {
         this.dest = dest;
     }
-}
 
+    public Point getWaypoint() {
+        return waypoint;
+    }
+
+    public void setWaypoint(Point waypoint) {
+        this.waypoint = waypoint;
+    }
+}

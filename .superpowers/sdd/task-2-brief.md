@@ -134,6 +134,5 @@ public long logout(long customerId, long expectedAuthEpoch) {
 
 ```bash
 git add passenger/src/main passenger/src/test
-git commit -m "功能：以数据库认证代次签发会话材料"
+git commit -m "feat(passenger-auth): 以数据库认证代次签发会话材料"
 ```
-

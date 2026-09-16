@@ -1,5 +1,7 @@
 # capacity-service 接入 Nacos 本地配置中心设计
 
+> 历史设计说明（2026-09-16）：本文记录首个 Nacos 试点时的技术基线与范围。当前工程已升级到 Spring Boot 3.5.16、Spring Cloud 2025.0.3、Spring Cloud Alibaba 2025.0.0.0，除 `xxl-job-admin` 外的 10 个业务服务均已完成 Nacos 配置和服务发现接入；当前状态以根 `pom.xml`、README 和运行手册为准。
+
 ## 背景
 
 `didi-taxi` 当前使用 Spring Boot 3.3.5、Spring Cloud 2023.0.5 和 Java 21。各服务的运行配置保存在各模块的 `application*.yml` 中，尚未正式引入 Spring Cloud Alibaba。`capacity-service` 的配置覆盖 MySQL、Redis、Kafka、XXL-JOB、MyBatis、日志和派单业务参数，适合作为第一个 Nacos 配置中心试点。

@@ -50,6 +50,38 @@ class AmapDrivingRouteServiceTest {
     }
 
     @Test
+    void sendsSingleWaypointToAmapWhenProvided() {
+        server.expect(requestTo("https://restapi.amap.com/v3/direction/driving"
+                        + "?key=test-key&origin=120.1,30.1&destination=120.2,30.2&waypoints=120.15,30.15"))
+                .andRespond(withSuccess("""
+                        {"status":"1","route":{"paths":[{
+                          "distance":"15000",
+                          "duration":"2100",
+                          "steps":[
+                            {"polyline":"120.1,30.1;120.15,30.15"},
+                            {"polyline":"120.15,30.15;120.2,30.2"}
+                          ]
+                        }]}}
+                        """, MediaType.APPLICATION_JSON));
+
+        RouteRequest request = request();
+        Point waypoint = new Point();
+        waypoint.setLat(30.15);
+        waypoint.setLng(120.15);
+        request.setWaypoint(waypoint);
+
+        RouteResponse response = service.drivingRoute(request);
+
+        assertThat(response.getDistanceMeters()).isEqualTo(15000L);
+        assertThat(response.getDurationSeconds()).isEqualTo(2100L);
+        assertThat(response.getPolyline()).hasSize(3);
+        assertThat(response.getPolyline().get(0).getLng()).isEqualTo(120.1);
+        assertThat(response.getPolyline().get(1).getLng()).isEqualTo(120.15);
+        assertThat(response.getPolyline().get(2).getLng()).isEqualTo(120.2);
+        server.verify();
+    }
+
+    @Test
     void rejectsAmapBusinessFailureWithoutReturningFakeRoute() {
         server.expect(requestTo("https://restapi.amap.com/v3/direction/driving"
                         + "?key=test-key&origin=120.1,30.1&destination=120.2,30.2"))

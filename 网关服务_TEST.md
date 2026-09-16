@@ -85,7 +85,7 @@ JWT_SECRET_ADMIN / JWT_SECRET_APP / JWT_SECRET_DRIVER 与对应 BFF 一致
 步骤：向三端各选一个 POST 路径发送 OPTIONS，请求包含：
 
 ```http
-Origin: http://localhost:5173
+Origin: http://localhost:6273
 Access-Control-Request-Method: POST
 Access-Control-Request-Headers: authorization,content-type,idempotency-key
 ```

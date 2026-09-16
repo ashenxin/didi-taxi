@@ -99,6 +99,5 @@ OTP 必须在 MySQL 事务外消费；`createFence` 的顺序为生成 Snapshot�
 
 ```bash
 git add passenger/src/main passenger/src/test
-git commit -m "功能：建立乘客账号注销栅栏事务"
+git commit -m "feat(passenger-auth): 建立账号注销栅栏事务"
 ```
-

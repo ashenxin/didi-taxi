@@ -1,5 +1,7 @@
 # 福利签到异常补偿实施计划
 
+> 当前状态（2026-09-16）：本计划对应的 XXL-JOB 对账、Bitmap 收敛和 `benefit_reconciliation_issue` 异常留痕已经实现；本文保留原始执行步骤与当时技术基线，当前功能状态以[二期 README](README.md)和异常补偿 TECH 为准。
+
 > **供智能代理执行：** 必须使用子技能 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，逐项实施本计划。各步骤使用复选框（`- [ ]`）跟踪进度。
 
 **目标：** 在 calculate 服务增加福利签到定时对账，自动收敛 Redis 位图（Bitmap），并将 MySQL 账本异常只记录到 `benefit_reconciliation_issue`，不自动修改积分。
@@ -14,7 +16,7 @@
 - Redis 位图允许自动补齐或重建；签到记录、积分流水、积分账户只检测，不自动修改。
 - 不新增任何 HTTP 手动触发接口；人工执行只通过 XXL-Job 控制台。
 - 换号后 `customerId` 不变，不迁移积分；注销漏通知当前无法仅凭 calculate 本地数据识别，必须在文档明确边界。
-- Git 提交信息使用中文；完成代码、SQL、文档与验证后生成独立提交。
+- Git 提交信息遵循 `type(scope): description`；`description` 使用简洁中文。完成代码、SQL、文档与验证后生成独立提交。
 
 ---
 

@@ -13,6 +13,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -46,13 +48,16 @@ public class AmapDrivingRouteService {
         }
         String origin = toAmapCoord(request.getOrigin());
         String destination = toAmapCoord(request.getDest());
-        URI uri = UriComponentsBuilder
+        UriComponentsBuilder uriBuilder = UriComponentsBuilder
                 .fromUriString(amapProperties.getBaseUrl())
                 .path(DRIVING_PATH)
                 .queryParam("key", amapProperties.getKey())
                 .queryParam("origin", origin)
-                .queryParam("destination", destination)
-                .build(true)
+                .queryParam("destination", destination);
+        if (request.getWaypoint() != null) {
+            uriBuilder.queryParam("waypoints", toAmapCoord(request.getWaypoint()));
+        }
+        URI uri = uriBuilder.build(true)
                 .toUri();
 
         String raw = amapRestClient.get()
@@ -81,6 +86,7 @@ public class AmapDrivingRouteService {
             RouteResponse resp = new RouteResponse();
             resp.setDistanceMeters(distanceMeters);
             resp.setDurationSeconds(durationSeconds);
+            resp.setPolyline(parsePolyline(first.path("steps")));
             resp.setProvider("gaode");
             resp.setTraceId(UUID.randomUUID().toString());
             log.info("高德驾车路线成功 distanceM={} durationS={}", distanceMeters, durationSeconds);
@@ -117,5 +123,49 @@ public class AmapDrivingRouteService {
         } catch (NumberFormatException e) {
             return 0L;
         }
+    }
+
+    private static List<Point> parsePolyline(JsonNode steps) {
+        if (!steps.isArray() || steps.isEmpty()) {
+            return List.of();
+        }
+        List<Point> points = new ArrayList<>();
+        for (JsonNode step : steps) {
+            String polyline = step.path("polyline").asText("").trim();
+            if (polyline.isEmpty()) {
+                continue;
+            }
+            for (String coordinate : polyline.split(";")) {
+                Point point = parsePoint(coordinate);
+                if (point != null && !isSamePoint(points, point)) {
+                    points.add(point);
+                }
+            }
+        }
+        return List.copyOf(points);
+    }
+
+    private static Point parsePoint(String coordinate) {
+        String[] parts = coordinate.split(",");
+        if (parts.length != 2) {
+            return null;
+        }
+        try {
+            Point point = new Point();
+            point.setLng(Double.parseDouble(parts[0].trim()));
+            point.setLat(Double.parseDouble(parts[1].trim()));
+            return point;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static boolean isSamePoint(List<Point> points, Point candidate) {
+        if (points.isEmpty()) {
+            return false;
+        }
+        Point previous = points.getLast();
+        return Double.compare(previous.getLng(), candidate.getLng()) == 0
+                && Double.compare(previous.getLat(), candidate.getLat()) == 0;
     }
 }

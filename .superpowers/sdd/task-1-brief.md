@@ -153,6 +153,5 @@ if (otpService.consume(OtpPurpose.LOGIN, OtpSubject.login(req.getPhone()), req.g
 
 ```bash
 git add passenger/src/main passenger/src/test
-git commit -m "功能：统一乘客原子验证码消费"
+git commit -m "feat(passenger-auth): 统一乘客原子验证码消费"
 ```
-

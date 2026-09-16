@@ -4,7 +4,7 @@
 >
 > 状态：已实现（MVP 本地模拟闭环）
 >
-> 实施计划：[完单结算实施计划](../plans/2026-07-17-完单结算_PLAN.md)；接口文档：[完单结算 API](../../api/完单结算_API.md)
+> 技术实现：[完单结算 TECH](乘客端_完单结算_TECH.md)；接口文档：[完单结算 API](乘客端_完单结算_API.md)；测试与联调：[完单结算 TEST](乘客端_完单结算_TEST.md)
 >
 > 适用范围：乘客端、司机端、`order-service`、`calculate-service`、`wallet-service`、`map-service`、`passenger-api`、`driver-api`
 

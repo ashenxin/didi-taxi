@@ -88,7 +88,7 @@ public RouteResponse route(RouteRequest request) {
 
 ```bash
 git add map calculate passenger-api
-git commit -m "功能：固化稳定 mock 路线和计价规则快照"
+git commit -m "feat(settlement): 固化 mock 路线和计价规则快照"
 ```
 
 ---
@@ -164,7 +164,7 @@ MVP 下单必须由客户端提供起终点经纬度；将 `resolveCoordinatesBy
 
 ```bash
 git add order passenger-api
-git commit -m "功能：持久化订单冻结结算输入"
+git commit -m "feat(settlement): 持久化订单冻结结算输入"
 ```
 
 ---
@@ -230,7 +230,7 @@ request.getFinalAmount().subtract(discountAmount).max(BigDecimal.ZERO)
 
 ```bash
 git add calculate
-git commit -m "功能：新增基于快照的最终计价"
+git commit -m "feat(settlement): 新增基于快照的最终计价"
 ```
 
 ---
@@ -277,7 +277,7 @@ outboxMapper.insert(settlementRequestedOutbox(orderNo, now));
 
 ```bash
 git add order driver-api
-git commit -m "功能：完单时原子登记结算任务"
+git commit -m "feat(settlement): 完单时原子登记结算任务"
 ```
 
 ---
@@ -337,7 +337,7 @@ WHERE order_no=? AND mock_actual_duration_seconds IS NULL
 
 ```bash
 git add order
-git commit -m "功能：新增幂等结算编排骨架"
+git commit -m "feat(settlement): 新增幂等结算编排骨架"
 ```
 
 ---
@@ -376,7 +376,7 @@ git commit -m "功能：新增幂等结算编排骨架"
 
 ```bash
 git add order calculate
-git commit -m "功能：完成计价用券和零元单结算"
+git commit -m "feat(settlement): 完成计价用券和零元单结算"
 ```
 
 ---
@@ -438,7 +438,7 @@ POST /internal/wallet/payment-attempts
 
 ```bash
 git add wallet
-git commit -m "功能：支持可审计的多次 mock 支付尝试"
+git commit -m "feat(settlement): 支持可审计的多次 mock 支付尝试"
 ```
 
 ---
@@ -485,7 +485,7 @@ CONFIRMING 查询只读原尝试，不创建第二笔。这里不添加任何扫
 
 ```bash
 git add wallet
-git commit -m "功能：新增环境受限的 mock 收银台"
+git commit -m "feat(settlement): 新增环境受限的 mock 收银台"
 ```
 
 ---
@@ -530,7 +530,7 @@ wallet 在 mock 尝试进入终态或 CONFIRMING 时调用 order 内部接口。
 
 ```bash
 git add order wallet
-git commit -m "功能：根据 mock 支付结果完成结算"
+git commit -m "feat(settlement): 根据 mock 支付结果完成结算"
 ```
 
 ---
@@ -581,7 +581,7 @@ BFF 下单前可以调用查询减少无效路线/估价请求；内部检查异
 
 ```bash
 git add order passenger-api
-git commit -m "功能：未结清订单阻止新下单"
+git commit -m "feat(settlement): 未结清订单阻止新下单"
 ```
 
 ---
@@ -633,7 +633,7 @@ return orderClient.createManualPayment(
 
 ```bash
 git add order passenger-api wallet
-git commit -m "功能：提供结算查询和主动支付接口"
+git commit -m "feat(settlement): 提供结算查询和主动支付接口"
 ```
 
 ---
@@ -669,7 +669,7 @@ order-service 提供按当前分页 orderNo 批量查询结算摘要的内部接
 
 ```bash
 git add order passenger-api
-git commit -m "功能：在乘客订单展示结算进度"
+git commit -m "feat(settlement): 在乘客订单展示结算进度"
 ```
 
 ---
@@ -678,9 +678,9 @@ git commit -m "功能：在乘客订单展示结算进度"
 
 **文件：**
 
-- 新增： `docs/api/完单结算_API.md`
-- 新增： `docs/testing/完单结算_TEST.md`
-- 修改： `docs/superpowers/specs/2026-07-17-完单结算_DESIGN.md`
+- 新增： `二期功能/乘客端_完单结算_API.md`
+- 新增： `二期功能/乘客端_完单结算_TEST.md`
+- 修改： `二期功能/乘客端_完单结算_PRD.md`
 - 修改： `README.md`
 - 测试： `order/src/test/java/com/sx/order/integration/TripSettlementFlowIntegrationTest.java`
 - 测试： `passenger-api/src/test/java/com/sx/passengerapi/integration/PassengerSettlementContractTest.java`
@@ -726,7 +726,7 @@ API 文档给出请求/响应、状态表、409 错误、Idempotency-Key 规则�
 
 ```bash
 git add README.md docs order/src/test passenger-api/src/test
-git commit -m "测试：验证完整完单结算 mock 闭环"
+git commit -m "test(settlement): 验证完整完单结算 mock 闭环"
 ```
 
 ---

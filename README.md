@@ -1,221 +1,107 @@
-# 仿滴滴平台-后端
+# 仿滴滴平台后端
 
-本仓库是仿滴滴出行后端，多模块 Maven 工程，使用 Java 21、Spring Boot 3.3.5、Spring Cloud 2023.0.5。前端仓库在同级目录 `../didi-taxi-front`。
+## 文档范围
 
-## 模块与端口
+本文档是后端仓库入口，维护两类内容：
 
-| 模块 | 默认端口 | 说明 |
-|---|---:|---|
-| `gateway` | 18080 | 三端统一入口，负责 `/admin/**`、`/app/**`、`/driver/**` 路由、JWT、CORS、WS 握手放行。 |
-| `admin-api` | 8099 | 后台管理 BFF，承接登录、菜单、订单、运力、计价、换队审核等后台接口。 |
-| `passenger-api` | 8100 | 乘客端 BFF，承接登录、下单、订单、个人中心、钱包、乘客 WS。 |
-| `driver-api` | 8101 | 司机端 BFF，承接司机登录注册、听单、接拒单、行程推进、换队、司机 WS。 |
-| `capacity` | 8090 | 运力/调度服务，维护司机、公司/车队、车辆、Redis GEO、异步派单和换队申请。 |
-| `calculate` | 8091 | 计价服务，维护预估价、计价规则、优惠券模板、用户券、用券流水。 |
-| `passenger` | 8092 | 乘客核心服务，同时承载后台 `sys_*` 账号、角色、菜单、数据域等内部能力。 |
-| `order` | 8093 | 订单服务，维护订单主表、订单状态机、订单事件、结算快照。 |
-| `map` | 8094 | 地图服务，封装高德路线、地理编码、逆地理编码等能力。 |
-| `wallet` | 8095 | 钱包服务，维护支付宝/微信免密协议、默认免密渠道、钱包支付单、mock 自动扣款。 |
-| `xxl-job-admin` | 8081 | XXL-JOB 调度中心，访问路径 `/xxl-job-admin`。 |
+- 全仓共用信息：项目定位、本地开发入口和文档导航。
+- 一期业务范围：乘客登录与下单、订单派发、司机听单与履约、网关鉴权、WebSocket、后台基础管理、基础计价和地图能力。
 
-## 本地启动
+一期按业务范围划分，不按代码提交时间划分。后来为一期闭环补充的 Outbox、Kafka、请求幂等、并发控制和调度治理仍归一期。乘客个人中心、账号生命周期、钱包与结算、优惠券、福利签到、司机换队、司机行程看板和 AI 客服归二期，统一从[二期功能说明](二期功能/README.md)进入。
 
-常用启动命令：
+后端技术栈、模块地图、修改授权和开发行为约定见 [AGENTS.md](AGENTS.md)。
 
-后端服务日常通过 IDEA 的运行配置启动，并由 IDEA 负责代码变更后的自动重启。代码修改、编译和测试本身不触发任何后端进程操作；只有收到明确的启动、重启或停止指令时，才手动执行下方命令或操作对应进程。
+## 项目定位
 
-本地联调统一显式激活 `local` profile；不要依赖应用默认 profile。`dev` 仅用于需要开发级调试配置时手动替换。
-除 `xxl-job-admin` 外，当前业务服务的 `local` 完整运行配置均从 Nacos 必选 Data ID 加载，并通过 Nacos 进行服务注册发现。首次启动前必须先按
-`docs/runbooks/capacity-service-Nacos本地配置运行手册.md` 准备 Namespace、Group、10 个 Data ID 及 `NACOS_NAMESPACE` / `NACOS_USERNAME` / `NACOS_PASSWORD`；否则服务会按设计快速启动失败。
-父 POM 已将 `spring-boot:run` 的工作目录固定为对应模块目录，因此从仓库根目录执行下列命令时，
-各服务的相对日志路径仍落在 `<module>/logs`，不会写入仓库根部的 `logs`。
+`didi-taxi` 是仿滴滴出行后端，多模块 Maven 工程。当前基础技术栈为 Java 21、Spring Boot 3.5.16、Spring Cloud 2025.0.3 和 Spring Cloud Alibaba 2025.0.0.0；根 `pom.xml` 统一管理依赖与插件版本。前端仓库位于同级目录 `../didi-taxi-front`。
 
-```bash
-mvn -pl gateway spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl passenger-api spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl driver-api spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl admin-api spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl passenger spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl order spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl capacity spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl calculate spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl wallet spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl map spring-boot:run -Dspring-boot.run.profiles=local
-mvn -pl xxl-job-admin spring-boot:run -Dspring-boot.run.profiles=local
-```
+系统通过三端 BFF 对外提供能力：
 
-默认/生产启动采用失败关闭策略：除 `local/dev/test` 外，gateway、admin-api、passenger-api、driver-api 均拒绝开发 JWT 密钥或不足 32 字节的密钥；gateway 还要求鉴权和 audience 校验开启、三端密钥互不相同。生产至少需要：
+- 管理后台经 `/admin/**` 访问 `admin-api`。
+- 乘客端经 `/app/**` 访问 `passenger-api`。
+- 司机端经 `/driver/**` 访问 `driver-api`。
 
-```text
-GATEWAY_JWT_REQUIRE_AUTH=true
-JWT_SECRET_ADMIN=<独立随机值，至少 32 字节>
-JWT_SECRET_APP=<独立随机值，至少 32 字节>
-JWT_SECRET_DRIVER=<独立随机值，至少 32 字节>
-COUPON_CLAIM_IDENTITY_PHONE_HASH_SECRET=<独立随机值，至少 32 字节>
-```
+浏览器和 H5 正常联调统一经过 `gateway:18080`，不直接访问核心服务。
 
-不再支持以单一 `JWT_SECRET` 代替三套端侧密钥。手机号领取身份摘要使用 `HMAC-SHA256`；开发值仅放在各模块 `application-local/dev.yml`。
+## 一期业务范围
 
-常用测试命令：
+### 乘客与司机闭环
+
+一期覆盖以下最小业务闭环：
+
+1. 乘客通过短信或密码登录。
+2. 乘客提交起终点并创建订单。
+3. `order` 保存订单并通过 Outbox、Kafka 与 `capacity` 协作派单。
+4. `capacity` 根据司机在线、听单、资格和 GEO 位置选择候选司机。
+5. 司机确认接单后执行到达、开始和完成行程。
+6. 乘客可以取消等待中订单；司机拒单、确认超时或到达前取消后，订单按规则重新派单。
+7. 乘客和司机通过 WebSocket 接收变化提醒，并通过 HTTP 查询权威订单详情。
+
+### 一期核心边界
+
+- `gateway` 是浏览器/H5 的统一入口，负责 JWT、CORS 和可信 `X-User-Id` 注入。
+- BFF 只负责端侧身份校验、聚合和编排，不直接裁决订单状态。
+- `order` 是订单状态机和订单事件的权威来源。
+- `capacity` 是司机在线、听单、候选司机和派单匹配的权威来源。
+- Redis 只用于索引、缓存、Presence 和推送辅助，不能替代数据库权威状态。
+- 订单写操作必须遵守请求幂等和状态条件更新，避免重复写入与并发状态覆盖。
+- `ORDER_CHANGED` 只用于提示客户端重新拉取详情，HTTP 订单详情仍是展示权威。
+
+具体状态、超时、幂等键和接口契约以对应 TECH、API 和 TEST 文档为准，不在 README 中重复维护。
+
+## 本地开发入口
+
+后端服务通常由用户通过 IDEA 运行配置启动。是否允许操作服务进程以 [AGENTS.md](AGENTS.md) 为准。
+
+本地联调显式使用 `local` profile。除 `xxl-job-admin` 外，业务服务通过 Nacos 加载本地运行配置并完成服务注册；首次准备环境请先阅读 [Nacos 本地配置运行手册](docs/runbooks/capacity-service-Nacos本地配置运行手册.md)。
+
+常用验证命令：
 
 ```bash
 mvn test
 mvn verify
 mvn -pl passenger-api test
 mvn -pl order test
-mvn -pl wallet test
 ```
 
-`mvn verify` 会在各业务子模块生成 JaCoCo 覆盖率报告，例如
-`capacity/target/site/jacoco/index.html`；同目录还会生成可供 CI 或分析工具读取的 XML、CSV 报告。
-当前统一行覆盖率门槛为 1%，只用于防止 agent 或测试采集完全失效；覆盖率用于定位自动化测试盲区，
-不单独代表测试质量。后续应按模块基线逐步提高门槛。
+常用依赖包括 Nacos、MySQL、Redis、Kafka、XXL-JOB 和高德地图 Key。数据库脚本的归属、执行顺序和回填要求统一从 [SQL 说明](docs/sql/README.md)进入。
 
-本地依赖：
+`mvn verify` 会在各业务模块的 `target/site/jacoco/` 下生成 JaCoCo 报告。覆盖率只用于发现测试盲区，不能替代关键业务断言和端到端验收。
 
-- Nacos 3：本地控制台默认 `http://127.0.0.1:8080`，客户端 API 默认 `127.0.0.1:8848`；使用 `local` Namespace 和 `DIDI_TAXI` Group。
-- MySQL：各模块使用独立业务库，常见库包括 `capacity`、`calculate`、`order`、`passenger`、`wallet`、`xxl_job`。
-- Redis：登录 token version、司机 GEO 池、听单 Presence、WS/调度辅助键。
-- Kafka：订单 Outbox 与异步派单链路。
-- XXL-JOB：默认 `http://127.0.0.1:8081/xxl-job-admin`，默认账号 `admin / 123456`。
-- 高德地图 Key：`map` 服务调用外部地图能力时需要。
+## 一期文档导航
 
-首次使用 XXL-JOB 如本地没有 `xxl_job` 库，可执行：
+### MVP 闭环
 
-```bash
-mysql -h127.0.0.1 -uroot < xxl-job-admin/src/main/resources/db/tables_xxl_job.sql
-```
-
-钱包二期涉及的 `wallet`、`calculate`、`order.trip_order_settlement` SQL 草案见：
-
-- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TECH.md`
-
-## 关键边界
-
-- 三端前端正常都访问 `gateway:18080`，不直连核心服务。
-- `admin-api`、`passenger-api`、`driver-api` 是 BFF，只做端侧聚合、身份校验和编排。
-- `order` 是订单状态机和订单事件的权威来源。
-- `capacity` 是司机在线、听单、候选司机和派单匹配的权威来源。
-- `calculate` 是基础计价规则和优惠券规则的权威来源。
-- `wallet` 是免密协议和支付单的权威来源。
-- `trip_order` 不继续承载支付/优惠字段，订单结算金额写入 `trip_order_settlement`。
-- 优惠券会影响真实金额，开发支付、退款、对账、收入分配前必须先确认 PRD/TECH 中的金额口径。
-
-## 文档索引
-
-### 总览
-
-- `AGENTS.md`
-- `TODO与差距总览.md`
-- 各功能回归以同名 `*_TEST.md` 为准。
-
-### 基础设施与当前交付主线
-
-- `docs/runbooks/capacity-service-Nacos本地配置运行手册.md`
-- `docs/plans/乘客账号生命周期P1-P7执行计划索引.md`
-- `docs/runbooks/乘客账号生命周期P7灰度切换与前向恢复手册.md`
-
-当前 P1～P7 代码和 H5 链路已贯通，并已于 2026-08-03 按约定范围完成生命周期生产验收（2026-09-06 用户再次确认）。该次范围不含旧入口灰度观察与双 MySQL 并发专项；后续按运行监控和 Legacy Adapter 下线计划推进，不再将生命周期验收作为司机端开发的前置待办。详细优先级以 `TODO与差距总览.md` 为准。
-
-### 乘客/司机闭环
-
-- `第一期MVP_乘客派单司机闭环_PRD.md`
-- `第一期MVP_乘客派单司机闭环_TECH.md`
-- `第一期MVP_乘客派单司机闭环_API.md`
-- `第一期MVP_乘客派单司机闭环_TEST.md`
-- `乘客司机端_最小闭环接口调用文档.md`
-- `乘客司机端_Redis与听单下线策略.md`
+- [一期 MVP PRD](第一期MVP_乘客派单司机闭环_PRD.md)
+- [一期 MVP TECH](第一期MVP_乘客派单司机闭环_TECH.md)
+- [一期 MVP API](第一期MVP_乘客派单司机闭环_API.md)
+- [一期 MVP TEST](第一期MVP_乘客派单司机闭环_TEST.md)
+- [乘客司机端最小闭环接口调用文档](乘客司机端_最小闭环接口调用文档.md)
 
 ### 订单与派单
 
-- `订单与派单_两段式Outbox与Kafka_技术方案.md`
-- `订单与派单_订单服务幂等与并发方案说明.md`
-- `订单与派单_TEST.md`
-- `司机端_上线听单与接单设计.md`
+- [订单服务幂等与并发方案](订单与派单_订单服务幂等与并发方案说明.md)
+- [两段式 Outbox 与 Kafka 技术方案](订单与派单_两段式Outbox与Kafka_技术方案.md)
+- [订单与派单测试说明](订单与派单_TEST.md)
+- [司机上线听单与接单设计](司机端_上线听单与接单设计.md)
+- [Redis 与听单下线策略](乘客司机端_Redis与听单下线策略.md)
 
-### 登录、网关、WebSocket
+### 登录、网关与实时通知
 
-- `乘客端_登录_PRD.md`
-- `乘客端_登录_TECH.md`
-- `乘客端_登录_API.md`
-- `乘客端_登录_TEST.md`
-- `司机端_登录注册_PRD.md`
-- `司机端_登录注册_TECH.md`
-- `司机端_登录注册_API.md`
-- `司机端_登录注册_TEST.md`
-- `网关服务_设计.md`
-- `网关服务_技术.md`
-- `网关服务_TEST.md`
-- `司机端_WebSocket与实时协议入门.md`
-- `乘客端与司机端_WebSocket_对比.md`
+- [乘客端登录 PRD](乘客端_登录_PRD.md) / [TECH](乘客端_登录_TECH.md) / [API](乘客端_登录_API.md) / [TEST](乘客端_登录_TEST.md)
+- [司机端登录注册 PRD](司机端_登录注册_PRD.md) / [TECH](司机端_登录注册_TECH.md) / [API](司机端_登录注册_API.md) / [TEST](司机端_登录注册_TEST.md)
+- [网关服务设计](网关服务_设计.md) / [技术说明](网关服务_技术.md) / [测试说明](网关服务_TEST.md)
+- [司机端 WebSocket 与实时协议](司机端_WebSocket与实时协议入门.md)
+- [乘客端与司机端 WebSocket 对比](乘客端与司机端_WebSocket_对比.md)
 
-### 后台管理系统
+### 后台管理与地图
 
-- `后台管理系统_权限清单与鉴权设计.md`
-- `后台管理系统_权限与接口文档.md`
-- `后台管理系统_权限_TEST.md`
-- `后台管理系统_订单管理_PRD.md`
-- `后台管理系统_订单管理_TECH.md`
-- `后台管理系统_订单管理_API.md`
-- `后台管理系统_订单管理_TEST.md`
-- `后台管理系统_运力配置_PRD.md`
-- `后台管理系统_运力配置_TECH.md`
-- `后台管理系统_运力配置_API.md`
-- `后台管理系统_运力配置_TEST.md`
-- `后台管理系统_计价管理_PRD.md`
-- `后台管理系统_计价管理_TECH.md`
-- `后台管理系统_计价管理_API.md`
-- `后台管理系统_计价管理_TEST.md`
+- [后台权限设计](后台管理系统_权限清单与鉴权设计.md) / [接口文档](后台管理系统_权限与接口文档.md) / [测试说明](后台管理系统_权限_TEST.md)
+- [订单管理 PRD](后台管理系统_订单管理_PRD.md) / [TECH](后台管理系统_订单管理_TECH.md) / [API](后台管理系统_订单管理_API.md) / [TEST](后台管理系统_订单管理_TEST.md)
+- [运力配置 PRD](后台管理系统_运力配置_PRD.md) / [TECH](后台管理系统_运力配置_TECH.md) / [API](后台管理系统_运力配置_API.md) / [TEST](后台管理系统_运力配置_TEST.md)
+- [计价管理 PRD](后台管理系统_计价管理_PRD.md) / [TECH](后台管理系统_计价管理_TECH.md) / [API](后台管理系统_计价管理_API.md) / [TEST](后台管理系统_计价管理_TEST.md)
+- [地图服务测试说明](地图服务_TEST.md)
 
-### 地图
+## 状态与待办
 
-- `地图服务_TEST.md`
-
-### 二期功能
-
-- `二期功能/README.md`
-- `二期功能/乘客端_个人中心_我的订单_PRD.md`
-- `二期功能/乘客端_个人中心_我的订单_TECH.md`
-- `二期功能/乘客端_个人中心_我的订单_API.md`
-- `二期功能/乘客端_个人中心_我的订单_TEST.md`
-- `二期功能/乘客端_个人中心_设置_PRD.md`
-- `二期功能/乘客端_个人中心_设置_TECH.md`
-- `二期功能/乘客端_个人中心_设置_API.md`
-- `二期功能/乘客端_个人中心_设置_TEST.md`
-- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_PRD.md`
-- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TECH.md`
-- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_API.md`
-- `二期功能/乘客端_个人中心_我的钱包_免密支付与优惠券_TEST.md`
-- `二期功能/乘客端_券包与登录领券_PRD.md`
-- `二期功能/乘客端_券包与登录领券_TECH.md`
-- `二期功能/乘客端_券包与登录领券_API.md`
-- `二期功能/乘客端_券包与登录领券_TEST.md`
-- `二期功能/乘客端_福利签到_PRD.md`
-- `二期功能/乘客端_福利签到_TECH.md`
-- `二期功能/乘客端_福利签到_API.md`
-- `二期功能/乘客端_福利签到_SQL.md`
-- `二期功能/乘客端_福利签到_TEST.md`
-- `二期功能/乘客端_福利签到_异常补偿_TECH.md`
-- `二期功能/司机_换队功能_PRD.md`
-- `二期功能/司机_换队功能_TECH.md`
-- `二期功能/司机_换队功能_API.md`
-- `二期功能/司机端_行程记录与今日运营看板_PRD.md`
-- `二期功能/司机端_行程记录与今日运营看板_TECH.md`
-- `二期功能/司机端_行程记录与今日运营看板_API.md`
-- `二期功能/司机端_行程记录与今日运营看板_TEST.md`
-- `二期功能/司机端_行程记录与今日运营看板_SQL.md`
-- `二期功能/车队营销优惠券_PRD.md`
-- `二期功能/车队营销优惠券_TECH.md`
-- `二期功能/车队营销优惠券_API.md`
-- `二期功能/车队营销优惠券_SQL.md`
-- `二期功能/车队营销优惠券规则_讨论稿.md`
-
-### 完单结算 MVP
-
-- `docs/superpowers/specs/2026-07-17-完单结算_DESIGN.md`
-- `docs/superpowers/plans/2026-07-17-完单结算_PLAN.md`
-- `docs/api/完单结算_API.md`
-- `docs/testing/完单结算_TEST.md`
-- `乘客司机端_完单结算方案讨论.md`（历史讨论与决策追溯）
-
-本期已实现本地 mock 距离、预计时长和实际计费时长的结算闭环，并冻结计价规则；费用减优惠后支付。已提供结算查询和只接受 `channel`（`ALIPAY`/`WECHAT`）的主动支付入口；支付失败不后台定时自动重扣，未结清订单禁止新下单。真实支付宝/微信金融渠道、退款/对账以及司机金额展示、车队/运营公司固定金额或比例分成保留为后续专项。
+README 不重复维护动态待办。当前完成情况、遗留问题和后续优先级统一以 [TODO 与差距总览](TODO与差距总览.md)为准；专项验收结果以对应 `*_TEST.md` 为准。

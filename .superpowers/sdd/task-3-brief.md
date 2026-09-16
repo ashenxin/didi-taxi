@@ -104,6 +104,5 @@ passenger:
 
 ```bash
 git add passenger/src/main passenger/src/test
-git commit -m "功能：保护乘客内部认证状态接口"
+git commit -m "feat(passenger-auth): 保护乘客内部认证状态接口"
 ```
-

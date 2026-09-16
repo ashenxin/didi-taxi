@@ -114,6 +114,5 @@ public PassengerLogoutResult logout(long customerId, long tokenAuthEpoch) {
 
 ```bash
 git add passenger-api/src/main passenger-api/src/test
-git commit -m "功能：重接乘客登录登出与本地WS撤销"
+git commit -m "feat(passenger-auth): 重接登录登出与本地 WS 撤销"
 ```
-

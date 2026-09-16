@@ -344,20 +344,17 @@
 
 ---
 
-## 9. 待开发清单
+## 9. 已落地范围与后续收口
 
-- `passenger-api` 新增设置 Controller / Service。
-- `passenger-api` 新增调用 `passenger` 核心服务的 Feign 接口。
-- `passenger` 新增设置类账号服务接口。
-- `passenger` 新增更换手机号、注销账号 DTO。
-- `passenger` 新增设置场景验证码 key 与频控。
-- `passenger-api` 注销前接入订单非终态校验。
-- 乘客 H5 个人中心新增「设置」入口与页面。
-- 补充后端单测和前端基础回归。
+- `passenger-api` 已落地设置兼容 Controller / Service、新 Lifecycle API、鉴权门禁和对 `passenger` 核心服务的调用。
+- `passenger` 已落地换号/注销、验证码、持久化 Saga、Outbox、参与者和恢复能力；`order`、`wallet`、`calculate` 已接入各自生命周期边界。
+- 乘客 H5 已迁移到新 Lifecycle API，并支持 Operation 查询和受限会话下的注销进度处理。
+- 后端自动化、前端测试与构建已经纳入 P1～P7 验收。
+- 后续只继续旧 `settings` 入口的灰度观察、Legacy Adapter 下线和运行监控；双 MySQL 并发专项不在已确认验收范围。
 
 ---
 
 ## 10. 当前实现状态
 
-- 本文档为待开发技术设计。
-- 具体类名、方法名可在开发时按仓库现有命名风格落地。
+- P1～P7 已于 2026-08-03 按约定范围验收，并于 2026-09-06 再次确认。
+- 本文前半部分保留最初 `settings` 方案的设计背景；当前权威实现和运行状态以 `docs/plans/乘客账号生命周期P1-P7执行计划索引.md` 及对应运行手册为准。
