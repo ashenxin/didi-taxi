@@ -7,7 +7,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.ai.tool.annotation.Tool;
 
+import java.lang.reflect.Method;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,7 +32,7 @@ class PassengerRoutePoiToolsTest {
     }
 
     /**
-     * Agent 只能使用稳定的业务类型名称；这里锁定它们与高德父类型编码之间的映射，
+     * 路线规划工具只能使用稳定的业务类型名称；这里锁定它们与高德父类型编码之间的映射，
      * 防止后续修改提示词或工具参数时意外扩大 POI 搜索范围。
      */
     @ParameterizedTest
@@ -65,7 +67,23 @@ class PassengerRoutePoiToolsTest {
     }
 
     /**
-     * 未批准的地点类型必须在调用地图服务之前失败，避免模型产生的任意类型触发付费查询。
+     * 原始 POI 候选只能在 Java 路线规划流程内部使用，不能直接暴露给大模型。
+     * 这个测试用于防止后续误加 {@link Tool}，再次让乘客承担道路方向选择。
+     */
+    @Test
+    void poiSearchMethodIsNotExposedAsSpringAiTool() throws NoSuchMethodException {
+        Method method = PassengerRoutePoiTools.class.getMethod(
+                "searchWaypointCandidates",
+                String.class,
+                String.class,
+                String.class
+        );
+
+        assertThat(method.isAnnotationPresent(Tool.class)).isFalse();
+    }
+
+    /**
+     * 未批准的地点类型必须在调用地图服务之前失败，避免上游产生的任意类型触发付费查询。
      */
     @Test
     void rejectsUnsupportedPoiTypeBeforeCallingAmap() {

@@ -2,9 +2,9 @@ package com.sx.map.ai.tool;
 
 import com.sx.map.exception.AmapApiException;
 import com.sx.map.model.dto.AmapPoiCandidate;
+import com.sx.map.model.dto.PassengerRouteCandidate;
 import com.sx.map.model.dto.Point;
 import com.sx.map.model.dto.RouteResponse;
-import com.sx.map.model.dto.WaypointRoutePlanResponse;
 import com.sx.map.service.WaypointRoutePlanningService;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -12,25 +12,26 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 乘客指定途经点场景的真实路线规划工具。
+ * 乘客指定途经点场景的路线候选规划工具。
  *
- * 本工具只允许模型提交地点查询条件、已经选中的高德 POI ID，以及入口或出口角色。
- * 起点和终点由应用代码通过 {@link ToolContext} 注入，不会出现在模型可填写的 JSON Schema 中，
- * 因此模型不能篡改页面当前的起终点坐标。
+ * 模型只允许提交地点名称、地区和受控业务类型，不能提交POI ID、坐标或入口出口角色。
+ * 起点、终点以及可选的可信POI候选集合由应用代码通过 {@link ToolContext} 注入，不会出现
+ * 在模型可填写的JSON Schema中，因此模型不能挑选道路某一侧的POI。
  *
- * 为了防止模型伪造 POI，本工具会再次执行受控地点查询，并要求 {@code poiId} 与高德返回的
- * 候选完全匹配。只有匹配成功的候选才能交给 {@link WaypointRoutePlanningService} 算路。
+ * 编排层已经取得POI候选时，本工具直接使用可信上下文；当前编排尚未提供候选时，本工具会
+ * 通过 {@link PassengerRoutePoiTools} 重新执行一次受控高德查询。两种路径都不会接受模型
+ * 自报POI ID。{@link WaypointRoutePlanningService} 只返回地图导航证据已证明经过的路线。
  *
- * 完整路线通常包含大量折线坐标，直接作为工具结果发回模型会浪费 Token。
- * 因此工具只返回便于模型组织回答的路线摘要；完整结果写入调用方提供的
- * {@link AtomicReference}，由后续 Agent 接口直接返回给前端绘图。
+ * 本工具只处理具名地点规划，不核查页面当前路线，也不发现未指定名称的收费站方案。
+ * 完整路线包含大量折线，本工具只向模型返回地点及本路线预计时间等摘要；完整候选
+ * 集合写入调用方提供的 {@link AtomicReference}，供服务端生成卡片和保存快照。
  */
 @Component
 public class PassengerRoutePlanningTools {
@@ -42,12 +43,16 @@ public class PassengerRoutePlanningTools {
     public static final String DESTINATION_CONTEXT_KEY = "passengerRouteDestination";
 
     /**
-     * 完整路线结果接收器，值类型必须是 {@code AtomicReference<WaypointRoutePlanResponse>}。
+     * 可选的可信POI候选集合，值类型必须是 {@code List<AmapPoiCandidate>}。
+     * 该集合来自本轮受控POI查询，不能由客户端或模型构造。
+     */
+    public static final String POI_CANDIDATES_CONTEXT_KEY = "passengerRoutePoiCandidates";
+
+    /**
+     * 完整路线候选接收器，值类型必须是 {@code AtomicReference<List<PassengerRouteCandidate>>}。
      * 该对象只在本次 Agent 请求内使用，不能跨乘客或跨会话共享。
      */
     public static final String RESULT_REFERENCE_CONTEXT_KEY = "passengerRoutePlanResultReference";
-
-    private static final int MAX_POI_ID_LENGTH = 80;
 
     private final PassengerRoutePoiTools poiTools;
     private final WaypointRoutePlanningService routePlanningService;
@@ -59,71 +64,55 @@ public class PassengerRoutePlanningTools {
     }
 
     /**
-     * 根据已经确认的高德候选地点规划单途经点路线。
+     * 根据具名地点条件规划一组已验证实际经过的路线候选。
      *
-     * 只有以下两种情况可以调用：
-     * 1. 地点查询只返回一个高匹配候选，并且不存在方向歧义；
-     * 2. Agent 已经向乘客展示候选，并由乘客明确选择了其中一个。
-     *
-     * 如果候选 ID 不再存在，工具会失败并要求重新查询，不能退回到第一条候选。
-     *
-     * @param keywords      原始地点名称，例如“下沙服务区”
-     * @param region        可选城市或行政区，必须与候选查询时一致
-     * @param poiType       TOLL_STATION、SERVICE_AREA 或 GAS_STATION
-     * @param poiId         乘客确认的高德 POI ID
-     * @param waypointAccess ENTRANCE 表示从入口进入，EXIT 表示从出口方向通过
-     * @param toolContext   应用注入的可信起终点和完整结果接收器，不暴露给模型
-     * @return 供模型组织自然语言回答的轻量摘要，不包含路线折线
+     * @param keywords    原始地点名称，例如“下沙服务区”
+     * @param region      可选城市或行政区
+     * @param poiType     TOLL_STATION、SERVICE_AREA或GAS_STATION
+     * @param toolContext 应用注入的可信起终点、可选POI集合和完整结果接收器
+     * @return 供模型解释的轻量路线摘要集合，不包含折线和导航点坐标
      */
     @Tool(
-            name = "plan_route_via_selected_waypoint",
-            description = "按乘客已经确认的高德 POI 规划单途经点路线，并计算与普通路线的里程和时间差。"
-                    + "只有候选唯一且无方向歧义，或乘客明确选择候选后才能调用。"
-                    + "禁止猜测 POI ID，禁止把地点中心点当作入口或出口。"
+            name = "plan_route_candidates",
+            description = "按具名收费站、服务区或加油站规划已验证经过该地点的路线候选，"
+                    + "返回各路线预计总里程和行驶时间。本工具不核查当前路线，不能发现未指定名称的收费站方案。"
+                    + "模型不能提交或选择POI ID、坐标和入口出口角色。"
     )
-    public Map<String, Object> planRouteViaSelectedWaypoint(
+    public List<Map<String, Object>> planRouteCandidates(
             @ToolParam(description = "候选查询使用的地点名称，例如：下沙服务区")
             String keywords,
             @ToolParam(required = false, description = "候选查询使用的可选城市或行政区，例如：杭州、330100")
             String region,
             @ToolParam(description = "地点业务类型，只允许：TOLL_STATION、SERVICE_AREA、GAS_STATION")
             String poiType,
-            @ToolParam(description = "乘客确认的高德 POI ID，必须来自 search_waypoint_candidates 返回值")
-            String poiId,
-            @ToolParam(description = "途经点角色，只允许 ENTRANCE 或 EXIT")
-            String waypointAccess,
             ToolContext toolContext) {
-        String normalizedPoiId = requiredText(poiId, "POI ID", MAX_POI_ID_LENGTH);
-        WaypointRoutePlanningService.WaypointAccess access = parseAccess(waypointAccess);
-
+        // 同一请求内重复调用工具时，失败调用不能留下上一次的完整路线供编排层误用。
+        AtomicReference<List<PassengerRouteCandidate>> resultReference = resultReference(toolContext);
+        resultReference.set(null);
         // 先验证可信上下文，再发起可能计费的 POI 查询。上下文不完整时不能产生外部调用费用。
         Point origin = contextPoint(toolContext, ORIGIN_CONTEXT_KEY, "页面起点");
         Point destination = contextPoint(toolContext, DESTINATION_CONTEXT_KEY, "页面终点");
-        AtomicReference<WaypointRoutePlanResponse> resultReference = resultReference(toolContext);
 
-        List<AmapPoiCandidate> candidates = poiTools.searchWaypointCandidates(keywords, region, poiType);
-        AmapPoiCandidate selected = candidates.stream()
-                .filter(candidate -> normalizedPoiId.equals(candidate.getPoiId()))
-                .findFirst()
-                .orElseThrow(() -> new AmapApiException("已选择的 POI 不在最新高德候选中，请重新查询并确认"));
-
-        WaypointRoutePlanResponse result = routePlanningService.plan(
+        String normalizedKeywords = requiredText(keywords, "地点名称", 80);
+        String normalizedPoiType = requiredText(poiType, "地点业务类型", 30);
+        List<AmapPoiCandidate> candidates = trustedCandidates(toolContext);
+        if (candidates == null) {
+            candidates = poiTools.searchWaypointCandidates(normalizedKeywords, region, normalizedPoiType);
+        }
+        List<PassengerRouteCandidate> result = routePlanningService.planCandidates(
                 origin,
                 destination,
-                selected,
-                access
+                candidates,
+                normalizedPoiType
         );
-        resultReference.set(result);
-        return summary(result);
-    }
-
-    private static WaypointRoutePlanningService.WaypointAccess parseAccess(String value) {
-        String normalized = requiredText(value, "途经点角色", 20).toUpperCase(Locale.ROOT);
-        try {
-            return WaypointRoutePlanningService.WaypointAccess.valueOf(normalized);
-        } catch (IllegalArgumentException e) {
-            throw new AmapApiException("途经点角色仅支持 ENTRANCE 或 EXIT");
+        if (result == null || result.isEmpty()) {
+            throw new AmapApiException("本次没有已验证经过指定地点的路线");
         }
+        List<PassengerRouteCandidate> snapshot = List.copyOf(result);
+        List<Map<String, Object>> summaries = snapshot.stream()
+                .map(PassengerRoutePlanningTools::summary).toList();
+        resultReference.set(snapshot);
+        return summaries;
     }
 
     private static Point contextPoint(ToolContext toolContext, String key, String label) {
@@ -135,15 +124,37 @@ public class PassengerRoutePlanningTools {
     }
 
     /**
-     * Java 泛型在运行期会擦除，因此这里先验证容器类型；真正写入的对象始终由本工具创建。
+     * Java泛型在运行期会擦除，因此这里验证容器类型；真正写入的集合始终由规划服务创建。
      */
     @SuppressWarnings("unchecked")
-    private static AtomicReference<WaypointRoutePlanResponse> resultReference(ToolContext toolContext) {
+    private static AtomicReference<List<PassengerRouteCandidate>> resultReference(ToolContext toolContext) {
         Object value = contextValue(toolContext, RESULT_REFERENCE_CONTEXT_KEY);
         if (!(value instanceof AtomicReference<?> reference)) {
-            throw new AmapApiException("路线结果接收器上下文缺失");
+            throw new AmapApiException("路线候选结果接收器上下文缺失");
         }
-        return (AtomicReference<WaypointRoutePlanResponse>) reference;
+        return (AtomicReference<List<PassengerRouteCandidate>>) reference;
+    }
+
+    /**
+     * 编排层提供候选时验证集合元素类型并复制，防止本轮执行期间被其他线程修改。
+     */
+    private static List<AmapPoiCandidate> trustedCandidates(ToolContext toolContext) {
+        if (toolContext == null || toolContext.getContext() == null
+                || !toolContext.getContext().containsKey(POI_CANDIDATES_CONTEXT_KEY)) {
+            return null;
+        }
+        Object value = toolContext.getContext().get(POI_CANDIDATES_CONTEXT_KEY);
+        if (!(value instanceof List<?> values)) {
+            throw new AmapApiException("可信POI候选上下文类型错误");
+        }
+        List<AmapPoiCandidate> candidates = new ArrayList<>(values.size());
+        for (Object candidate : values) {
+            if (!(candidate instanceof AmapPoiCandidate poiCandidate)) {
+                throw new AmapApiException("可信POI候选集合包含非法元素");
+            }
+            candidates.add(poiCandidate);
+        }
+        return List.copyOf(candidates);
     }
 
     private static Object contextValue(ToolContext toolContext, String key) {
@@ -154,20 +165,17 @@ public class PassengerRoutePlanningTools {
     }
 
     /**
-     * 只把模型编写回答所需的事实放回模型上下文。折线仍保存在完整结果中交给前端。
+     * 只把模型解释本条路线所需的事实放回上下文。结果 ID、比较值、折线及导航点
+     * 均留在服务端；路线卡片和是否需要地点澄清由后续编排依据完整结果决定。
      */
-    private static Map<String, Object> summary(WaypointRoutePlanResponse result) {
-        RouteResponse route = result.getRoute();
+    private static Map<String, Object> summary(PassengerRouteCandidate candidate) {
+        RouteResponse route = candidate.route();
         Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("poiId", result.getWaypoint().getPoiId());
-        summary.put("poiName", result.getWaypoint().getName());
-        summary.put("waypointAccess", result.getWaypointAccess());
+        summary.put("poiName", candidate.waypoint().getName());
+        summary.put("passageMode", candidate.passageMode());
         summary.put("distanceMeters", route.getDistanceMeters());
         summary.put("durationSeconds", route.getDurationSeconds());
-        summary.put("distanceDeltaMeters", result.getDistanceDeltaMeters());
-        summary.put("durationDeltaSeconds", result.getDurationDeltaSeconds());
-        summary.put("comparisonAvailable", result.getReferenceRoute() != null);
-        summary.put("polylineAvailable", route.getPolyline() != null && !route.getPolyline().isEmpty());
+        summary.put("passageVerified", true);
         return summary;
     }
 

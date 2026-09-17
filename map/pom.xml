@@ -50,6 +50,16 @@
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
         </dependency>
+        <!-- AI 客服路线规划：DeepSeek 官方 API 接入；Key 经环境变量 DEEPSEEK_API_KEY 注入，不落盘 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-deepseek</artifactId>
+        </dependency>
+        <!-- AI 客服 Agent 编排：使用 Spring AI Alibaba ReactAgent、Graph 和 Hooks -->
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-agent-framework</artifactId>
+        </dependency>
         <!-- Zipkin / Brave：暂不接入时注释，避免无 Zipkin 进程时的上报异常；恢复接入时取消注释并启动 9411 -->
         <!--
         <dependency>
