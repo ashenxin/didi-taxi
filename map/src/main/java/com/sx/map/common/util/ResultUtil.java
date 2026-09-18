@@ -15,5 +15,13 @@ public class ResultUtil {
     public static <T> ResponseVo<T> requestError(String msg) {
         return error(ExceptionCode.BAD_REQUEST.getValue(), msg);
     }
+
+    public static <T> ResponseVo<T> unauthorized(String msg) {
+        return error(ExceptionCode.UNAUTHORIZED.getValue(), msg);
+    }
+
+    public static <T> ResponseVo<T> forbidden(String msg) {
+        return error(ExceptionCode.FORBIDDEN.getValue(), msg);
+    }
 }
 

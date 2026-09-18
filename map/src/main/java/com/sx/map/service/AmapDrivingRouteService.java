@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.map.config.AmapProperties;
 import com.sx.map.exception.AmapApiException;
+import com.sx.map.exception.AmapRouteNotFoundException;
 import com.sx.map.model.dto.Point;
 import com.sx.map.model.dto.RouteRequest;
 import com.sx.map.model.dto.RouteResponse;
@@ -107,8 +108,11 @@ public class AmapDrivingRouteService {
                 throw new AmapApiException("高德路径规划失败: " + info);
             }
             JsonNode paths = root.path("route").path("paths");
-            if (!paths.isArray() || paths.isEmpty()) {
-                throw new AmapApiException("高德未返回可用路线（paths 为空）");
+            if (!paths.isArray()) {
+                throw new AmapApiException("高德路线响应缺少 paths 数组");
+            }
+            if (paths.isEmpty()) {
+                throw new AmapRouteNotFoundException("高德未返回可用路线（paths 为空）");
             }
             List<DrivingRouteOption> options = new ArrayList<>(paths.size());
             for (JsonNode path : paths) {

@@ -191,3 +191,78 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_customer_phone_binding_version
     ON customer_phone_binding_history (customer_id, binding_version);
 CREATE UNIQUE INDEX IF NOT EXISTS uk_customer_phone_binding_active
     ON customer_phone_binding_history (active_customer_id);
+
+-- AI 会话两表对齐 sql/passenger_ai_conversation_patch.sql。
+-- H2 的 JSON 列会将 JDBC setString 传入的 JSON 文本编码成 JSON 字符串，因此用 TEXT
+-- 加 JSON 有效性约束模拟 MySQL JSON，保持 MyBatis 读取 payload_json 的语义一致。
+CREATE TABLE IF NOT EXISTS passenger_ai_conversation (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    conversation_no VARCHAR(64) NOT NULL,
+    customer_id BIGINT NOT NULL,
+    create_idempotency_key VARCHAR(128) NOT NULL,
+    scene_code VARCHAR(32) NOT NULL DEFAULT 'ROUTE_WAYPOINT',
+    title VARCHAR(128) NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+    last_message_sequence BIGINT NOT NULL DEFAULT 0,
+    memory_summary TEXT NULL,
+    summary_through_sequence BIGINT NOT NULL DEFAULT 0,
+    row_version BIGINT NOT NULL DEFAULT 0,
+    active_request_no VARCHAR(64) NULL,
+    active_request_started_at DATETIME(3) NULL,
+    last_message_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    delete_reason VARCHAR(32) NULL,
+    delete_operation_no VARCHAR(64) NULL,
+    deleted_at DATETIME(3) NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+        ON UPDATE CURRENT_TIMESTAMP(3)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_passenger_ai_conversation_no
+    ON passenger_ai_conversation (conversation_no);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_passenger_ai_conversation_create_idempotency
+    ON passenger_ai_conversation (customer_id, create_idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_passenger_ai_conversation_active_request
+    ON passenger_ai_conversation (active_request_no);
+CREATE INDEX IF NOT EXISTS idx_passenger_ai_conversation_customer_list
+    ON passenger_ai_conversation (customer_id, deleted_at, last_message_at, id);
+CREATE INDEX IF NOT EXISTS idx_passenger_ai_conversation_customer_scene
+    ON passenger_ai_conversation (customer_id, scene_code, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_passenger_ai_conversation_delete_operation
+    ON passenger_ai_conversation (delete_operation_no, id);
+
+CREATE TABLE IF NOT EXISTS passenger_ai_message (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    message_no VARCHAR(64) NOT NULL,
+    conversation_id BIGINT NOT NULL,
+    sequence_no BIGINT NOT NULL,
+    request_no VARCHAR(64) NOT NULL,
+    client_message_no VARCHAR(128) NULL,
+    reply_to_message_id BIGINT NULL,
+    role VARCHAR(16) NOT NULL,
+    message_type VARCHAR(32) NOT NULL DEFAULT 'TEXT',
+    content TEXT NOT NULL,
+    payload_json TEXT NULL CHECK (payload_json IS JSON),
+    status VARCHAR(16) NOT NULL DEFAULT 'COMPLETED',
+    model_provider VARCHAR(32) NULL,
+    model_name VARCHAR(64) NULL,
+    prompt_tokens INT NULL,
+    completion_tokens INT NULL,
+    failure_code VARCHAR(64) NULL,
+    failure_message VARCHAR(512) NULL,
+    completed_at DATETIME(3) NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+        ON UPDATE CURRENT_TIMESTAMP(3)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_passenger_ai_message_no
+    ON passenger_ai_message (message_no);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_passenger_ai_message_sequence
+    ON passenger_ai_message (conversation_id, sequence_no);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_passenger_ai_message_client_idempotency
+    ON passenger_ai_message (conversation_id, client_message_no);
+CREATE INDEX IF NOT EXISTS idx_passenger_ai_message_request
+    ON passenger_ai_message (request_no, id);
+CREATE INDEX IF NOT EXISTS idx_passenger_ai_message_reply
+    ON passenger_ai_message (reply_to_message_id);

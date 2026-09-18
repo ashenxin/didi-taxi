@@ -13,6 +13,9 @@ class PassengerActionResolverTest {
     @ParameterizedTest
     @CsvSource({
             "POST,/app/api/v1/auth/logout,SESSION_LOGOUT",
+            "POST,/app/api/v1/ai/conversations,AI_CONVERSATION_CREATE",
+            "POST,/app/api/v1/ai/conversations/AIC-1/messages/stream,AI_MESSAGE_SEND",
+            "GET,/app/api/v1/ai/conversations/AIC-1/messages,AI_HISTORY_READ",
             "POST,/app/api/v1/auth/ws-token,WS_CONNECT",
             "POST,/app/api/v1/orders,RIDE_CREATE",
             "POST,/app/api/v1/orders/create,RIDE_CREATE",

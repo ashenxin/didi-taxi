@@ -8,7 +8,8 @@ import org.springframework.context.annotation.Configuration;
         AppJwtProperties.class,
         CouponClaimIdentityProperties.class,
         PassengerInternalClientProperties.class,
-        OrderLifecycleInternalClientProperties.class
+        OrderLifecycleInternalClientProperties.class,
+        MapInternalClientProperties.class
 })
 public class AppJwtConfiguration {
 }

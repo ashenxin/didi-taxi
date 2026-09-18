@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sx.passenger.ai.dao.PassengerAiMessageMapper">
+    <select id="findUserByClientMessageNo"
+            resultType="com.sx.passenger.ai.entity.PassengerAiMessage">
+        SELECT *
+        FROM passenger_ai_message
+        WHERE conversation_id = #{conversationId}
+          AND client_message_no = #{clientMessageNo}
+    </select>
+
+    <select id="findLatestByRole"
+            resultType="com.sx.passenger.ai.entity.PassengerAiMessage">
+        SELECT *
+        FROM passenger_ai_message
+        WHERE conversation_id = #{conversationId}
+          AND role = #{role}
+        ORDER BY sequence_no DESC
+        LIMIT 1
+    </select>
+
+    <select id="findUserByRequestNo"
+            resultType="com.sx.passenger.ai.entity.PassengerAiMessage">
+        SELECT *
+        FROM passenger_ai_message
+        WHERE conversation_id = #{conversationId}
+          AND request_no = #{requestNo}
+          AND role = 'USER'
+    </select>
+
+    <select id="findAssistantByRequestNo"
+            resultType="com.sx.passenger.ai.entity.PassengerAiMessage">
+        SELECT *
+        FROM passenger_ai_message
+        WHERE conversation_id = #{conversationId}
+          AND request_no = #{requestNo}
+          AND role = 'ASSISTANT'
+    </select>
+
+    <select id="findByConversationRange"
+            resultType="com.sx.passenger.ai.entity.PassengerAiMessage">
+        SELECT *
+        FROM passenger_ai_message
+        WHERE conversation_id = #{conversationId}
+          AND sequence_no &lt; #{beforeSequence}
+        ORDER BY sequence_no DESC
+        LIMIT #{limit}
+    </select>
+</mapper>

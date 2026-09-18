@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sx.passenger.ai.dao.PassengerAiConversationMapper">
+    <select id="findByConversationNo"
+            resultType="com.sx.passenger.ai.entity.PassengerAiConversation">
+        SELECT *
+        FROM passenger_ai_conversation
+        WHERE conversation_no = #{conversationNo}
+          AND customer_id = #{customerId}
+    </select>
+
+    <select id="findByConversationNoForUpdate"
+            resultType="com.sx.passenger.ai.entity.PassengerAiConversation">
+        SELECT *
+        FROM passenger_ai_conversation
+        WHERE conversation_no = #{conversationNo}
+          AND customer_id = #{customerId}
+        FOR UPDATE
+    </select>
+
+    <select id="findByCreateIdempotency"
+            resultType="com.sx.passenger.ai.entity.PassengerAiConversation">
+        SELECT *
+        FROM passenger_ai_conversation
+        WHERE customer_id = #{customerId}
+          AND create_idempotency_key = #{key}
+    </select>
+
+    <update id="advanceTurn">
+        UPDATE passenger_ai_conversation
+        SET last_message_sequence = #{sequence},
+            active_request_no = #{requestNo},
+            active_request_started_at = #{startedAt},
+            last_message_at = #{lastMessageAt},
+            row_version = row_version + 1,
+            updated_at = #{lastMessageAt}
+        WHERE id = #{id}
+          AND row_version = #{expectedRowVersion}
+    </update>
+
+    <update id="releaseActiveRequest">
+        UPDATE passenger_ai_conversation
+        SET active_request_no = NULL,
+            active_request_started_at = NULL,
+            last_message_sequence = #{sequence},
+            last_message_at = #{lastMessageAt},
+            row_version = row_version + 1,
+            updated_at = #{lastMessageAt}
+        WHERE id = #{id}
+          AND active_request_no = #{requestNo}
+    </update>
+
+    <update id="advanceMessageSequence">
+        UPDATE passenger_ai_conversation
+        SET last_message_sequence = #{sequence},
+            last_message_at = #{lastMessageAt},
+            row_version = row_version + 1,
+            updated_at = #{lastMessageAt}
+        WHERE id = #{id}
+          AND row_version = #{expectedRowVersion}
+    </update>
+</mapper>

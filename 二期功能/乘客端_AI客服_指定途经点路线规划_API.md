@@ -3,10 +3,10 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | v2.5 |
-| 日期 | 2026-09-17 |
-| 状态 | 与 PRD v1.10、TECH v2.5 对齐的目标接口；地图层有部分验证代码，端到端接口尚未实现 |
+| 日期 | 2026-09-18 |
+| 状态 | 与 PRD v1.10、TECH v2.5 对齐的目标接口；map-service 短时缓存基础类已实现，端到端接口尚未实现 |
 | 产品范围 | 当前路线核查、指定地点路线卡片、收费站路线方案查询与选择 |
-| 本轮范围 | 对齐缓存失效后重新确认及全部对话消息持久化；代码和 TEST 后续讨论 |
+| 本轮范围 | 实现 map-service 短时地图上下文；持久化代码及新测试类待后续审阅 |
 
 ## 1. 契约原则
 
@@ -17,7 +17,7 @@
 5. 模型负责理解和解释；地图及服务端确定性校验负责地点、实际经过、路线和分钟数。合法绕行、掉头、与旧路线方向相反不是拒绝条件。仅靠近 POI 中心点不能当作实际到达；乘客明确要求进入、上高速或下高速时须验证对应动作。
 6. 交付到问答结论或路线卡片和预计时间为止；不启动导航、不下单、不追踪实际出行。
 
-以下路径和字段是待实施的目标契约。现有部分地图层路线验证代码，客服路线缓存、公开接口和端到端编排尚未完成；TEST 和 passenger_ai_conversation_patch.sql 仍有旧的必选候选流程，不能当作本版已实现接口。本机 passenger 库已只读核对：三张 AI 表存在且当前均为 0 行，结构仍按旧流程；其他环境未核验。本期先复用现有会话表和消息表，不预设结构迁移；若实际环境存在明确字段缺口，再提出最小增量迁移。
+以下路径和字段是待实施的目标契约。地图层已有路线验证代码和短时缓存基础类，公开接口与端到端编排尚未完成；旧 TEST 仍有必选候选流程，不能当作本版已实现接口。全量 `passenger_schema.sql` 和增量 `passenger_ai_conversation_patch.sql` 都只定义会话表与消息表，不创建旧路线任务表；旧表在各环境是否已删除需分别核验。已建消息表移除冗余 `customer_id` 使用独立迁移；其他明确字段缺口再提出最小增量迁移。
 
 ## 2. 认证、归属与公共类型
 
@@ -80,7 +80,7 @@ routeRef 是地图服务生成的随机、不透明路线快照引用，可随�
 
 保持以下公开路径：POST /app/api/v1/ai/conversations 创建会话；GET /app/api/v1/ai/conversations 查询列表；GET /app/api/v1/ai/conversations/{conversationNo}/messages 查询历史；GET /app/api/v1/ai/conversations/{conversationNo}/requests/{requestNo} 查询请求状态；DELETE /app/api/v1/ai/conversations/{conversationNo} 删除会话。
 
-创建会话由当前认证乘客和 Idempotency-Key 幂等定位。每次新进入客服可创建新会话；主动打开历史会话才读取其历史。删除和账号注销后旧会话不可见，迟到结果不得写回。历史 route.card 持久保存说明文字、起终点和途经点名称、里程、预计时间及失效时间；完整折线只在地图服务缓存仍有效时可按归属临时读取。过期后历史卡片不展开完整折线，route.options 仅保留文字和各选项摘要且不可再选。分页大小上限建议 50。
+创建会话由当前认证乘客和 Idempotency-Key 幂等定位。每次新进入客服可创建新会话；主动打开历史会话才读取其历史。删除和账号注销后旧会话不可见，迟到结果不得写回。历史消息中的乘客消息返回原 `clientMessageNo`（该轮客户端 Idempotency-Key），供断流后与本地待发送消息精确合并；客服消息的该字段为 null。历史 route.card 持久保存说明文字、起终点和途经点名称、里程、预计时间及失效时间；完整折线只在地图服务缓存仍有效时可按归属临时读取。过期后历史卡片不展开完整折线，route.options 仅保留文字和各选项摘要且不可再选。分页大小上限建议 50。
 
 过期历史卡片的 routeCard 示例；polyline 字段不存在，里程和时间仍可展示：
 
@@ -170,7 +170,7 @@ POST /app/api/v1/ai/conversations/{conversationNo}/route-tasks/{taskNo}/route-op
 | turn.failed | 稳定错误码和可读说明 |
 | ping | 心跳，不改变业务状态 |
 
-内容事件的 assistantMessage 包含 messageNo、requestNo、role、messageType、content、payload、createdAt；route.card、route.options、place.choices 的 payload 分别按第 2 节类型给出。相同幂等请求完成后的重放不重新调用模型或高德；服务端只在地图快照仍有效时补出完整路线，否则返回已持久化的文字和里程、时间摘要及失效标记，再发送 turn.completed。
+内容事件的 assistantMessage 包含 messageNo、requestNo、role、messageType、content、payload、createdAt；route.card、route.options、place.choices 的 payload 分别按第 2 节类型给出。相同幂等请求完成后的重放不重新调用模型或高德；服务端只在地图快照仍有效时补出完整路线，否则返回已持久化的文字和里程、时间摘要及失效标记，再发送 turn.completed。若原请求已落库为失败，同一幂等键只重放原错误码和可读说明的 turn.failed，不发送成功内容事件或 turn.completed。
 
 首次识别完整起终点但乘客尚未明确确认时，先以普通文字事件请求确认；该轮不包含路线卡片、经过结论或预计时间。客服确认提问先写入会话历史。乘客随后仍通过第 4.2 节的文字接口回复 `{"content":"对"}`，该回复也写入历史；map-service 仅在对应的待确认地点与原始意图仍处于有效短时缓存时继续，失效则重新询问两端：
 
@@ -208,9 +208,10 @@ data: {"requestNo":"AIR-example-3","assistantMessage":{"messageType":"ROUTE_OPTI
 
 保持创建会话、读取历史、读取有限模型记忆、删除会话，以及以下只围绕对话消息的短事务接口语义：
 
-- POST /api/v1/internal/ai/conversations/{conversationNo}/turns/begin：核对 customerId、会话归属、幂等键和单会话活动请求，按顺序保存本轮乘客消息，返回 requestNo、消息序号、有限历史及最新客服确认提问。点击地点或路线方案的选择也应保存为乘客在该对话中的选择消息。
-- POST /api/v1/internal/ai/conversations/{conversationNo}/turns/{requestNo}/complete：再次核对归属、活动请求、幂等与会话未删除状态，按顺序保存本轮客服消息并释放活动请求。客服确认提问、地点候选、路线方案、核查结论和路线卡片都属于客服消息；卡片 `payload_json` 仅含展示摘要及 `routeRef`，不保存完整折线、导航步骤或权威地点身份。成功持久化后才发送对应的最终 SSE 事件。
-- POST /api/v1/internal/ai/conversations/{conversationNo}/turns/{requestNo}/fail：保存客服可读的失败说明或稳定错误消息并释放活动请求；若地图缓存已写入但消息未完成，未引用的快照按短时有效期清理。
+- POST /api/v1/internal/ai/conversations/{conversationNo}/turns/begin：在会话行锁内核对 customerId、会话归属、幂等键和单会话活动请求，同键并发仅一轮可以开始；按顺序保存本轮乘客消息，返回 requestNo、消息序号、有限历史及最新客服确认提问。活动请求超过接管阈值时先保存旧轮次失败消息，同键重试重放该失败，不再次执行模型或地图；不同键可开启新轮次，旧结果不能迟到覆盖。点击地点或路线方案的选择也应保存为乘客在该对话中的选择消息。
+- POST /api/v1/internal/ai/conversations/{conversationNo}/turns/{requestNo}/complete：再次核对归属、活动请求、幂等与会话未删除状态；获取会话行锁后重查同一请求的客服消息，命中则重放已保存结果，否则按顺序保存本轮客服消息并释放活动请求。客服确认提问、地点候选、路线方案、核查结论和路线卡片都属于客服消息；卡片 `payload_json` 仅含展示摘要及 `routeRef`，不保存完整折线、导航步骤或权威地点身份。成功持久化后才发送对应的最终 SSE 事件。
+- POST /api/v1/internal/ai/conversations/{conversationNo}/turns/{requestNo}/fail：获取会话行锁后同样重查同一请求的客服消息；已有结果则重放，否则保存客服可读的失败说明或稳定错误消息并释放活动请求。若地图缓存已写入但消息未完成，未引用的快照按短时有效期清理。
+- POST /api/v1/internal/ai/route/replay：passenger-api 从已通过会话归属校验的路线卡消息取得 routeRef，连同可信 customerId 和 conversationNo 交给 map-service；地图服务按快照里的条件版本重验当前已确认条件、乘客、会话和有效期。响应的 routeCard 在可恢复时包含完整折线，不可恢复时为 null。BFF 重放 SSE 时统一输出 payload.routeCard；不可恢复时使用已落库的无折线摘要并标记 expired=true，不重新算路。
 
 passenger-service 不新增已确认地点、待恢复意图、当前路线引用或路线任务的持久化业务状态。它保存乘客与客服实际发生的完整对话，利用现有会话和消息字段实现顺序、幂等、归属与删除。map-service 的地点、选项和路线缓存失效后，客服重新确认起终点的问题与乘客回复也通过上述消息轮次写入同一会话。最新卡片消息的 `routeRef` 可由服务端取出并交给 map-service 核验；过期消息中的地点名称和引用只能用于展示或组织重新确认的话术，不能充当地图地点或路线仍有效的证据。
 
@@ -222,7 +223,7 @@ map-service 输出 agent.status、agent.delta、agent.result 或 agent.failed。
 
 收费站方案发现及当前路线核查可以由 map-service 中确定性业务服务完成，不要求将原始 POI 查询或完整当前路线开放给模型。具体 Agent Tool 名称、接口类和方法签名在代码讨论时确定。
 
-map-service 另需内部能力：按可信乘客 ID、会话编号短时保存已核对两端、待确认地点与意图及地点或路线选项；按有效两端生成并缓存真实默认路线；按内部 routeRef 和条件版本读取同一条完整路线以核查地点或重建有效期内的卡片；按 routeOptionId 解析已验证收费站方案的完整快照。缓存由 map-service 管理，拟用 Redis，依赖与配置尚未接入。随机 routeRef、地点和路线选项 ID 分别绑定乘客、会话、条件版本、地图事实及失效时间；读取时重验归属和时效。完整路线与相关临时上下文暂定 5 分钟有效，缓存丢失等同失效；客服先重新确认起终点，再重新查询和规划。地图服务不保存聊天历史，passenger-service 不持久化完整路线或地图临时上下文。
+map-service 另需内部能力：按可信乘客 ID、会话编号短时保存已核对两端、待确认地点与意图及地点或路线选项；按有效两端生成并缓存真实默认路线；按内部 routeRef 和条件版本读取同一条完整路线以核查地点或重建有效期内的卡片；按 routeOptionId 解析已验证收费站方案的完整快照。缓存由 map-service 管理，Redis 依赖与短时缓存基础类已接入，运行环境连接配置仍待核验。随机 routeRef、地点和路线选项 ID 分别绑定乘客、会话、条件版本、地图事实及失效时间；读取时重验归属和时效。完整路线与相关临时上下文暂定 5 分钟有效，缓存丢失等同失效；客服先重新确认起终点，再重新查询和规划。地图服务不保存聊天历史，passenger-service 不持久化完整路线或地图临时上下文。
 
 map-service 内部完整快照的基础字段为：`routeRef`、`customerId`、`conversationNo`、`conditionVersion`；服务端确认的 `origin`、`destination`（名称、地址或城市、可取得的地图地点 ID、GCJ02 坐标）；`provider`、`coordinateSystem=GCJ02`、`travelMode=DRIVING`、`routeKind=DEFAULT|VIA_PLACE`；`distanceMeters`、`durationSeconds`、按行驶顺序排列的完整 `polyline`、`navigationSteps`；以及 `generatedAt`、`expiresAt`。每个导航步骤保留 `instruction`、`action`、`assistantAction`、`orientation`、`roadName` 和该步骤的 `polyline`。坐标顺序固定为经度、纬度，不能混用页面传入的其他坐标系。完整折线或必要导航步骤缺失时不得将快照用于“确实经过”的结论。
 
@@ -234,7 +235,7 @@ passenger-service 只使用现有会话表和消息表保存乘客与客服对�
 
 同一会话同一时刻最多一个活动请求；迟到模型或地图结果在写入客服消息前须核对活动请求及 map-service 当前条件版本。成功卡片持久化后，其 `routeRef` 才成为后续“这条路线”的引用；持久化失败的未展示快照不会成为当前路线，按缓存有效期清理。地点、方案和完整路线快照暂定 5 分钟有效；缓存过期后旧选项不可再选，旧路线不可再核查，客服先在原会话重新询问并保存两端确认，再按本轮条件查询或规划。历史消息只显示原有文字、里程和预计时间，完整折线不可再展开。
 
-当前 `passenger_ai_conversation` 已有会话归属、消息序号与活动请求字段，`passenger_ai_message` 已有正文、`payload_json`、幂等键及回复关联字段；本期先复用这些字段。现有 `passenger_ai_route_task` 的 WAITING_ROUTE_SELECTION、SELECTED 和候选快照属于旧必选候选流程，不作为本版实现前提。以已核对的本机结构看，现阶段没有确定的新增列需求，不预设 SQL 增量迁移；落地前仍需核对实际环境的字段和约束。确有缺口时才为那个缺口编写独立迁移；`CREATE TABLE IF NOT EXISTS` 不会升级已有表。
+当前 `passenger_ai_conversation` 已有会话归属、消息序号与活动请求字段，`passenger_ai_message` 已有正文、`payload_json`、幂等键及回复关联字段；消息的乘客归属通过会话表校验，不再在消息表冗余存储 `customer_id`。已有消息表需单独执行 `passenger_ai_message_drop_customer_id_patch.sql`；更新 `CREATE TABLE IF NOT EXISTS` 脚本不会移除旧列。旧 `passenger_ai_route_task` 的 WAITING_ROUTE_SELECTION、SELECTED 和候选快照属于已退出的必选候选流程，不在本期 SQL 中创建，也不作为本版实现前提。落地前仍需核对实际环境的字段和约束；其他明确缺口再针对性迁移。
 
 ## 8. 错误契约
 
@@ -248,6 +249,7 @@ passenger-service 只使用现有会话表和消息表保存乘客与客服对�
 | AI_CURRENT_ROUTE_EXPIRED | 当前路线快照已过期；客服须先在原会话重新确认起终点，再生成并展示本轮路线 |
 | AI_REQUEST_IN_PROGRESS | 同会话另有活动请求 |
 | AI_REQUEST_PROCESSING | 同幂等请求仍执行中 |
+| AI_REQUEST_EXPIRED | 活动请求超时后已落库为失败；同键重试重放失败，迟到成功结果不得覆盖 |
 | AI_REQUEST_VERSION_CONFLICT | 地图服务短时条件版本变化 |
 | AI_PLACE_CHOICE_NOT_FOUND | 地点选项不存在或不属本轮 |
 | AI_PLACE_CHOICE_EXPIRED | 地点选项已过期 |
@@ -256,15 +258,18 @@ passenger-service 只使用现有会话表和消息表保存乘客与客服对�
 | AI_ROUTE_ALREADY_COMPLETED | 不同请求试图替换已完成方案 |
 | AI_MESSAGE_TOO_LONG | 用户文本超过上限 |
 | AI_POI_NOT_FOUND | 地点查无结果 |
+| AI_POI_LOOKUP_FAILED | 地点查询服务暂时失败 |
 | AI_ROUTE_UNVERIFIABLE | 不能证明路线实际经过指定地点或动作 |
 | AI_ROUTE_NOT_FOUND | 本次条件下未找到可行路线 |
 | AI_PROVIDER_TIMEOUT | 模型超时 |
+| AI_PROVIDER_UNAVAILABLE | 模型服务暂时不可用 |
 | AI_MAP_TIMEOUT | 地图超时 |
+| AI_MAP_UNAVAILABLE | 地图算路暂时不可用或返回的数据无效 |
 | AI_UPSTREAM_LIMITED | 上游限流 |
 | AI_INTERNAL_ERROR | 未分类内部错误 |
 
-缺少起点或终点属于正常追问，不作为地图失败。地图缓存或选项过期可在本轮转成客服重新确认两端的 `answer.completed`，并把提问持久化；上述过期错误码用于内部区分原因，不应让乘客只看到失败代码。当前路线证据不足的 UNVERIFIABLE 和本次查询未找到路线的 NOT_FOUND_IN_QUERY 是业务结论，不得混为 AI_ROUTE_NOT_FOUND。
+缺少起点或终点、地点搜索返回零条候选均属于正常追问，不作为地图失败。模型调用异常属于 AI_PROVIDER_UNAVAILABLE，返回乘客可读的暂时无法处理提示，不伪装成缺少起终点；模型输出无法解析时仍可请乘客重新描述。地图内部 AI 路线接口的业务失败使用真实 HTTP 状态，并通过 `X-Ai-Error-Code` 响应头传递稳定错误码；passenger-api 按错误码形成 `turn.failed`，不依据响应体的数字状态码猜测原因。地图缓存或选项过期可在本轮转成客服重新确认两端的 `answer.completed`，并把提问持久化；上述过期错误码用于内部区分原因，不应让乘客只看到失败代码。当前路线证据不足的 UNVERIFIABLE 和本次查询未找到路线的 NOT_FOUND_IN_QUERY 是业务结论，不得混为 AI_ROUTE_NOT_FOUND。
 
 ## 9. 非本期与实施边界
 
-不提供地图页路线导入客服、路线下单、司机导航、实际行驶核验、停车计费或费用透明问答。目标接口还没有 Controller 或 Agent 编排的完整实现；map-service 缓存接入、客服默认路线入口、现有会话与消息表的实际兼容性和地图证据强度仍需在代码讨论前核对。本轮对齐 PRD、TECH 和 API；TEST 最后按定稿实现修改。
+不提供地图页路线导入客服、路线下单、司机导航、实际行驶核验、停车计费或费用透明问答。map-service 缓存基础类与客服默认路线服务已实现；目标接口仍没有 Controller 或 Agent 编排的完整实现，实际 Redis 连接、公开调用链、现有会话与消息表的兼容性及地图证据强度仍需核对。短时层代码审阅后再处理持久化实现和 TEST。

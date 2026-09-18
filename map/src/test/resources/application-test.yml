@@ -9,6 +9,3 @@ spring:
     model:
       # 测试环境不自动创建真实 ChatModel，避免因未配置外部模型 Key 导致上下文启动失败
       chat: none
-    dashscope:
-      # 单元测试无 DashScope API Key，关闭自动装配避免启动失败
-      enabled: false

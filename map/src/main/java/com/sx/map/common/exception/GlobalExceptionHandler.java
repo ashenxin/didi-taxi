@@ -3,10 +3,12 @@ package com.sx.map.common.exception;
 import com.sx.map.common.enums.ExceptionCode;
 import com.sx.map.common.util.ResultUtil;
 import com.sx.map.common.vo.ResponseVo;
+import com.sx.map.exception.AiRouteBusinessException;
 import com.sx.map.exception.AmapApiException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.annotation.Validated;
@@ -57,6 +59,22 @@ public class GlobalExceptionHandler {
     public ResponseVo<?> amapApiExceptionHandler(AmapApiException e) {
         log.warn("高德API异常：{}", e.getMessage());
         return ResultUtil.requestError(e.getMessage());
+    }
+
+    @ExceptionHandler(AiRouteBusinessException.class)
+    public ResponseEntity<ResponseVo<?>> aiRouteBusinessExceptionHandler(AiRouteBusinessException e) {
+        log.warn("AI 路线业务异常 code={} status={} msg={}",
+                e.getStableCode(), e.getStatus().value(), e.getMessage(), e.getCause());
+        return ResponseEntity.status(e.getStatus())
+                .header("X-Ai-Error-Code", e.getStableCode())
+                .body(ResultUtil.error(e.getStatus().value(), e.getMessage()));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ResponseVo<?>> illegalArgumentExceptionHandler(IllegalArgumentException e) {
+        log.warn("请求参数非法：{}", e.getMessage());
+        return ResponseEntity.badRequest()
+                .body(ResultUtil.error(ExceptionCode.BAD_REQUEST.getValue(), e.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)

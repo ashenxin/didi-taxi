@@ -9,6 +9,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.sx.passengerapi.auth.action.PassengerActionCode.ACCOUNT_CANCEL;
+import static com.sx.passengerapi.auth.action.PassengerActionCode.AI_CONVERSATION_CREATE;
+import static com.sx.passengerapi.auth.action.PassengerActionCode.AI_HISTORY_READ;
+import static com.sx.passengerapi.auth.action.PassengerActionCode.AI_MESSAGE_SEND;
 import static com.sx.passengerapi.auth.action.PassengerActionCode.AUTO_PAY_MANAGE;
 import static com.sx.passengerapi.auth.action.PassengerActionCode.AUTO_PAY_SIGN;
 import static com.sx.passengerapi.auth.action.PassengerActionCode.BENEFIT_READ;
@@ -59,7 +62,10 @@ public class PassengerActionResolver {
             rule("GET", "/app/api/v1/wallet/coupons", COUPON_READ),
             rule("POST", "/app/api/v1/benefits/sign-in", BENEFIT_SIGN_IN),
             rule("GET", "/app/api/v1/benefits/overview", BENEFIT_READ),
-            rule("GET", "/app/api/v1/benefits/points", BENEFIT_READ));
+            rule("GET", "/app/api/v1/benefits/points", BENEFIT_READ),
+            rule("POST", "/app/api/v1/ai/conversations", AI_CONVERSATION_CREATE),
+            rule("POST", "/app/api/v1/ai/conversations/{conversationNo}/messages/stream", AI_MESSAGE_SEND),
+            rule("GET", "/app/api/v1/ai/conversations/{conversationNo}/messages", AI_HISTORY_READ));
 
     public Optional<PassengerActionCode> resolve(String method, PathContainer path) {
         if (method == null || path == null) {

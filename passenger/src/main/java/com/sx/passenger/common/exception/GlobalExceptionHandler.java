@@ -1,5 +1,7 @@
 package com.sx.passenger.common.exception;
 
+import com.sx.passenger.ai.exception.AiConversationConflictException;
+import com.sx.passenger.ai.exception.AiConversationNotFoundException;
 import com.sx.passenger.auth.session.AuthEpochConflictException;
 import com.sx.passenger.common.enums.ExceptionCode;
 import com.sx.passenger.common.util.ResultUtil;
@@ -79,6 +81,21 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ResponseVo<?>> adminPermissionException(AdminPermissionException e) {
         log.warn("管理端权限异常：{}", e.getMessage());
         return ResponseEntity.status(403).body(ResultUtil.forbidden(e.getMessage()));
+    }
+
+    @ExceptionHandler(AiConversationNotFoundException.class)
+    public ResponseEntity<ResponseVo<?>> aiConversationNotFound(AiConversationNotFoundException e) {
+        log.warn("AI 会话不存在或归属不匹配：{}", e.getMessage());
+        return ResponseEntity.status(404)
+                .body(ResultUtil.error(ExceptionCode.NOT_FOUND.getValue(), e.getMessage()));
+    }
+
+    @ExceptionHandler(AiConversationConflictException.class)
+    public ResponseEntity<ResponseVo<?>> aiConversationConflict(AiConversationConflictException e) {
+        log.warn("AI 会话轮次冲突 code={} msg={}", e.getCode(), e.getMessage());
+        return ResponseEntity.status(409)
+                .header("X-Ai-Error-Code", e.getCode())
+                .body(ResultUtil.error(ExceptionCode.CONFLICT.getValue(), e.getMessage()));
     }
 
     @ExceptionHandler(AdminResourceNotFoundException.class)
