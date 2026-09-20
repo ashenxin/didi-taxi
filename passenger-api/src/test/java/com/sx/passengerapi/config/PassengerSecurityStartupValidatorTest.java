@@ -18,7 +18,7 @@ class PassengerSecurityStartupValidatorTest {
 
         assertThrows(IllegalStateException.class,
                 () -> PassengerSecurityStartupValidator.validateStrict(jwt, claim,
-                        internal("strong-passenger-internal-token-32bytes"), strongOrderToken()));
+                        internal("strong-passenger-internal-token-32bytes"), strongOrderToken(), strongMapToken()));
     }
 
     @Test
@@ -29,7 +29,7 @@ class PassengerSecurityStartupValidatorTest {
         claim.setPhoneHashSecret("coupon-2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG4Km8Qp");
 
         assertDoesNotThrow(() -> PassengerSecurityStartupValidator.validateStrict(
-                jwt, claim, internal("prod-passenger-internal-token-32bytes"), strongOrderToken()));
+                jwt, claim, internal("prod-passenger-internal-token-32bytes"), strongOrderToken(), strongMapToken()));
     }
 
     @Test
@@ -41,7 +41,7 @@ class PassengerSecurityStartupValidatorTest {
                 "prod-passenger-change-me-01234567890123456789"}) {
             IllegalStateException failure = assertThrows(IllegalStateException.class,
                     () -> PassengerSecurityStartupValidator.validateStrict(
-                            jwt, claim, internal(token), strongOrderToken()));
+                            jwt, claim, internal(token), strongOrderToken(), strongMapToken()));
             assertThat(failure).hasMessageContaining("PASSENGER_INTERNAL_TOKEN");
         }
     }
@@ -54,7 +54,7 @@ class PassengerSecurityStartupValidatorTest {
         assertThat(assertThrows(IllegalStateException.class,
                 () -> PassengerSecurityStartupValidator.validateStrict(
                         jwt, strongCouponIdentity(), internal("prod-passenger-internal-token-32bytes"),
-                        strongOrderToken())))
+                        strongOrderToken(), strongMapToken())))
                 .hasMessageContaining("app.jwt.audience must be app-bff");
     }
 
@@ -66,6 +66,7 @@ class PassengerSecurityStartupValidatorTest {
             assertThrows(IllegalStateException.class, () -> new PassengerSecurityStartupValidator(
                     new AppJwtProperties(), new CouponClaimIdentityProperties(),
                     internal("dev-passenger-internal-change-me"), orderToken("dev-order-lifecycle-change-me"),
+                    mapToken("dev-map-internal-change-me"),
                     environment).afterPropertiesSet());
         }
     }
@@ -77,12 +78,13 @@ class PassengerSecurityStartupValidatorTest {
         assertDoesNotThrow(() -> new PassengerSecurityStartupValidator(
                 new AppJwtProperties(), new CouponClaimIdentityProperties(),
                 internal("dev-passenger-internal-change-me"), orderToken("dev-order-lifecycle-change-me"),
+                mapToken("dev-map-internal-change-me"),
                 local).afterPropertiesSet());
 
         for (String token : new String[]{" prod-passenger-internal-token-32bytes",
                 "prod-passenger-internal-token-32bytes "}) {
             assertThat(assertThrows(IllegalStateException.class, () -> PassengerSecurityStartupValidator.validateStrict(
-                    strongJwt(), strongCouponIdentity(), internal(token), strongOrderToken())))
+                    strongJwt(), strongCouponIdentity(), internal(token), strongOrderToken(), strongMapToken())))
                     .hasMessageContaining("PASSENGER_INTERNAL_TOKEN");
         }
     }
@@ -95,8 +97,21 @@ class PassengerSecurityStartupValidatorTest {
             assertThat(assertThrows(IllegalStateException.class,
                     () -> PassengerSecurityStartupValidator.validateStrict(
                             strongJwt(), strongCouponIdentity(),
-                            internal("prod-passenger-internal-token-32bytes"), orderToken(token))))
+                            internal("prod-passenger-internal-token-32bytes"), orderToken(token), strongMapToken())))
                     .hasMessageContaining("ORDER_LIFECYCLE_INTERNAL_TOKEN");
+        }
+    }
+
+    @Test
+    void productionRejectsMissingShortAndDevelopmentMapToken() {
+        for (String token : new String[]{null, "", "too-short",
+                "dev-map-internal-012345678901234567890123",
+                "prod-map-change-me-012345678901234567890123"}) {
+            assertThat(assertThrows(IllegalStateException.class,
+                    () -> PassengerSecurityStartupValidator.validateStrict(
+                            strongJwt(), strongCouponIdentity(),
+                            internal("prod-passenger-internal-token-32bytes"), strongOrderToken(), mapToken(token))))
+                    .hasMessageContaining("MAP_INTERNAL_TOKEN");
         }
     }
 
@@ -124,6 +139,16 @@ class PassengerSecurityStartupValidatorTest {
 
     private static OrderLifecycleInternalClientProperties orderToken(String token) {
         OrderLifecycleInternalClientProperties properties = new OrderLifecycleInternalClientProperties();
+        properties.setToken(token);
+        return properties;
+    }
+
+    private static MapInternalClientProperties strongMapToken() {
+        return mapToken("map-4Km8Qp2Xv7Ls9Rt5Nz1Hc6Wd3Fy0BjAG");
+    }
+
+    private static MapInternalClientProperties mapToken(String token) {
+        MapInternalClientProperties properties = new MapInternalClientProperties();
         properties.setToken(token);
         return properties;
     }

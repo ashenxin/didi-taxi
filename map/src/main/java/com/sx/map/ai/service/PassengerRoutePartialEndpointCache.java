@@ -7,7 +7,6 @@ import com.sx.map.ai.model.PassengerRouteSnapshot.Place;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -20,7 +19,6 @@ import java.util.Optional;
  * 缺少另一端时不得算路。下一轮只能用 passenger-service 最新已持久化追问的
  * 服务端 requestNo 读取本记录；缓存失效后必须重新询问，不能用聊天摘要恢复坐标。
  */
-@Service
 public class PassengerRoutePartialEndpointCache {
     private static final Logger log = LoggerFactory.getLogger(PassengerRoutePartialEndpointCache.class);
     private static final String KEY_PREFIX = "map:ai:route:partial-endpoint:v1:";

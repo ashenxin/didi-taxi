@@ -105,6 +105,11 @@ public class AmapDrivingRouteService {
             String status = root.path("status").asText("");
             if (!"1".equals(status)) {
                 String info = root.path("info").asText("unknown");
+                String infoCode = root.path("infocode").asText("");
+                if (isRouteNotFound(infoCode, info)) {
+                    throw new AmapRouteNotFoundException(
+                            "高德未找到可达路线: " + info + (infoCode.isBlank() ? "" : " (" + infoCode + ")"));
+                }
                 throw new AmapApiException("高德路径规划失败: " + info);
             }
             JsonNode paths = root.path("route").path("paths");
@@ -139,6 +144,20 @@ public class AmapDrivingRouteService {
             log.error("高德驾车路线响应解析失败", e);
             throw new AmapApiException("解析高德响应失败: " + e.getMessage());
         }
+    }
+
+    /** 高德 20800~20803 都表示当前规划点或道路连通关系无法形成可用路线。 */
+    private static boolean isRouteNotFound(String infoCode, String info) {
+        if (infoCode != null && switch (infoCode) {
+            case "20800", "20801", "20802", "20803" -> true;
+            default -> false;
+        }) {
+            return true;
+        }
+        return "OUT_OF_SERVICE".equalsIgnoreCase(info)
+                || "NO_ROADS_NEARBY".equalsIgnoreCase(info)
+                || "ROUTE_FAIL".equalsIgnoreCase(info)
+                || "OVER_DIRECTION_RANGE".equalsIgnoreCase(info);
     }
 
     /**

@@ -11,6 +11,8 @@ import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.time.Instant;
+import java.util.Map;
 
 /** SseEmitter 适配器：每个事件一行 JSON；客户端断开后的发送失败只记日志。 */
 public class SseAiTurnEventSink implements AiTurnEventSink {
@@ -43,6 +45,11 @@ public class SseAiTurnEventSink implements AiTurnEventSink {
     @Override
     public void turnFailed(TurnFailedEvent event) {
         send("turn.failed", event);
+    }
+
+    /** 只维持连接活性，不改变轮次业务状态。 */
+    public void ping() {
+        send("ping", Map.of("time", Instant.now().toString()));
     }
 
     private void send(String eventName, Object data) {

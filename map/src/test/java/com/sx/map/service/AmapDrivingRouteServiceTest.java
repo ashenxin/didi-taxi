@@ -3,6 +3,7 @@ package com.sx.map.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.map.config.AmapProperties;
 import com.sx.map.exception.AmapApiException;
+import com.sx.map.exception.AmapRouteNotFoundException;
 import com.sx.map.model.dto.Point;
 import com.sx.map.model.dto.RouteRequest;
 import com.sx.map.model.dto.RouteResponse;
@@ -110,6 +111,30 @@ class AmapDrivingRouteServiceTest {
         assertThatThrownBy(() -> service.drivingRoute(request()))
                 .isInstanceOf(AmapApiException.class)
                 .hasMessageContaining("INVALID_USER_KEY");
+        server.verify();
+    }
+
+    @Test
+    void mapsNoRoadsNearbyToRouteNotFound() {
+        server.expect(requestTo(baseUrl()))
+                .andRespond(withSuccess(
+                        "{\"status\":\"0\",\"info\":\"NO_ROADS_NEARBY\",\"infocode\":\"20801\"}",
+                        MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> service.drivingRoute(request()))
+                .isInstanceOf(AmapRouteNotFoundException.class)
+                .hasMessageContaining("20801");
+        server.verify();
+    }
+
+    @Test
+    void emptySuccessfulPathsIsAlsoRouteNotFound() {
+        server.expect(requestTo(baseUrl()))
+                .andRespond(withSuccess("{\"status\":\"1\",\"route\":{\"paths\":[]}}",
+                        MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> service.drivingRoute(request()))
+                .isInstanceOf(AmapRouteNotFoundException.class);
         server.verify();
     }
 

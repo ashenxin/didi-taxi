@@ -17,12 +17,16 @@
 
 | 文件 | 状态 | 用途 |
 |---|---|---|
-| `passenger_schema.sql` | BASELINE | 新库完整结构，已包含生命周期字段和六张生命周期/历史表 |
+| `passenger_schema.sql` | BASELINE | 新库完整结构，已包含生命周期字段、六张生命周期/历史表及 AI 客服会话与消息表 |
 | `passenger_seed.sql` | SEED | Passenger 初始化数据 |
 | `passenger_account_lifecycle_patch.sql` | ACTIVE | 存量 Passenger 库升级；本地已执行，其他环境仍需分别确认 |
 | `passenger_registration_lifecycle_outbox_patch.sql` | ACTIVE | 允许新注册账号在不创建 Lifecycle Operation 的情况下原子写入 ACTIVE 投影初始化 Outbox；本地已执行，其他环境仍需执行 |
 | `passenger_phone_binding_history_backfill.sql` | BACKFILL | 补录生命周期上线后、注册链路修复前创建且缺少 ACTIVE 手机号绑定历史的账号；可重复执行 |
 | `passenger_account_lifecycle_p6_diagnostics.sql` | OPERATIONAL | P6 只读诊断查询，不是上线 DDL |
+| `passenger_ai_conversation_patch.sql` | ACTIVE | 存量 Passenger 库新增 AI 客服会话与消息表；只包含当前两表结构，不创建旧路线任务表 |
+| `passenger_ai_message_drop_customer_id_patch.sql` | ACTIVE | 已建 AI 消息表移除冗余 `customer_id`；执行前先确认消息归属已通过 `conversation_id` 关联会话校验 |
+
+AI 客服两份迁移位于 `passenger/src/main/resources/sql/`。`CREATE TABLE IF NOT EXISTS` 不会升级已存在表；新建会话表后再按实际旧结构决定是否执行删列迁移，并分别记录各环境执行与核验结果。
 
 ## 跨领域生命周期修复
 

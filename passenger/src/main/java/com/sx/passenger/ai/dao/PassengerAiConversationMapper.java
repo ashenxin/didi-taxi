@@ -5,6 +5,7 @@ import com.sx.passenger.ai.entity.PassengerAiConversation;
 import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /** AI 客服会话表 DAO；手写方法覆盖加锁读取与活动请求的 CAS 占用/释放。 */
 public interface PassengerAiConversationMapper extends BaseMapper<PassengerAiConversation> {
@@ -40,4 +41,8 @@ public interface PassengerAiConversationMapper extends BaseMapper<PassengerAiCon
                                @Param("expectedRowVersion") long expectedRowVersion,
                                @Param("sequence") long sequence,
                                @Param("lastMessageAt") LocalDateTime lastMessageAt);
+
+    /** 定时对账只读取候选；真正过期前仍须逐行加锁复核。 */
+    List<PassengerAiConversation> findStaleActiveRequests(@Param("cutoff") LocalDateTime cutoff,
+                                                          @Param("limit") int limit);
 }

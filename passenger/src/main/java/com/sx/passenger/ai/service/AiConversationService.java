@@ -15,6 +15,8 @@ import com.sx.passenger.ai.exception.AiConversationConflictException;
 import com.sx.passenger.ai.exception.AiConversationNotFoundException;
 import com.sx.passenger.time.PassengerPersistenceTime;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,6 +38,8 @@ import java.util.Objects;
  */
 @Service
 public class AiConversationService {
+
+    private static final Logger log = LoggerFactory.getLogger(AiConversationService.class);
 
     static final String ROLE_USER = "USER";
     static final String ROLE_ASSISTANT = "ASSISTANT";
@@ -220,6 +224,34 @@ public class AiConversationService {
         return requireConversationForUpdate(conversationNo, customerId);
     }
 
+    /** 启动及定时对账：逐行加锁后再次核验，避免把刚完成或已接管的请求误判为失联。 */
+    public int expireStaleRequests(int limit) {
+        int batchSize = Math.min(Math.max(limit, 1), 500);
+        LocalDateTime cutoff = PassengerPersistenceTime.now().minusSeconds(staleTurnSeconds);
+        int expired = 0;
+        for (PassengerAiConversation candidate : conversations.findStaleActiveRequests(cutoff, batchSize)) {
+            try {
+                Boolean changed = databaseTransaction.execute(status -> {
+                    PassengerAiConversation current = requireConversationForUpdate(
+                            candidate.getConversationNo(), candidate.getCustomerId());
+                    if (current.getActiveRequestNo() == null || !isStale(current)) {
+                        return false;
+                    }
+                    expireUnfinishedRequest(current.getConversationNo(), current.getCustomerId(),
+                            current, current.getActiveRequestNo());
+                    return true;
+                });
+                if (Boolean.TRUE.equals(changed)) {
+                    expired++;
+                }
+            } catch (RuntimeException e) {
+                log.warn("AI 客服失联请求对账失败 conversationNo={} type={}",
+                        candidate.getConversationNo(), e.getClass().getSimpleName());
+            }
+        }
+        return expired;
+    }
+
     /** 完成一轮客服消息：保存回复、释放活动请求；重试重放原结果。 */
     public AiTurnCompleteResponse complete(String conversationNo, String requestNo, long customerId,
                                            String messageType, String content, String payloadJson) {
@@ -281,7 +313,7 @@ public class AiConversationService {
         PassengerAiConversation snapshot = requireConversation(conversationNo, customerId);
         PassengerAiMessage replayed = messages.findAssistantByRequestNo(snapshot.getId(), requestNo);
         if (replayed != null) {
-            return new AiTurnFailResponse(replayed.getMessageNo(), requestNo, replayed.getSequenceNo());
+            return failView(replayed);
         }
         return databaseTransaction.execute(status -> {
             PassengerAiConversation conversation = requireConversationForUpdate(conversationNo, customerId);
@@ -289,8 +321,7 @@ public class AiConversationService {
             // 与 complete 使用相同的锁内重放检查，避免并发失败回写被误判为活动请求冲突。
             PassengerAiMessage committedReply = messages.findAssistantByRequestNo(conversation.getId(), requestNo);
             if (committedReply != null) {
-                return new AiTurnFailResponse(committedReply.getMessageNo(), requestNo,
-                        committedReply.getSequenceNo());
+                return failView(committedReply);
             }
             if (!requestNo.equals(conversation.getActiveRequestNo())) {
                 throw new AiConversationConflictException(
@@ -328,7 +359,7 @@ public class AiConversationService {
                         AiConversationConflictException.AI_REQUEST_IN_PROGRESS,
                         "活动请求释放失败");
             }
-            return new AiTurnFailResponse(failedMessage.getMessageNo(), requestNo, sequence);
+            return failView(failedMessage);
         });
     }
 
@@ -416,5 +447,16 @@ public class AiConversationService {
         }
         return new AiTurnCompleteResponse(message.getMessageNo(), message.getRequestNo(),
                 message.getSequenceNo(), message.getCreatedAt());
+    }
+
+    /** fail 重放必须把数据库中的真实终态返回给 BFF，不能把已完成结果伪装成失败。 */
+    private static AiTurnFailResponse failView(PassengerAiMessage message) {
+        if (!STATUS_COMPLETED.equals(message.getStatus()) && !STATUS_FAILED.equals(message.getStatus())) {
+            throw new AiConversationConflictException(
+                    AiConversationConflictException.AI_REQUEST_IN_PROGRESS,
+                    "客服消息尚未进入最终状态");
+        }
+        return new AiTurnFailResponse(message.getMessageNo(), message.getRequestNo(),
+                message.getSequenceNo(), assistantView(message));
     }
 }

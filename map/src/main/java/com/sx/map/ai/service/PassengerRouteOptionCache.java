@@ -10,7 +10,6 @@ import com.sx.map.ai.model.PassengerRouteSnapshot.ViaPlace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -29,7 +28,6 @@ import java.util.UUID;
  * 选择时再次校验乘客、会话、条件和请求版本、选项成员、路线快照及有效期；
  * 不用选项摘要重新算路，也不把尚未选择的路线当作客服当前路线。
  */
-@Service
 public class PassengerRouteOptionCache {
     private static final Logger log = LoggerFactory.getLogger(PassengerRouteOptionCache.class);
     private static final String KEY_PREFIX = "map:ai:route:options:v1:";

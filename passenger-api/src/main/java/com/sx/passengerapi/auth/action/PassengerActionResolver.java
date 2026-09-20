@@ -65,6 +65,8 @@ public class PassengerActionResolver {
             rule("GET", "/app/api/v1/benefits/points", BENEFIT_READ),
             rule("POST", "/app/api/v1/ai/conversations", AI_CONVERSATION_CREATE),
             rule("POST", "/app/api/v1/ai/conversations/{conversationNo}/messages/stream", AI_MESSAGE_SEND),
+            rule("POST", "/app/api/v1/ai/conversations/{conversationNo}/route-tasks/{taskNo}/place-choice/stream", AI_MESSAGE_SEND),
+            rule("POST", "/app/api/v1/ai/conversations/{conversationNo}/route-check-tasks/{taskNo}/mode-choice/stream", AI_MESSAGE_SEND),
             rule("GET", "/app/api/v1/ai/conversations/{conversationNo}/messages", AI_HISTORY_READ));
 
     public Optional<PassengerActionCode> resolve(String method, PathContainer path) {

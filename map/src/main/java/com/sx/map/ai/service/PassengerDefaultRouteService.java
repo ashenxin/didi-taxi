@@ -3,11 +3,13 @@ package com.sx.map.ai.service;
 import com.sx.map.ai.model.PassengerRouteSnapshot;
 import com.sx.map.exception.AmapApiException;
 import com.sx.map.exception.AmapRouteNotFoundException;
+import com.sx.map.exception.AiRouteBusinessException;
 import com.sx.map.model.dto.Point;
 import com.sx.map.model.dto.RouteRequest;
 import com.sx.map.model.dto.RouteResponse;
 import com.sx.map.service.AmapDrivingRouteService;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -54,7 +56,7 @@ public class PassengerDefaultRouteService {
         }
         PassengerRouteConditionsCache.ConfirmedConditions confirmed = conditionsCache
                 .find(customerId, conversationNo, conditionVersion)
-                .orElseThrow(() -> new IllegalStateException("已确认起终点不存在或已失效"));
+                .orElseThrow(() -> contextUnavailable("已确认起终点不存在或已失效"));
         PassengerRouteSnapshot.Place origin = confirmed.origin();
         PassengerRouteSnapshot.Place destination = confirmed.destination();
 
@@ -96,9 +98,9 @@ public class PassengerDefaultRouteService {
         // 高德调用可能跨越条件变更或缓存失效；不能把旧路线写成新条件下的客服卡片。
         PassengerRouteConditionsCache.ConfirmedConditions current = conditionsCache
                 .find(customerId, conversationNo, conditionVersion)
-                .orElseThrow(() -> new IllegalStateException("算路期间已确认起终点失效或变更"));
+                .orElseThrow(() -> contextUnavailable("算路期间已确认起终点失效或变更"));
         if (!confirmed.equals(current)) {
-            throw new IllegalStateException("算路期间已确认起终点发生变更");
+            throw contextUnavailable("算路期间已确认起终点发生变更");
         }
 
         Instant generatedAt = Instant.now();
@@ -113,6 +115,10 @@ public class PassengerDefaultRouteService {
                 null, List.of(), null);
         snapshotCache.save(snapshot);
         return snapshot;
+    }
+
+    private static AiRouteBusinessException contextUnavailable(String message) {
+        return new AiRouteBusinessException("AI_ROUTE_CONTEXT_UNAVAILABLE", HttpStatus.CONFLICT, message);
     }
 
     private static Point toRoutePoint(PassengerRouteSnapshot.GeoPoint coordinate) {

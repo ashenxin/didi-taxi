@@ -20,17 +20,20 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
     private final CouponClaimIdentityProperties claimIdentityProperties;
     private final PassengerInternalClientProperties internalClientProperties;
     private final OrderLifecycleInternalClientProperties orderLifecycleProperties;
+    private final MapInternalClientProperties mapInternalProperties;
     private final Environment environment;
 
     public PassengerSecurityStartupValidator(AppJwtProperties jwtProperties,
                                              CouponClaimIdentityProperties claimIdentityProperties,
                                              PassengerInternalClientProperties internalClientProperties,
                                              OrderLifecycleInternalClientProperties orderLifecycleProperties,
+                                             MapInternalClientProperties mapInternalProperties,
                                              Environment environment) {
         this.jwtProperties = jwtProperties;
         this.claimIdentityProperties = claimIdentityProperties;
         this.internalClientProperties = internalClientProperties;
         this.orderLifecycleProperties = orderLifecycleProperties;
+        this.mapInternalProperties = mapInternalProperties;
         this.environment = environment;
     }
 
@@ -38,13 +41,14 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
     public void afterPropertiesSet() {
         if (!hasOnlyExplicitRelaxedProfiles(environment)) {
             validateStrict(jwtProperties, claimIdentityProperties, internalClientProperties,
-                    orderLifecycleProperties);
+                    orderLifecycleProperties, mapInternalProperties);
         }
     }
 
     static void validateStrict(AppJwtProperties jwt, CouponClaimIdentityProperties claimIdentity,
                                PassengerInternalClientProperties internalClient,
-                               OrderLifecycleInternalClientProperties orderLifecycle) {
+                               OrderLifecycleInternalClientProperties orderLifecycle,
+                               MapInternalClientProperties mapInternal) {
         List<String> errors = new ArrayList<>();
         validateSecret("JWT_SECRET_APP", jwt.getSecret(), "dev-didi-", errors);
         if (!"app-bff".equals(jwt.getAudience())) {
@@ -54,6 +58,7 @@ public class PassengerSecurityStartupValidator implements InitializingBean {
                 claimIdentity.getPhoneHashSecret(), "dev-coupon-", errors);
         validateSecret("PASSENGER_INTERNAL_TOKEN", internalClient.getToken(), "dev-passenger-", errors);
         validateSecret("ORDER_LIFECYCLE_INTERNAL_TOKEN", orderLifecycle.getToken(), "dev-order-", errors);
+        validateSecret("MAP_INTERNAL_TOKEN", mapInternal.getToken(), "dev-map-", errors);
         if (!errors.isEmpty()) {
             throw new IllegalStateException("Production security validation failed: " + String.join("; ", errors));
         }

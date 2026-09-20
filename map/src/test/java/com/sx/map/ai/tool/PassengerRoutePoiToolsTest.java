@@ -3,6 +3,7 @@ package com.sx.map.ai.tool;
 import com.sx.map.exception.AmapApiException;
 import com.sx.map.model.dto.AmapPoiCandidate;
 import com.sx.map.service.AmapPoiSearchService;
+import com.sx.map.ai.model.PassengerRouteSnapshot.BusinessType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -64,6 +65,40 @@ class PassengerRoutePoiToolsTest {
         assertThat(tools.searchWaypointCandidates("杭州北收费站", " ", "TOLL_STATION")).isEmpty();
 
         verify(poiSearchService).search("杭州北收费站", null, "180200");
+    }
+
+    @Test
+    void currentRouteCheckSearchesOriginalPlaceWithoutPreselectedType() {
+        when(poiSearchService.search("三墩高速路口", null, null)).thenReturn(List.of());
+
+        assertThat(tools.searchCurrentRouteCheckCandidates("三墩高速路口", " ")).isEmpty();
+
+        verify(poiSearchService).search("三墩高速路口", null, null);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "180200,TOLL_STATION",
+            "180201,TOLL_STATION",
+            "180300,SERVICE_AREA",
+            "180301,SERVICE_AREA",
+            "010100,GAS_STATION",
+            "010101,GAS_STATION"
+    })
+    void mapsAmapTypeCodeForCurrentRouteCheck(String typeCode, BusinessType expectedType) {
+        AmapPoiCandidate candidate = new AmapPoiCandidate();
+        candidate.setTypeCode(typeCode);
+
+        assertThat(tools.currentRouteCheckBusinessType(candidate)).isEqualTo(expectedType);
+    }
+
+    @Test
+    void doesNotInferCurrentRouteCheckTypeFromPoiName() {
+        AmapPoiCandidate candidate = new AmapPoiCandidate();
+        candidate.setName("五常收费站");
+        candidate.setType("收费站");
+
+        assertThat(tools.currentRouteCheckBusinessType(candidate)).isNull();
     }
 
     /**

@@ -2,6 +2,7 @@ package com.sx.map.ai.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sx.map.ai.model.CurrentRouteCheckMode;
 import com.sx.map.ai.model.PassengerRouteSnapshot.BusinessType;
 import com.sx.map.ai.model.PassengerRouteIntent;
 import com.sx.map.ai.model.PassengerRouteSnapshot.GeoPoint;
@@ -50,7 +51,7 @@ public class PassengerRoutePlaceChoiceCache {
     }
 
     /**
-     * 调用方只能传入本次地图查询得到的候选；起终点选择后仍须复述完整两端等待乘客确认。
+     * 调用方只能传入本次地图查询得到的候选；最后一个起终点选择完成后可直接继续路线意图。
      * WAYPOINT 选择必须绑定仍有效的已确认起终点，选择本身不是经过路线的证据。
      */
     public ChoiceTask save(long customerId,
@@ -63,6 +64,38 @@ public class PassengerRoutePlaceChoiceCache {
                            Place origin,
                            Place destination,
                            List<PlaceCandidate> candidates) {
+        return save(customerId, conversationNo, conditionVersion, requestVersion, role, intent,
+                originalUserText, origin, destination, null, null, null, candidates);
+    }
+
+    public ChoiceTask save(long customerId, String conversationNo, long conditionVersion,
+                           long requestVersion, ChoiceRole role, PassengerRouteIntent intent,
+                           String originalUserText, Place origin, Place destination,
+                           String remainingName, String remainingRegion,
+                           List<PlaceCandidate> candidates) {
+        return save(customerId, conversationNo, conditionVersion, requestVersion, role, intent,
+                originalUserText, origin, destination, remainingName, remainingRegion,
+                null, candidates);
+    }
+
+    /** 当前路线地点选择还要保存模型提取出的核查含义，选择地点后不能重新猜测。 */
+    public ChoiceTask saveCurrentRouteCheck(long customerId, String conversationNo,
+                                            long conditionVersion, long requestVersion,
+                                            String originalUserText, Place origin, Place destination,
+                                            CurrentRouteCheckMode checkMode,
+                                            List<PlaceCandidate> candidates) {
+        return save(customerId, conversationNo, conditionVersion, requestVersion,
+                ChoiceRole.WAYPOINT, PassengerRouteIntent.CURRENT_ROUTE_CHECK,
+                originalUserText, origin, destination, null, null,
+                Objects.requireNonNull(checkMode, "当前路线核查含义不能为空"), candidates);
+    }
+
+    private ChoiceTask save(long customerId, String conversationNo, long conditionVersion,
+                            long requestVersion, ChoiceRole role, PassengerRouteIntent intent,
+                            String originalUserText, Place origin, Place destination,
+                            String remainingName, String remainingRegion,
+                            CurrentRouteCheckMode checkMode,
+                            List<PlaceCandidate> candidates) {
         if (customerId <= 0 || !validNumber(conversationNo)
                 || conditionVersion <= 0 || requestVersion <= 0) {
             throw new IllegalArgumentException("地点选择缺少可信会话或版本");
@@ -103,7 +136,8 @@ public class PassengerRoutePlaceChoiceCache {
         }
         ChoiceTask task = new ChoiceTask(newOpaqueId("AIT-"), customerId, conversationNo,
                 conditionVersion, requestVersion, role, intent, originalUserText,
-                origin, destination, choices, createdAt, expiresAt);
+                origin, destination, remainingName, remainingRegion, checkMode,
+                choices, createdAt, expiresAt);
         Duration ttl = Duration.between(Instant.now(), task.expiresAt());
         if (ttl.isZero() || ttl.isNegative()) {
             throw new IllegalStateException("地点选项写入前已失效");
@@ -191,6 +225,7 @@ public class PassengerRoutePlaceChoiceCache {
             if (placeChoiceId.equals(choice.placeChoiceId())) {
                 return Optional.of(new SelectedChoice(task.taskNo(), task.role(), task.intent(),
                         task.originalUserText(), task.origin(), task.destination(),
+                        task.remainingName(), task.remainingRegion(), task.checkMode(),
                         choice.candidate(), task.expiresAt()));
             }
         }
@@ -278,9 +313,27 @@ public class PassengerRoutePlaceChoiceCache {
                              String originalUserText,
                              Place origin,
                              Place destination,
+                             String remainingName,
+                             String remainingRegion,
+                             CurrentRouteCheckMode checkMode,
                              List<Choice> choices,
                              Instant createdAt,
                              Instant expiresAt) {
+        /** 兼容既有默认路线地点选项构造；当前路线旧调用按未明确语义处理。 */
+        public ChoiceTask(String taskNo, long customerId, String conversationNo,
+                          long conditionVersion, long requestVersion, ChoiceRole role,
+                          PassengerRouteIntent intent, String originalUserText,
+                          Place origin, Place destination, String remainingName,
+                          String remainingRegion, List<Choice> choices,
+                          Instant createdAt, Instant expiresAt) {
+            this(taskNo, customerId, conversationNo, conditionVersion, requestVersion,
+                    role, intent, originalUserText, origin, destination, remainingName,
+                    remainingRegion,
+                    intent == PassengerRouteIntent.CURRENT_ROUTE_CHECK
+                            ? CurrentRouteCheckMode.UNSPECIFIED : null,
+                    choices, createdAt, expiresAt);
+        }
+
         public ChoiceTask {
             if (!validOpaqueId(taskNo, "AIT-") || customerId <= 0 || !validNumber(conversationNo)
                     || conditionVersion <= 0 || requestVersion <= 0) {
@@ -288,6 +341,10 @@ public class PassengerRoutePlaceChoiceCache {
             }
             Objects.requireNonNull(role, "地点选择角色不能为空");
             Objects.requireNonNull(intent, "待接续意图不能为空");
+            if (intent == PassengerRouteIntent.CURRENT_ROUTE_CHECK && checkMode == null
+                    || intent != PassengerRouteIntent.CURRENT_ROUTE_CHECK && checkMode != null) {
+                throw new IllegalArgumentException("地点选择任务的核查含义与意图不符");
+            }
             if (originalUserText == null || originalUserText.isBlank()) {
                 throw new IllegalArgumentException("地点选择任务缺少原始提问");
             }
@@ -299,6 +356,11 @@ public class PassengerRoutePlaceChoiceCache {
                     || role == ChoiceRole.DESTINATION && destination != null
                     || role == ChoiceRole.WAYPOINT && (origin == null || destination == null)) {
                 throw new IllegalArgumentException("地点选择任务端点状态与角色不符");
+            }
+            if (remainingName != null && (role != ChoiceRole.ORIGIN || destination != null
+                    || remainingName.isBlank() || remainingName.length() > 80
+                    || remainingRegion != null && remainingRegion.length() > 30)) {
+                throw new IllegalArgumentException("待解析终点信息无效");
             }
             if (choices == null || choices.isEmpty() || choices.size() > MAX_CHOICES) {
                 throw new IllegalArgumentException("地点选择任务候选数量无效");
@@ -337,7 +399,20 @@ public class PassengerRoutePlaceChoiceCache {
                                  String originalUserText,
                                  Place origin,
                                  Place destination,
+                                 String remainingName,
+                                 String remainingRegion,
+                                 CurrentRouteCheckMode checkMode,
                                  PlaceCandidate candidate,
                                  Instant expiresAt) {
+        public SelectedChoice(String taskNo, ChoiceRole role, PassengerRouteIntent intent,
+                              String originalUserText, Place origin, Place destination,
+                              String remainingName, String remainingRegion,
+                              PlaceCandidate candidate, Instant expiresAt) {
+            this(taskNo, role, intent, originalUserText, origin, destination,
+                    remainingName, remainingRegion,
+                    intent == PassengerRouteIntent.CURRENT_ROUTE_CHECK
+                            ? CurrentRouteCheckMode.UNSPECIFIED : null,
+                    candidate, expiresAt);
+        }
     }
 }

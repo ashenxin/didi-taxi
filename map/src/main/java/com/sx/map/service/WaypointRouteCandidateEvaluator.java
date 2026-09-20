@@ -201,7 +201,7 @@ public class WaypointRouteCandidateEvaluator {
 
     private static boolean isTollStation(AmapPoiCandidate candidate) {
         if (candidate.getTypeCode() != null && !candidate.getTypeCode().isBlank()) {
-            return candidate.getTypeCode().startsWith("180200");
+            return candidate.getTypeCode().startsWith("1802");
         }
         if (candidate.getType() != null && !candidate.getType().isBlank()) {
             return candidate.getType().contains("收费站");

@@ -1,5 +1,7 @@
 package com.sx.passengerapi.client.dto.maproute;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.time.Instant;
 import java.util.List;
 
@@ -19,12 +21,31 @@ public final class MapRouteDtos {
                                            String destinationName,
                                            String originRegion,
                                            String destinationRegion,
-                                           String intent) {
+                                           String intent,
+                                           String checkPlaceName,
+                                           String checkPlaceRegion,
+                                           String checkMode) {
+
+        /** 保留默认路线现有调用和测试的构造方式。 */
+        public ExtractEndpointsResponse(String originName, String destinationName,
+                                        String originRegion, String destinationRegion,
+                                        String intent) {
+            this(originName, destinationName, originRegion, destinationRegion, intent,
+                    null, null, null);
+        }
+
+        public ExtractEndpointsResponse(String originName, String destinationName,
+                                        String originRegion, String destinationRegion,
+                                        String intent, String checkPlaceName,
+                                        String checkPlaceRegion) {
+            this(originName, destinationName, originRegion, destinationRegion, intent,
+                    checkPlaceName, checkPlaceRegion, "UNSPECIFIED");
+        }
     }
 
     public record RoutePreparationRequest(long customerId,
                                           String conversationNo,
-                                          String confirmationRequestNo,
+                                          @JsonProperty("confirmationRequestNo") String requestNo,
                                           long conditionVersion,
                                           String originName,
                                           String originRegion,
@@ -37,13 +58,98 @@ public final class MapRouteDtos {
     public record RoutePreparationResponse(String status,
                                            EndpointFeedbackView originFeedback,
                                            EndpointFeedbackView destinationFeedback,
-                                           Instant expiresAt) {
+                                           Instant expiresAt,
+                                           PlaceChoicesView placeChoices) {
+        /** 保留既有默认路线测试与调用方使用的构造方式。 */
+        public RoutePreparationResponse(String status, EndpointFeedbackView originFeedback,
+                                        EndpointFeedbackView destinationFeedback, Instant expiresAt) {
+            this(status, originFeedback, destinationFeedback, expiresAt, null);
+        }
     }
 
     public record EndpointFeedbackView(String status, List<CandidateView> candidates) {
     }
 
     public record CandidateView(String name, String type, String city, String district, String address) {
+    }
+
+    /** 与 map-service 的地点选项展示契约一致；不接收 POI ID、坐标或原始地图响应。 */
+    public record PlaceChoicesView(String taskNo, String role,
+                                   List<PlaceChoiceView> choices, Instant expiresAt) {
+    }
+
+    public record PlaceChoiceView(String placeChoiceId, String name, String type,
+                                  String city, String address, Instant expiresAt) {
+    }
+
+    public record RoutePlaceChoiceRequest(long customerId, String conversationNo,
+                                          String taskNo, String placeChoiceId, long conditionVersion,
+                                          long choiceRequestVersion, long currentRequestVersion) {
+    }
+
+    /**
+     * 核查本会话当前路线是否经过指定地点。
+     * routeRef 只能取自本会话最新持久化的路线卡，不能由模型或客户端自由构造。
+     */
+    public record CurrentRouteCheckRequest(long customerId, String conversationNo, String routeRef,
+                                           long requestVersion, String placeName, String placeRegion,
+                                           String checkMode, String originalUserText) {
+        public CurrentRouteCheckRequest(long customerId, String conversationNo, String routeRef,
+                                        long requestVersion, String placeName, String placeRegion,
+                                        String originalUserText) {
+            this(customerId, conversationNo, routeRef, requestVersion, placeName, placeRegion,
+                    "UNSPECIFIED", originalUserText);
+        }
+    }
+
+    /** 地点重名时，只携带 map-service 签发的不透明选项编号继续核查。 */
+    public record CurrentRouteCheckPlaceChoiceRequest(long customerId, String conversationNo,
+                                                      String routeRef, long choiceRequestVersion,
+                                                      long currentRequestVersion, String taskNo,
+                                                      String placeChoiceId) {
+    }
+
+    public record CurrentRouteCheckModeChoiceRequest(long customerId, String conversationNo,
+                                                     String routeRef, long choiceRequestVersion,
+                                                     long currentRequestVersion, String taskNo,
+                                                     String checkMode) {
+    }
+
+    public record CurrentRouteCheckResponse(String status, String verdict, String reason, String detail,
+                                            CurrentRouteCheckTargetView target,
+                                            String checkMode,
+                                            CurrentRouteCheckPlaceChoicesView placeChoices,
+                                            CurrentRouteCheckModeChoicesView modeChoices) {
+        /** 保留现有测试构造方式，新增字段默认为空。 */
+        public CurrentRouteCheckResponse(String status, String verdict, String reason, String detail,
+                                         CurrentRouteCheckTargetView target,
+                                         CurrentRouteCheckPlaceChoicesView placeChoices) {
+            this(status, verdict, reason, detail, target, null, placeChoices, null);
+        }
+    }
+
+    public record CurrentRouteCheckTargetView(String name, String type, String city,
+                                              String address, String businessType) {
+    }
+
+    public record CurrentRouteCheckPlaceChoicesView(String taskNo, String role,
+                                                    List<CurrentRouteCheckPlaceChoiceView> choices,
+                                                    Instant expiresAt) {
+    }
+
+    /** 展示字段供用户辨认；地图 POI ID 与坐标仍只保存在 map-service。 */
+    public record CurrentRouteCheckPlaceChoiceView(String placeChoiceId, String name, String type,
+                                                   String city, String address, String businessType,
+                                                   Instant expiresAt) {
+    }
+
+    public record CurrentRouteCheckModeChoicesView(String taskNo,
+                                                   CurrentRouteCheckTargetView target,
+                                                   List<CurrentRouteCheckModeChoiceView> choices,
+                                                   Instant expiresAt) {
+    }
+
+    public record CurrentRouteCheckModeChoiceView(String choiceId, String label) {
     }
 
     public record RouteConfirmRequest(long customerId,

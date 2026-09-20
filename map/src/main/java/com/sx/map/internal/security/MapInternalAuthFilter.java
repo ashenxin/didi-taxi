@@ -26,6 +26,8 @@ import java.security.MessageDigest;
 public class MapInternalAuthFilter extends OncePerRequestFilter {
 
     static final String INTERNAL_TOKEN_HEADER = "X-Internal-Service-Token";
+    static final String AI_ERROR_CODE_HEADER = "X-Ai-Error-Code";
+    static final String AI_AUTH_ERROR_CODE = "AI_INTERNAL_AUTH_FAILED";
     private static final String REQUEST_ID_HEADER = "X-Request-Id";
     private static final PathPattern INTERNAL_ROOT = pathPattern("/api/v1/internal");
     private static final PathPattern INTERNAL_DESCENDANTS = pathPattern("/api/v1/internal/**");
@@ -76,6 +78,7 @@ public class MapInternalAuthFilter extends OncePerRequestFilter {
         response.setStatus(status);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setHeader(AI_ERROR_CODE_HEADER, AI_AUTH_ERROR_CODE);
         objectMapper.writeValue(response.getWriter(), status == HttpServletResponse.SC_UNAUTHORIZED
                 ? ResultUtil.unauthorized(message)
                 : ResultUtil.forbidden(message));

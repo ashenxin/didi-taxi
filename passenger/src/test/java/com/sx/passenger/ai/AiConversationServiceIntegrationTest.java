@@ -281,6 +281,38 @@ class AiConversationServiceIntegrationTest {
     }
 
     @Test
+    void failAfterCompletedReplyReturnsTheStoredCompletedState() {
+        String conversationNo = service.create(CUSTOMER_ID, "create-1").conversationNo();
+        AiTurnBeginResponse begin = service.begin(conversationNo, CUSTOMER_ID, "turn-1", "从A到B");
+        service.complete(conversationNo, begin.requestNo(), CUSTOMER_ID,
+                "TEXT", "已完成路线处理", null);
+
+        AiTurnFailResponse replay = service.fail(conversationNo, begin.requestNo(), CUSTOMER_ID,
+                "AI_MAP_TIMEOUT", "地图服务超时");
+
+        assertThat(replay.assistantReply()).isNotNull();
+        assertThat(replay.assistantReply().status()).isEqualTo("COMPLETED");
+        assertThat(replay.assistantReply().content()).isEqualTo("已完成路线处理");
+        assertThat(messageCount(conversationNo)).isEqualTo(2);
+    }
+
+    @Test
+    void staleRequestReconcilerPersistsFailureWithoutWaitingForNextBegin() {
+        String conversationNo = service.create(CUSTOMER_ID, "create-1").conversationNo();
+        AiTurnBeginResponse begin = service.begin(conversationNo, CUSTOMER_ID, "turn-1", "从A到B");
+        jdbc.update("UPDATE passenger_ai_conversation SET active_request_started_at = ? WHERE conversation_no = ?",
+                Timestamp.valueOf(LocalDateTime.now().minusMinutes(5)), conversationNo);
+
+        assertThat(service.expireStaleRequests(10)).isEqualTo(1);
+
+        Map<String, Object> failed = singleMessage(conversationNo, "ASSISTANT");
+        assertThat(failed.get("REQUEST_NO")).isEqualTo(begin.requestNo());
+        assertThat(failed.get("STATUS")).isEqualTo("FAILED");
+        assertThat(failed.get("FAILURE_CODE")).isEqualTo("AI_REQUEST_EXPIRED");
+        assertThat(conversationRow(conversationNo).get("ACTIVE_REQUEST_NO")).isNull();
+    }
+
+    @Test
     void beginReplayAfterFailureReturnsStoredFailureDetails() {
         String conversationNo = service.create(CUSTOMER_ID, "create-1").conversationNo();
         AiTurnBeginResponse begin = service.begin(conversationNo, CUSTOMER_ID, "turn-1", "从A到B");

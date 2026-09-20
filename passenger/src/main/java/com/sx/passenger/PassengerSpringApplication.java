@@ -4,9 +4,11 @@ import com.sx.passenger.config.PassengerNacosLocalConfigGuard;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = "com.sx.passenger")
 @MapperScan({"com.sx.passenger.dao", "com.sx.passenger.lifecycle.persistence.mapper", "com.sx.passenger.ai.dao"})
+@EnableScheduling
 public class PassengerSpringApplication {
 
     public static void main(String[] args) {

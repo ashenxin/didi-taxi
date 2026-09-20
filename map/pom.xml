@@ -49,7 +49,12 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-loadbalancer</artifactId>
         </dependency>
-        <!-- AI 客服路线规划：DeepSeek 官方 API 接入；Key 经环境变量 DEEPSEEK_API_KEY 注入，不落盘 -->
+        <!-- AI 客服轻量意图与地点提取：只引入 DashScope 模型 SDK，避免 starter 自动创建无关 Agent -->
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-dashscope</artifactId>
+        </dependency>
+        <!-- AI 客服复杂 Agent：DeepSeek 官方 API 接入；Key 经环境变量 DEEPSEEK_API_KEY 注入，不落盘 -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-deepseek</artifactId>

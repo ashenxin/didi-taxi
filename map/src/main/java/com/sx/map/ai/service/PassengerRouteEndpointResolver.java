@@ -15,7 +15,8 @@ import java.util.Objects;
  *
  * 这里只确认地图地点身份，不代表乘客已确认使用该地点。搜索结果可能有同名地点，
  * 因此不能把高德排序第一项、地理编码第一项或模型提供的坐标直接交给算路服务。
- * 返回的 Place 和候选摘要只供服务端编排；客户端不能提交 Place 作为可信条件。
+ * 返回的 Place 和可选择候选只供 map-service 内部编排；客户端只能看到候选摘要，
+ * 不能提交 Place 作为可信条件。
  */
 @Service
 public class PassengerRouteEndpointResolver {
@@ -33,7 +34,8 @@ public class PassengerRouteEndpointResolver {
     /**
      * 使用可选城市或行政区收窄查询。只有未触及分页上限、且恰好一个候选的名称
      * 与乘客指定名称完全一致时，才返回带高德 GCJ02 坐标的 Place。
-     * 其余状态由客服追问城市、地址或更具体的名称；不会选取相似名称代替乘客决定。
+     * 其余状态由客服追问城市、地址或更具体的名称；有效候选的地图身份仅留在
+     * map-service，供后续生成短时地点选项，不会选取相似名称代替乘客决定。
      */
     public Resolution resolve(String placeName, String region) {
         String name = requiredText(placeName, "起终点名称", MAX_NAME_LENGTH);
@@ -47,6 +49,7 @@ public class PassengerRouteEndpointResolver {
         }
 
         List<CandidateSummary> summaries = new ArrayList<>(candidates.size());
+        List<SelectableCandidate> selectableCandidates = new ArrayList<>(candidates.size());
         List<AmapPoiCandidate> exactMatches = new ArrayList<>();
         boolean hasInvalidCandidate = false;
         for (AmapPoiCandidate candidate : candidates) {
@@ -55,37 +58,49 @@ public class PassengerRouteEndpointResolver {
                 continue;
             }
             String candidateName = candidate.getName().strip();
-            summaries.add(new CandidateSummary(candidateName, blankToNull(candidate.getType()),
+            CandidateSummary summary = new CandidateSummary(candidateName, blankToNull(candidate.getType()),
                     blankToNull(candidate.getCity()), blankToNull(candidate.getDistrict()),
-                    blankToNull(candidate.getAddress())));
+                    blankToNull(candidate.getAddress()));
+            summaries.add(summary);
+            // 只把具有可核验地图地点身份的候选交给后续选择流程。展示摘要本身没有坐标，
+            // 不能在乘客选择后再拿同名文字猜测或采用搜索结果第一项。
+            PassengerRouteSnapshot.Place trustedPlace = toTrustedPlace(candidate);
+            if (trustedPlace != null) {
+                selectableCandidates.add(new SelectableCandidate(summary, trustedPlace));
+            }
             if (name.equals(candidateName)) {
                 exactMatches.add(candidate);
             }
         }
         List<CandidateSummary> visibleCandidates = List.copyOf(summaries);
         if (hasInvalidCandidate || candidates.size() >= SEARCH_PAGE_SIZE) {
-            return Resolution.unresolved(Status.INCOMPLETE_RESULTS, visibleCandidates);
+            return Resolution.unresolved(Status.INCOMPLETE_RESULTS, visibleCandidates, selectableCandidates);
         }
         if (exactMatches.size() != 1) {
-            return Resolution.unresolved(Status.NEEDS_CLARIFICATION, visibleCandidates);
+            return Resolution.unresolved(Status.NEEDS_CLARIFICATION, visibleCandidates, selectableCandidates);
         }
 
-        AmapPoiCandidate selected = exactMatches.getFirst();
-        Point center = selected.getCenterPoint();
+        PassengerRouteSnapshot.Place place = toTrustedPlace(exactMatches.getFirst());
+        return place == null
+                ? Resolution.unresolved(Status.INVALID_MAP_DATA, visibleCandidates)
+                : Resolution.unique(place);
+    }
+
+    private static PassengerRouteSnapshot.Place toTrustedPlace(AmapPoiCandidate candidate) {
+        Point center = candidate.getCenterPoint();
         if (center == null || center.getLng() == null || center.getLat() == null
-                || (blankToNull(selected.getCity()) == null
-                && blankToNull(selected.getAddress()) == null)) {
-            return Resolution.unresolved(Status.INVALID_MAP_DATA, visibleCandidates);
+                || (blankToNull(candidate.getCity()) == null
+                && blankToNull(candidate.getAddress()) == null)) {
+            return null;
         }
         try {
             PassengerRouteSnapshot.GeoPoint coordinate = new PassengerRouteSnapshot.GeoPoint(
                     center.getLng(), center.getLat());
-            PassengerRouteSnapshot.Place place = new PassengerRouteSnapshot.Place(
-                    blankToNull(selected.getPoiId()), selected.getName().strip(),
-                    blankToNull(selected.getAddress()), blankToNull(selected.getCity()), coordinate);
-            return Resolution.unique(place);
+            return new PassengerRouteSnapshot.Place(
+                    blankToNull(candidate.getPoiId()), candidate.getName().strip(),
+                    blankToNull(candidate.getAddress()), blankToNull(candidate.getCity()), coordinate);
         } catch (IllegalArgumentException e) {
-            return Resolution.unresolved(Status.INVALID_MAP_DATA, visibleCandidates);
+            return null;
         }
     }
 
@@ -136,26 +151,49 @@ public class PassengerRouteEndpointResolver {
         }
     }
 
+    /**
+     * 地图服务内部的可选择地点；summary 可展示，place 含 POI 身份与 GCJ02 坐标，
+     * 只能保存到受乘客、会话和条件版本约束的短时选项中，不能直接序列化给客户端。
+     */
+    public record SelectableCandidate(CandidateSummary summary, PassengerRouteSnapshot.Place place) {
+        public SelectableCandidate {
+            Objects.requireNonNull(summary, "地点选项缺少展示摘要");
+            Objects.requireNonNull(place, "地点选项缺少地图身份");
+        }
+    }
+
     public record Resolution(Status status,
                              PassengerRouteSnapshot.Place place,
-                             List<CandidateSummary> candidates) {
+                             List<CandidateSummary> candidates,
+                             List<SelectableCandidate> selectableCandidates) {
         public Resolution {
             Objects.requireNonNull(status, "地点解析状态不能为空");
             candidates = List.copyOf(Objects.requireNonNull(candidates, "地点候选摘要不能为空"));
+            selectableCandidates = List.copyOf(Objects.requireNonNull(
+                    selectableCandidates, "可选择地点不能为空"));
             if (status == Status.UNIQUE && place == null) {
                 throw new IllegalArgumentException("唯一地点缺少地图身份");
             }
             if (status != Status.UNIQUE && place != null) {
                 throw new IllegalArgumentException("未确认唯一地点时不能返回可算路地点");
             }
+            if (status != Status.NEEDS_CLARIFICATION && status != Status.INCOMPLETE_RESULTS
+                    && !selectableCandidates.isEmpty()) {
+                throw new IllegalArgumentException("当前地点状态不能返回可选择候选");
+            }
         }
 
         private static Resolution unique(PassengerRouteSnapshot.Place place) {
-            return new Resolution(Status.UNIQUE, place, List.of());
+            return new Resolution(Status.UNIQUE, place, List.of(), List.of());
         }
 
         private static Resolution unresolved(Status status, List<CandidateSummary> candidates) {
-            return new Resolution(status, null, candidates);
+            return unresolved(status, candidates, List.of());
+        }
+
+        private static Resolution unresolved(Status status, List<CandidateSummary> candidates,
+                                             List<SelectableCandidate> selectableCandidates) {
+            return new Resolution(status, null, candidates, selectableCandidates);
         }
     }
 }

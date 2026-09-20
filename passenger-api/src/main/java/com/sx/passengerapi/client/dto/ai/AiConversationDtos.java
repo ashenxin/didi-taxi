@@ -55,7 +55,14 @@ public final class AiConversationDtos {
     public record AiTurnFailRequest(long customerId, String failureCode, String failureMessage) {
     }
 
-    public record AiTurnFailResponse(String messageNo, String requestNo, long sequenceNo) {
+    public record AiTurnFailResponse(String messageNo,
+                                     String requestNo,
+                                     long sequenceNo,
+                                     AssistantMessageView assistantReply) {
+
+        public AiTurnFailResponse(String messageNo, String requestNo, long sequenceNo) {
+            this(messageNo, requestNo, sequenceNo, null);
+        }
     }
 
     /** 历史消息分页：乘客消息的 clientMessageNo 用于断流后的本地消息合并。 */

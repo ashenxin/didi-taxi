@@ -14,7 +14,7 @@
 - 实时通信：Spring WebSocket。
 - 身份认证：Spring Security、JWT。
 - 任务调度：XXL-JOB 3。
-- AI 能力：Spring AI 1、Spring AI Alibaba、DashScope。
+- AI 能力：Spring AI 1、Spring AI Alibaba、DashScope、DeepSeek。
 - 测试与覆盖率：Spring Boot Test、JaCoCo。
 
 ## 模块地图

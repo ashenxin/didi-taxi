@@ -2,17 +2,21 @@ package com.sx.map.ai.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.sx.map.ai.model.CurrentRouteCheckMode;
 import com.sx.map.ai.model.PassengerRouteSnapshot;
+import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.PlaceCandidate;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -50,6 +54,27 @@ class PassengerRouteSnapshotReplayTest {
                 snapshot.origin(), snapshot.destination(), Instant.now().minusSeconds(10),
                 Instant.now().plusSeconds(200))));
         assertThat(cache.findForReplay(snapshot.routeRef(), 42L, "AIC-1")).isEmpty();
+    }
+
+    @Test
+    void savesImmutableCurrentRouteModesWithoutNullProbeFailure() {
+        PassengerRouteSnapshot snapshot = snapshot(
+                Instant.now().minusSeconds(10), Instant.now().plusSeconds(200));
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+        PassengerCurrentRouteClarificationCache clarificationCache =
+                new PassengerCurrentRouteClarificationCache(redis, mapper);
+        PlaceCandidate candidate = new PlaceCandidate(
+                new PassengerRouteSnapshot.Place("P-1", "南浔西收费站(S47湖杭高速出口)",
+                        "南浔区", "湖州市", new PassengerRouteSnapshot.GeoPoint(120.4, 30.8)),
+                PassengerRouteSnapshot.BusinessType.TOLL_STATION, List.of(), "收费站");
+
+        var task = clarificationCache.save(snapshot, 4L,
+                "这条路线经过南浔西高速出口吗", candidate,
+                List.of(CurrentRouteCheckMode.PASS_NEARBY, CurrentRouteCheckMode.USE_EXIT));
+
+        assertThat(task.allowedModes()).containsExactly(
+                CurrentRouteCheckMode.PASS_NEARBY, CurrentRouteCheckMode.USE_EXIT);
     }
 
     private static PassengerRouteSnapshot snapshot(Instant generatedAt, Instant expiresAt) {

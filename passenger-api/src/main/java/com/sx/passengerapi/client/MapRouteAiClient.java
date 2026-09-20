@@ -1,5 +1,9 @@
 package com.sx.passengerapi.client;
 
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.CurrentRouteCheckPlaceChoiceRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.CurrentRouteCheckModeChoiceRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.CurrentRouteCheckRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.CurrentRouteCheckResponse;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.DefaultRouteRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ExtractEndpointsRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ExtractEndpointsResponse;
@@ -8,6 +12,7 @@ import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteConfirmRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteConfirmResponse;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RoutePreparationRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RoutePreparationResponse;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RoutePlaceChoiceRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteReplayRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteReplayResponse;
 import com.sx.passengerapi.common.vo.ResponseVo;
@@ -26,6 +31,21 @@ public interface MapRouteAiClient {
 
     @PostMapping("/api/v1/internal/ai/route/prepare")
     ResponseVo<RoutePreparationResponse> prepare(@RequestBody RoutePreparationRequest request);
+
+    @PostMapping("/api/v1/internal/ai/route/place-choice")
+    ResponseVo<RoutePreparationResponse> selectPlace(@RequestBody RoutePlaceChoiceRequest request);
+
+    @PostMapping("/api/v1/internal/ai/route/current-check")
+    ResponseVo<CurrentRouteCheckResponse> checkCurrentRoute(
+            @RequestBody CurrentRouteCheckRequest request);
+
+    @PostMapping("/api/v1/internal/ai/route/current-check/place-choice")
+    ResponseVo<CurrentRouteCheckResponse> selectCurrentRouteCheckPlace(
+            @RequestBody CurrentRouteCheckPlaceChoiceRequest request);
+
+    @PostMapping("/api/v1/internal/ai/route/current-check/mode-choice")
+    ResponseVo<CurrentRouteCheckResponse> selectCurrentRouteCheckMode(
+            @RequestBody CurrentRouteCheckModeChoiceRequest request);
 
     @PostMapping("/api/v1/internal/ai/route/confirm")
     ResponseVo<RouteConfirmResponse> confirm(@RequestBody RouteConfirmRequest request);

@@ -13,6 +13,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
+
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -30,6 +33,7 @@ class PassengerAiConversationControllerTest {
 
     private final AiRouteTurnService turnService = mock(AiRouteTurnService.class);
     private ThreadPoolTaskExecutor executor;
+    private ScheduledExecutorService heartbeatScheduler;
     private MockMvc mvc;
 
     @BeforeEach
@@ -40,14 +44,16 @@ class PassengerAiConversationControllerTest {
         executor.setQueueCapacity(8);
         executor.setThreadNamePrefix("ai-turn-test-");
         executor.initialize();
+        heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
         mvc = MockMvcBuilders.standaloneSetup(new PassengerAiConversationController(
-                turnService, new ObjectMapper(), executor))
+                turnService, new ObjectMapper(), executor, heartbeatScheduler))
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 
     @AfterEach
     void tearDown() {
         executor.shutdown();
+        heartbeatScheduler.shutdownNow();
     }
 
     @Test
@@ -148,5 +154,58 @@ class PassengerAiConversationControllerTest {
                 org.mockito.ArgumentMatchers.eq("AIC-1"),
                 org.mockito.ArgumentMatchers.eq("帮我规划一条路线"),
                 org.mockito.ArgumentMatchers.eq("turn-1"));
+    }
+
+    @Test
+    void placeChoiceStreamValidatesInputAndPassesOnlyOptionIdentity() throws Exception {
+        String taskNo = "AIT-00000000-0000-4000-8000-000000000001";
+        String choiceId = "PC-00000000-0000-4000-8000-000000000001";
+        String path = "/app/api/v1/ai/conversations/AIC-1/route-tasks/" + taskNo + "/place-choice/stream";
+        mvc.perform(post(path).header("X-User-Id", "10001")
+                        .header("Idempotency-Key", "turn-2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedRequestVersion\":0,\"placeChoiceId\":\"" + choiceId
+                                + "\",\"choiceName\":\"德清收费站\",\"choiceCity\":\"湖州\"}"))
+                .andExpect(status().isBadRequest());
+
+        MvcResult result = mvc.perform(post(path).header("X-User-Id", "10001")
+                        .header("Idempotency-Key", "turn-2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedRequestVersion\":1,\"placeChoiceId\":\"" + choiceId
+                                + "\",\"choiceName\":\"德清收费站\",\"choiceCity\":\"湖州\"}"))
+                .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(asyncDispatch(result)).andExpect(status().isOk());
+        verify(turnService).selectPlaceChoice(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(10001L), org.mockito.ArgumentMatchers.eq("AIC-1"),
+                org.mockito.ArgumentMatchers.eq(taskNo), org.mockito.ArgumentMatchers.eq(choiceId),
+                org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq("德清收费站"),
+                org.mockito.ArgumentMatchers.eq("湖州"), org.mockito.ArgumentMatchers.eq("turn-2"));
+    }
+
+    @Test
+    void routeCheckModeChoiceOnlyAcceptsAllowlistedMode() throws Exception {
+        String taskNo = "RCT-00000000-0000-4000-8000-000000000001";
+        String path = "/app/api/v1/ai/conversations/AIC-1/route-check-tasks/"
+                + taskNo + "/mode-choice/stream";
+        mvc.perform(post(path).header("X-User-Id", "10001")
+                        .header("Idempotency-Key", "turn-3")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedRequestVersion\":2,\"checkMode\":\"MODEL_GUESSED\","
+                                + "\"choiceLabel\":\"伪造选项\"}"))
+                .andExpect(status().isBadRequest());
+
+        MvcResult result = mvc.perform(post(path).header("X-User-Id", "10001")
+                        .header("Idempotency-Key", "turn-3")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedRequestVersion\":2,\"checkMode\":\"PASS_NEARBY\","
+                                + "\"choiceLabel\":\"沿路线经过该地点附近\"}"))
+                .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(asyncDispatch(result)).andExpect(status().isOk());
+        verify(turnService).selectCurrentRouteCheckMode(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(10001L), org.mockito.ArgumentMatchers.eq("AIC-1"),
+                org.mockito.ArgumentMatchers.eq(taskNo), org.mockito.ArgumentMatchers.eq("PASS_NEARBY"),
+                org.mockito.ArgumentMatchers.eq(2L),
+                org.mockito.ArgumentMatchers.eq("沿路线经过该地点附近"),
+                org.mockito.ArgumentMatchers.eq("turn-3"));
     }
 }

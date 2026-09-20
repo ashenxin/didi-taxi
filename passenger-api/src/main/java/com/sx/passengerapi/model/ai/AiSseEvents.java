@@ -26,7 +26,7 @@ public final class AiSseEvents {
                                         LocalDateTime createdAt) {
     }
 
-    /** 一轮一个内容事件：answer.completed 或 route.card。 */
+    /** 一轮一个内容事件：answer.completed、place.choices、route-check.choices 或 route.card。 */
     public record ContentEvent(String requestNo, AssistantMessageEvent assistantMessage) {
     }
 

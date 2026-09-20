@@ -9,6 +9,7 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.annotation.Validated;
@@ -23,6 +24,8 @@ import static java.util.stream.Collectors.joining;
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
+
+    private static final String AI_ERROR_CODE_HEADER = "X-Ai-Error-Code";
 
     @ExceptionHandler(BindException.class)
     public ResponseVo<?> bindExceptionHandler(BindException e) {
@@ -66,20 +69,34 @@ public class GlobalExceptionHandler {
         log.warn("AI 路线业务异常 code={} status={} msg={}",
                 e.getStableCode(), e.getStatus().value(), e.getMessage(), e.getCause());
         return ResponseEntity.status(e.getStatus())
-                .header("X-Ai-Error-Code", e.getStableCode())
+                .header(AI_ERROR_CODE_HEADER, e.getStableCode())
                 .body(ResultUtil.error(e.getStatus().value(), e.getMessage()));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ResponseVo<?>> httpMessageNotReadableExceptionHandler(HttpMessageNotReadableException e) {
+        Throwable cause = e.getMostSpecificCause();
+        String message = cause instanceof IllegalArgumentException && cause.getMessage() != null
+                ? cause.getMessage() : "请求体格式错误";
+        log.warn("请求体不可读 type={} msg={}", cause.getClass().getSimpleName(), message);
+        return ResponseEntity.badRequest()
+                .header(AI_ERROR_CODE_HEADER, "AI_INVALID_REQUEST")
+                .body(ResultUtil.error(ExceptionCode.BAD_REQUEST.getValue(), message));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ResponseVo<?>> illegalArgumentExceptionHandler(IllegalArgumentException e) {
         log.warn("请求参数非法：{}", e.getMessage());
         return ResponseEntity.badRequest()
+                .header(AI_ERROR_CODE_HEADER, "AI_INVALID_REQUEST")
                 .body(ResultUtil.error(ExceptionCode.BAD_REQUEST.getValue(), e.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseVo<?> exceptionHandler(Exception e) {
+    public ResponseEntity<ResponseVo<?>> exceptionHandler(Exception e) {
         log.error("未处理异常 type={} msg={}", e.getClass().getName(), e.getMessage(), e);
-        return ResultUtil.error(ExceptionCode.SERVER_ERROR.getValue(), "服务器繁忙，请稍后重试");
+        return ResponseEntity.internalServerError()
+                .header(AI_ERROR_CODE_HEADER, "AI_INTERNAL_ERROR")
+                .body(ResultUtil.error(ExceptionCode.SERVER_ERROR.getValue(), "服务器繁忙，请稍后重试"));
     }
 }

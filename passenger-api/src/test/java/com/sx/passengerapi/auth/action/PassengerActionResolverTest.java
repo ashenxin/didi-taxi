@@ -15,6 +15,8 @@ class PassengerActionResolverTest {
             "POST,/app/api/v1/auth/logout,SESSION_LOGOUT",
             "POST,/app/api/v1/ai/conversations,AI_CONVERSATION_CREATE",
             "POST,/app/api/v1/ai/conversations/AIC-1/messages/stream,AI_MESSAGE_SEND",
+            "POST,/app/api/v1/ai/conversations/AIC-1/route-tasks/AIT-1/place-choice/stream,AI_MESSAGE_SEND",
+            "POST,/app/api/v1/ai/conversations/AIC-1/route-check-tasks/RCT-1/mode-choice/stream,AI_MESSAGE_SEND",
             "GET,/app/api/v1/ai/conversations/AIC-1/messages,AI_HISTORY_READ",
             "POST,/app/api/v1/auth/ws-token,WS_CONNECT",
             "POST,/app/api/v1/orders,RIDE_CREATE",

@@ -25,6 +25,10 @@ order:
     internal-auth:
       token: test-order-lifecycle-internal-secret-32bytes
 
+map:
+  internal-auth:
+    token: test-map-internal-secret-at-least-32-bytes
+
 coupon:
   claim-identity:
     phone-hash-secret: test-coupon-phone-hash-secret-at-least-32-bytes
