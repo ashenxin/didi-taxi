@@ -27,6 +27,7 @@ import com.sx.map.ai.service.PassengerRouteEndpointPreparationService;
 import com.sx.map.ai.service.PassengerRouteExtractionService;
 import com.sx.map.ai.service.RouteCardAssembler;
 import com.sx.map.ai.service.PassengerRouteSnapshotCache;
+import com.sx.map.ai.service.PassengerViaRouteService;
 import com.sx.map.ai.tool.PassengerRoutePoiTools;
 import com.sx.map.model.dto.AmapPoiCandidate;
 import com.sx.map.model.dto.Point;
@@ -77,6 +78,7 @@ class AiRouteInternalControllerTest {
     private final PassengerRouteSnapshotCache snapshotCache = mock(PassengerRouteSnapshotCache.class);
     private final PassengerCurrentRouteCheckService currentRouteCheckService =
             mock(PassengerCurrentRouteCheckService.class);
+    private final PassengerViaRouteService viaRouteService = mock(PassengerViaRouteService.class);
 
     private MockMvc mvc;
 
@@ -84,7 +86,7 @@ class AiRouteInternalControllerTest {
     void setUp() {
         mvc = MockMvcBuilders.standaloneSetup(new AiRouteInternalController(extractionService,
                         preparationService, confirmationService, defaultRouteService, routeCardAssembler,
-                        snapshotCache, currentRouteCheckService))
+                        snapshotCache, currentRouteCheckService, viaRouteService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }
@@ -112,12 +114,13 @@ class AiRouteInternalControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("CONTEXT_UNAVAILABLE"))
                 .andExpect(jsonPath("$.data.placeChoices").value(org.hamcrest.Matchers.nullValue()));
-        verify(preparationService).select(10001L, "AIC-1", "AIT-1", "PC-1", 1L, 1L, 3L);
+        verify(preparationService).select(10001L, "AIC-1", "AIT-1", "PC-1",
+                1L, 1L, 3L, null);
     }
 
     @Test
     void extractReturnsModelExtractionResult() throws Exception {
-        when(extractionService.extract(any())).thenReturn(new ExtractEndpointsResponse(
+        when(extractionService.extract(any(), any())).thenReturn(new ExtractEndpointsResponse(
                 "德清高速路口", "西溪湿地", null, null, "DEFAULT_ROUTE"));
 
         mvc.perform(post("/api/v1/internal/ai/route/extract")
@@ -259,7 +262,7 @@ class AiRouteInternalControllerTest {
                         List.of(new CandidateSummary("杭州东站", null, "杭州", null, "天城路"))),
                 ChoiceRole.ORIGIN, "AIT-example",
                 List.of(new ChoiceSummary("PC-example", "德清", "交通设施",
-                        "湖州", "武康街道", null, expiresAt)), expiresAt));
+                        "湖州", "武康街道", null, expiresAt)), expiresAt, null));
 
         mvc.perform(post("/api/v1/internal/ai/route/prepare")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -332,7 +335,7 @@ class AiRouteInternalControllerTest {
 
     @Test
     void unexpectedInternalFailureReturns500WithStableCode() throws Exception {
-        when(extractionService.extract(any())).thenThrow(new IllegalStateException("unexpected"));
+        when(extractionService.extract(any(), any())).thenThrow(new IllegalStateException("unexpected"));
 
         mvc.perform(post("/api/v1/internal/ai/route/extract")
                         .contentType(MediaType.APPLICATION_JSON)

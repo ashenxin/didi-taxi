@@ -3,17 +3,30 @@
 - **审查日期**:2026-09-18
 - **审查范围**:AI 客服路线规划全链路(map-service AI 内部接口 / passenger-api 轮次编排与 SSE / passenger 会话持久化),含 GPT 修复后的工作区改动
 - **审查方式**:只读审查,未改动任何代码
-- **结论**:共核实 **15 个问题**(高危 7、中危 7、文档 1),另有 2 个候选经查证后排除
+- **结论**:原代码审查共核实 **15 个问题**(高危 7、中危 7、文档 1),另有 2 个候选经查证后排除；2026-09-21 真实会话回归另发现并修复 1 个收费站通行方向误判
 
-## 2026-09-20 现状复核与修复结果
+当前交付结论：AI 客服第一期范围内的代码开发及上述问题修复已完成；开放式收费站多方案不纳入第一期，暂不开发。本清单记录修复状态，不代表第一期运行环境、真实地图和端到端验收已经完成。
+
+## 2026-09-21 现状复核与修复结果
 
 - **本轮已修复**:BUG-01、BUG-02、BUG-03、BUG-04、BUG-08、BUG-09、BUG-10、BUG-12、BUG-13、BUG-14、BUG-15。
-- **按真实交付范围收口**:BUG-05。地点选择缓存已经接入生产流程；尚未接入的单端点缓存和路线方案缓存不再注册为生产 Bean，API/TECH 明确标为后续目标契约，不再宣称已交付。
+- **按真实交付范围收口**:BUG-05。起终点、单端点续接、当前路线核查和指定途经点的地点选择缓存已经接入生产流程；仅开放式路线方案缓存仍不注册为生产 Bean，API/TECH 明确标为后续目标契约。
 - **复核前已由工作区改动修复**:BUG-07、BUG-11；本轮只验证，没有重复修改。
-- **按本轮约定暂不修改**:BUG-06。会话列表、请求状态和删除会话三个公开端点仍未实现，API 保留目标路径但已明确标注“当前不可依赖”，留待后续单独处理。
-- **验证结果**:三个模块全量测试通过：passenger 221 个；map 发现 129 个，其中 1 个真实模型手动接入测试按设计跳过；passenger-api 229 个。合计发现 579 个、实际执行 578 个，失败和错误均为 0；另完成三个模块编译校验。正式验收口径见同目录专项 TEST。
+- **本轮已修复**:BUG-06。会话列表、请求状态和删除会话已在 passenger-service、passenger-api、权限解析和乘客 H5 接通；逻辑删除会撤销活动请求，complete／fail 在重放前拒绝已删除会话。
+- **验证结果**:上一轮三个模块全量基线为发现 579 个、实际执行 578 个，失败和错误均为 0。本轮 map 聚焦 40 个、passenger-api 聚焦 82 个、passenger 会话数据库集成 26 个测试通过，前端契约检查和构建通过。收费站方向误判修复后，map 模块全量发现 136 个、实际执行 135 个，失败和错误均为 0，1 个外部模型手动测试按设计跳过；最近入口匝道合并步骤修复后的 map 聚焦测试已通过，但该修改后的全量回归，以及 passenger 与 passenger-api 全量回归尚未重新执行。正式验收口径见同目录专项 TEST。
 
-下文的“问题”与“影响”保留 2026-09-18 审查时的证据快照；每条的当前结论以“当前状态”和上方 2026-09-20 复核结果为准，不应再把已修复项解读为现存缺陷。
+下文的“问题”与“影响”保留 2026-09-18 审查时的证据快照；每条的当前结论以“当前状态”和上方 2026-09-21 复核结果为准，不应再把已修复项解读为现存缺陷。
+
+---
+
+## 2026-09-21 真实会话回归
+
+### BUG-16 “到达收费站”被错误当作从同名入口驶入高速
+
+- **当前状态**:已修复。当前路线核查会定位同一路线中的目标收费站到达事件，并比较事件前后的有序道路状态：普通道路到高速才证明驶入，高速到普通道路才证明驶出；方向相反返回 `TOLL_ACTION_DIRECTION_CONFLICT`，证据不足返回不可确认。
+- **复现场景**:路线步骤显示车辆先沿 G25 长深高速行驶，到达五常收费站后进入普通道路；乘客核查“五常收费站(G25长深高速入口北向)”时，旧逻辑仅因存在同名“到达收费站”事件且所选 POI 名称含“入口”，错误回答会从该入口驶入高速。
+- **根因**:`WaypointRouteCandidateEvaluator` 证明的是路线到达目标收费站，不包含驶入／驶出方向；`CurrentRouteRelationEvaluator` 却把所选 POI 名称中的“入口／出口”当成已发生的动作，`CurrentRouteSemanticConsistencyEvaluator` 又在到达事件匹配后提前返回有效，跳过了事件前后道路状态核验。
+- **验证**:既有 `CurrentRoutePassageServiceTest` 新增反向冲突与正确出口两个场景，相关 map 聚焦 18 个测试通过；既有 `AiRouteTurnServiceTest` 新增 BFF 回答文案回归，34 个测试通过。map 模块全量发现 136 个、实际执行 135 个，失败和错误均为 0，1 个外部模型手动测试跳过。
 
 ---
 
@@ -29,7 +42,7 @@
 
 ### BUG-02 SSE 超时等于轮次预算,且无心跳
 
-- **当前状态**:已修复。SSE 连接上限调整为 90 秒，每 15 秒发送 `ping`，相关单测与 API/TECH 口径已对齐；请求状态端点仍属 BUG-06。
+- **当前状态**:已修复。SSE 连接上限调整为 90 秒，每 15 秒发送 `ping`，请求状态端点也已实现，相关单测与 API/TECH 口径已对齐。
 - **位置**:`passenger-api/.../controller/PassengerAiConversationController.java:86`、`passenger-api/.../service/SseAiTurnEventSink.java:53-55`
 - **问题**:`SseEmitter` 超时 60s 恰好等于整个轮次预算;从不发送 ping 心跳;`onTimeout`/`onError` 只打日志。
 - **影响**:最坏路径约 70s(30s 抽取 + 两次顺序高德 POI 查询各 5s connect / 15s read)已超过 60s 上限。慢但健康的轮次被 Spring 在 60s 处完成 async 请求(spring-webmvc 6.2.19 已验证该行为),乘客只看到 `turn.started` 后流即结束;worker 继续跑完并把 COMPLETED 答案落库,乘客却再看不到。文档要求的 ping 心跳(API.md:158/171、TECH.md:111)从未实现,两个文档化断线恢复路径只剩历史读取一条。
@@ -54,7 +67,7 @@
 
 ### BUG-05 三个短时缓存类共 895 行零生产调用点,文档却宣称已交付
 
-- **当前状态**:已按真实范围收口。`PassengerRoutePlaceChoiceCache` 已接入地点选择生产链路；`PassengerRoutePartialEndpointCache` 与 `PassengerRouteOptionCache` 不再装配为生产 Bean，单端点续接和开放式收费站方案在 PRD/TECH/API/TEST 中明确为未实现。
+- **当前状态**:已按真实范围收口。`PassengerRoutePlaceChoiceCache` 已接入起终点、当前路线核查及指定途经点生产链路；`PassengerRoutePartialEndpointCache` 已装配并接入单端点续接；`PassengerRouteOptionCache` 仍不装配为生产 Bean，开放式收费站方案在 PRD/TECH/API/TEST 中明确为未实现。
 - **位置**:`map/.../ai/service/PassengerRouteOptionCache.java`(及 `PassengerRoutePlaceChoiceCache`、`PassengerRoutePartialEndpointCache`)
 - **问题**:三个缓存类(共 895 行 + 内部 record)在 map / passenger-api / passenger 主源码中无任何调用点;Redis key 前缀(`map:ai:route:options:v1:` 等)仅出现在定义文件。controller(`AiRouteInternalController:45-52`)只注入 extraction/preparation/confirmation/defaultRoute/routeCardAssembler/snapshotCache。但本次改动同时修改的 TECH.md(43/97/119 行)与 API.md(138/144/254-257 行)声明"单端点补齐、地点澄清选项、收费站路线方案索引"已随短时层交付,并定义了 `AI_PLACE_CHOICE_NOT_FOUND/EXPIRED`、`AI_ROUTE_OPTION_NOT_FOUND/EXPIRED` 错误码——这些错误码在任何枚举、controller 中都不存在。
 - **影响**:地点澄清/途经点轮次实际落到 DEFAULT_ROUTE 且无候选列表;这些 bean 启动即实例化但无任何测试覆盖;联调按文档调用不存在的端点会直接失败。
@@ -62,7 +75,7 @@
 
 ### BUG-06 文档 5 个公开路径只实现 3 个,未实现路径返回 503
 
-- **当前状态**:按用户约定本轮不修复。实际已实现 5 个公开路径（创建、历史、文字 SSE、地点选择 SSE、核查含义选择 SSE）；本条所指的会话列表、请求状态和删除会话 3 个目标路径仍无 Controller 映射，API/TEST 已标记不可依赖。
+- **当前状态**:已修复。会话列表、请求状态和删除会话 3 个公开路径已有 Controller、BFF、内部服务、权限规则和 H5 调用；跨乘客读取按不存在处理，删除为幂等逻辑删除并阻断迟到结果。
 - **位置**:`二期功能/乘客端_AI客服_指定途经点路线规划_API.md:81`、`passenger-api/.../auth/action/PassengerActionResolver.java:66-68`
 - **问题**:API 文档列出 5 个会话路径,但 `GET /app/api/v1/ai/conversations`、`GET .../conversations/{no}/requests/{requestNo}`、`DELETE .../conversations/{no}` 无任何 controller 映射;`PassengerActionResolver` 只有 3 个已实现路径的规则,未解析的 action 被 `PassengerJwtAuthFilter:154-158` 以 HTTP 503 "暂时无法确认该操作权限" 拒绝;passenger-service 亦无 list / request-status / delete 实现。AGENTS.md:48 要求接口变更时同步文档。
 - **影响**:按文档实现的客户端收到 503,与真实故障不可区分,易被误报为线上事故;缺失的 request-status 端点同时丢掉文档承诺的两条断线恢复路径之一。

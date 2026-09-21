@@ -3,11 +3,13 @@ package com.sx.map.ai.service;
 import com.sx.map.ai.model.PassengerRouteSnapshot;
 import com.sx.map.exception.AmapApiException;
 import com.sx.map.exception.AmapRouteNotFoundException;
+import com.sx.map.exception.AmapRouteEvidenceInsufficientException;
 import com.sx.map.exception.AiRouteBusinessException;
 import com.sx.map.model.dto.Point;
 import com.sx.map.model.dto.RouteRequest;
 import com.sx.map.model.dto.RouteResponse;
 import com.sx.map.service.AmapDrivingRouteService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
 
@@ -27,6 +29,7 @@ import java.util.List;
  * 和条件版本，不能把本类的缓存复核当作数据库事务中的最终校验。
  */
 @Service
+@Slf4j
 public class PassengerDefaultRouteService {
     private static final Duration SNAPSHOT_LIFETIME = Duration.ofMinutes(5);
     private static final String AMAP_PROVIDER = "gaode";
@@ -93,6 +96,20 @@ public class PassengerDefaultRouteService {
             navigationSteps.add(new PassengerRouteSnapshot.NavigationStep(
                     step.instruction(), step.action(), step.assistantAction(),
                     step.orientation(), step.roadName(), stepPolyline));
+        }
+
+        try {
+            PassengerRouteEndpointDirectionValidator.validate(origin, destination, selected);
+        } catch (AmapRouteEvidenceInsufficientException e) {
+            // 只记录导航文字和路段，不记录坐标或地图密钥；便于区分反向入口与地图漏报收费站事件。
+            log.warn("默认路线端点证据不足 origin={} destination={} reason={} firstSteps={}",
+                    origin.name(), destination.name(), e.getMessage(),
+                    selected.steps().stream().limit(5)
+                            .map(step -> step.roadName() + "|" + step.action() + "|"
+                                    + step.assistantAction() + "|" + step.instruction())
+                            .toList());
+            throw new AiRouteBusinessException("AI_ROUTE_UNVERIFIABLE",
+                    HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
         }
 
         // 高德调用可能跨越条件变更或缓存失效；不能把旧路线写成新条件下的客服卡片。

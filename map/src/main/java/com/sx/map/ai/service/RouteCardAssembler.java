@@ -21,7 +21,8 @@ public class RouteCardAssembler {
                 snapshot.routeRef(),
                 new RouteCardDto.PlaceView(snapshot.origin().name()),
                 new RouteCardDto.PlaceView(snapshot.destination().name()),
-                null,
+                snapshot.via() == null ? null
+                        : new RouteCardDto.PlaceView(snapshot.via().place().name()),
                 new RouteCardDto.RouteView(snapshot.coordinateSystem(),
                         snapshot.distanceMeters(), snapshot.durationSeconds(), polyline),
                 snapshot.generatedAt(),

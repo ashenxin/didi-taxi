@@ -2,7 +2,10 @@ package com.sx.passengerapi.client;
 
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateRequest;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationDeleteResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationListResponse;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiMessageListResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiRequestStatusResponse;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiTurnBeginRequest;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiTurnBeginResponse;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiTurnCompleteRequest;
@@ -13,6 +16,7 @@ import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.config.PassengerCoreFeignConfiguration;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -31,6 +35,23 @@ public interface PassengerAiConversationClient {
                                                    @RequestParam("customerId") long customerId,
                                                    @RequestParam(value = "limit", required = false) Integer limit,
                                                    @RequestParam(value = "beforeSequence", required = false) Long beforeSequence);
+
+    @GetMapping("/api/v1/internal/ai/conversations")
+    ResponseVo<AiConversationListResponse> listConversations(
+            @RequestParam("customerId") long customerId,
+            @RequestParam(value = "limit", required = false) Integer limit,
+            @RequestParam(value = "beforeConversationNo", required = false) String beforeConversationNo);
+
+    @GetMapping("/api/v1/internal/ai/conversations/{conversationNo}/requests/{requestNo}")
+    ResponseVo<AiRequestStatusResponse> requestStatus(
+            @PathVariable("conversationNo") String conversationNo,
+            @PathVariable("requestNo") String requestNo,
+            @RequestParam("customerId") long customerId);
+
+    @DeleteMapping("/api/v1/internal/ai/conversations/{conversationNo}")
+    ResponseVo<AiConversationDeleteResponse> deleteConversation(
+            @PathVariable("conversationNo") String conversationNo,
+            @RequestParam("customerId") long customerId);
 
     @PostMapping("/api/v1/internal/ai/conversations/{conversationNo}/turns/begin")
     ResponseVo<AiTurnBeginResponse> begin(@PathVariable("conversationNo") String conversationNo,

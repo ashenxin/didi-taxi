@@ -9,6 +9,8 @@ import com.sx.map.ai.dto.RouteConfirmResponse;
 import com.sx.map.ai.dto.RoutePreparationRequest;
 import com.sx.map.ai.dto.RoutePreparationResponse;
 import com.sx.map.ai.dto.RoutePlaceChoiceRequest;
+import com.sx.map.ai.dto.PartialEndpointPrepareRequest;
+import com.sx.map.ai.dto.PartialEndpointCompleteRequest;
 import com.sx.map.ai.dto.RouteReplayRequest;
 import com.sx.map.ai.dto.RouteReplayResponse;
 import com.sx.map.ai.model.PassengerRouteIntent;
@@ -20,10 +22,12 @@ import com.sx.map.ai.service.PassengerRouteConfirmationService;
 import com.sx.map.ai.service.PassengerRouteEndpointPreparationService;
 import com.sx.map.ai.service.PassengerRouteEndpointPreparationService.PreparationResult;
 import com.sx.map.ai.service.PassengerRouteEndpointPreparationService.PreparationStatus;
+import com.sx.map.ai.service.PassengerRoutePartialEndpointCache.EndpointRole;
 import com.sx.map.ai.service.PassengerRouteExtractionService;
 import com.sx.map.ai.service.PassengerDefaultRouteService;
 import com.sx.map.ai.service.RouteCardAssembler;
 import com.sx.map.ai.service.PassengerRouteSnapshotCache;
+import com.sx.map.ai.service.PassengerViaRouteService;
 import com.sx.map.service.CurrentRoutePassageService;
 import com.sx.map.common.util.ResultUtil;
 import com.sx.map.common.vo.ResponseVo;
@@ -55,6 +59,7 @@ public class AiRouteInternalController {
     private final RouteCardAssembler routeCardAssembler;
     private final PassengerRouteSnapshotCache snapshotCache;
     private final PassengerCurrentRouteCheckService currentRouteCheckService;
+    private final PassengerViaRouteService viaRouteService;
 
     public AiRouteInternalController(PassengerRouteExtractionService extractionService,
                                      PassengerRouteEndpointPreparationService preparationService,
@@ -62,7 +67,8 @@ public class AiRouteInternalController {
                                      PassengerDefaultRouteService defaultRouteService,
                                      RouteCardAssembler routeCardAssembler,
                                      PassengerRouteSnapshotCache snapshotCache,
-                                     PassengerCurrentRouteCheckService currentRouteCheckService) {
+                                     PassengerCurrentRouteCheckService currentRouteCheckService,
+                                     PassengerViaRouteService viaRouteService) {
         this.extractionService = extractionService;
         this.preparationService = preparationService;
         this.confirmationService = confirmationService;
@@ -70,11 +76,47 @@ public class AiRouteInternalController {
         this.routeCardAssembler = routeCardAssembler;
         this.snapshotCache = snapshotCache;
         this.currentRouteCheckService = currentRouteCheckService;
+        this.viaRouteService = viaRouteService;
     }
 
     @PostMapping("/extract")
     public ResponseVo<ExtractEndpointsResponse> extract(@RequestBody ExtractEndpointsRequest request) {
-        return ResultUtil.success(extractionService.extract(request.userText()));
+        return ResultUtil.success(extractionService.extract(
+                request.userText(), request.expectedEndpointRole()));
+    }
+
+    @PostMapping("/partial")
+    public ResponseVo<RoutePreparationResponse> preparePartial(
+            @RequestBody PartialEndpointPrepareRequest request) {
+        PreparationResult result;
+        try {
+            result = preparationService.preparePartial(request.customerId(), request.conversationNo(),
+                    request.requestNo(), request.conditionVersion(), parseEndpointRole(request.endpointRole()),
+                    request.placeName(), request.placeRegion(), parseIntent(request.intent()),
+                    request.originalUserText());
+        } catch (AmapApiException e) {
+            throw new AiRouteBusinessException("AI_POI_LOOKUP_FAILED", HttpStatus.SERVICE_UNAVAILABLE,
+                    "地点查询暂时失败，请稍后重试", e);
+        }
+        return ResultUtil.success(preparationResponse(result));
+    }
+
+    @PostMapping("/partial/complete")
+    public ResponseVo<RoutePreparationResponse> completePartial(
+            @RequestBody PartialEndpointCompleteRequest request) {
+        PreparationResult result;
+        try {
+            result = preparationService.completePartial(request.customerId(), request.conversationNo(),
+                    request.followUpRequestNo(), request.partialConditionVersion(),
+                    request.currentRequestNo(), request.currentConditionVersion(),
+                    parseEndpointRole(request.endpointRole()), request.placeName(), request.placeRegion());
+        } catch (AmapApiException e) {
+            throw new AiRouteBusinessException("AI_POI_LOOKUP_FAILED", HttpStatus.SERVICE_UNAVAILABLE,
+                    "地点查询暂时失败，请稍后重试", e);
+        }
+        return ResultUtil.success(result == null
+                ? new RoutePreparationResponse("CONTEXT_UNAVAILABLE", null, null, null)
+                : preparationResponse(result));
     }
 
     @PostMapping("/prepare")
@@ -90,12 +132,7 @@ public class AiRouteInternalController {
             throw new AiRouteBusinessException("AI_POI_LOOKUP_FAILED", HttpStatus.SERVICE_UNAVAILABLE,
                     "地点查询暂时失败，请稍后重试", e);
         }
-        return ResultUtil.success(new RoutePreparationResponse(
-                result.status().name(),
-                feedbackView(result.origin()),
-                feedbackView(result.destination()),
-                result.expiresAt(),
-                placeChoicesView(result)));
+        return ResultUtil.success(preparationResponse(result));
     }
 
     @PostMapping("/confirm")
@@ -112,7 +149,8 @@ public class AiRouteInternalController {
         try {
             result = preparationService.select(request.customerId(), request.conversationNo(),
                     request.taskNo(), request.placeChoiceId(), request.conditionVersion(),
-                    request.choiceRequestVersion(), request.currentRequestVersion());
+                    request.choiceRequestVersion(), request.currentRequestVersion(),
+                    request.currentRequestNo());
         } catch (AmapApiException e) {
             throw new AiRouteBusinessException("AI_POI_LOOKUP_FAILED", HttpStatus.SERVICE_UNAVAILABLE,
                     "地点查询暂时失败，请稍后重试", e);
@@ -120,9 +158,7 @@ public class AiRouteInternalController {
         if (result == null) {
             return ResultUtil.success(new RoutePreparationResponse("CONTEXT_UNAVAILABLE", null, null, null));
         }
-        return ResultUtil.success(new RoutePreparationResponse(result.status().name(),
-                feedbackView(result.origin()), feedbackView(result.destination()),
-                result.expiresAt(), placeChoicesView(result)));
+        return ResultUtil.success(preparationResponse(result));
     }
 
     @PostMapping("/default")
@@ -136,6 +172,37 @@ public class AiRouteInternalController {
         } catch (AmapApiException e) {
             throw new AiRouteBusinessException("AI_MAP_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE,
                     "地图算路暂时不可用，请稍后重试", e);
+        }
+    }
+
+    /** 指定途经点只使用当前路线或 map-service 已确认条件中的可信起终点。 */
+    @PostMapping("/via")
+    public ResponseVo<ViaRouteResponse> viaRoute(@RequestBody ViaRouteRequest request) {
+        try {
+            PassengerViaRouteService.Result result = viaRouteService.plan(
+                    request.customerId(), request.conversationNo(),
+                    request.routeRef(), request.conditionVersion(), request.requestVersion(),
+                    request.placeName(), request.placeRegion(), request.originalUserText());
+            return ResultUtil.success(viaRouteResponse(result));
+        } catch (AmapApiException e) {
+            throw new AiRouteBusinessException("AI_MAP_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE,
+                    "指定途经点路线规划暂时不可用，请稍后重试", e);
+        }
+    }
+
+    /** 地点选择只恢复 map-service 缓存的真实 POI，不能由客户端覆盖坐标或类型。 */
+    @PostMapping("/via/place-choice")
+    public ResponseVo<ViaRouteResponse> viaRoutePlaceChoice(
+            @RequestBody ViaRoutePlaceChoiceRequest request) {
+        try {
+            PassengerViaRouteService.Result result = viaRouteService.planSelected(
+                    request.customerId(), request.conversationNo(),
+                    request.conditionVersion(), request.choiceRequestVersion(),
+                    request.currentRequestVersion(), request.taskNo(), request.placeChoiceId());
+            return ResultUtil.success(viaRouteResponse(result));
+        } catch (AmapApiException e) {
+            throw new AiRouteBusinessException("AI_MAP_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE,
+                    "指定途经点路线规划暂时不可用，请稍后重试", e);
         }
     }
 
@@ -196,6 +263,19 @@ public class AiRouteInternalController {
                         .toList());
     }
 
+    private static RoutePreparationResponse preparationResponse(PreparationResult result) {
+        RoutePreparationResponse.PartialEndpointView partial = result.partialEndpoint() == null ? null
+                : new RoutePreparationResponse.PartialEndpointView(
+                result.partialEndpoint().conditionVersion(), result.partialEndpoint().followUpRequestNo(),
+                result.partialEndpoint().knownRole().name(),
+                result.partialEndpoint().knownRole() == EndpointRole.ORIGIN ? "DESTINATION" : "ORIGIN",
+                result.partialEndpoint().knownPlaceName(), result.partialEndpoint().intent().name(),
+                result.partialEndpoint().expiresAt());
+        return new RoutePreparationResponse(result.status().name(),
+                feedbackView(result.origin()), feedbackView(result.destination()),
+                result.expiresAt(), placeChoicesView(result), partial);
+    }
+
     /** 地图身份只留在缓存中，内部响应也只发送不透明选项编号和展示摘要。 */
     private static RoutePreparationResponse.PlaceChoicesView placeChoicesView(PreparationResult result) {
         if (result.status() != PreparationStatus.NEEDS_PLACE_CHOICE) {
@@ -223,6 +303,14 @@ public class AiRouteInternalController {
         }
     }
 
+    private static EndpointRole parseEndpointRole(String role) {
+        try {
+            return EndpointRole.valueOf(role);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("端点角色必须是 ORIGIN 或 DESTINATION", e);
+        }
+    }
+
     private static CurrentRouteCheckMode parseCheckMode(String mode) {
         if (mode == null || mode.isBlank()) return CurrentRouteCheckMode.UNSPECIFIED;
         try {
@@ -230,6 +318,20 @@ public class AiRouteInternalController {
         } catch (IllegalArgumentException e) {
             return CurrentRouteCheckMode.UNSPECIFIED;
         }
+    }
+
+    private ViaRouteResponse viaRouteResponse(PassengerViaRouteService.Result result) {
+        RouteCardDto card = result.snapshot() == null ? null
+                : routeCardAssembler.fromSnapshot(result.snapshot());
+        ViaRoutePlaceChoicesView choices = result.status()
+                != PassengerViaRouteService.Status.NEEDS_PLACE_CHOICE ? null
+                : new ViaRoutePlaceChoicesView(result.choiceTaskNo(), "WAYPOINT",
+                result.choices().stream().map(choice -> new ViaRoutePlaceChoiceView(
+                        choice.placeChoiceId(), choice.name(), choice.displayType(), choice.city(),
+                        choice.address(), choice.businessType().name(), choice.expiresAt())).toList(),
+                result.expiresAt());
+        return new ViaRouteResponse(result.status().name(), result.conditionVersion(),
+                result.detail(), card, choices);
     }
 
     private static CurrentRouteCheckResponse currentRouteCheckResponse(Result result) {
@@ -257,6 +359,32 @@ public class AiRouteInternalController {
         return new CurrentRouteCheckResponse(result.status().name(),
                 verdict == null ? null : verdict.name(), result.reason(), result.detail(), target,
                 result.checkMode() == null ? null : result.checkMode().name(), choices, modeChoices);
+    }
+
+    public record ViaRouteRequest(long customerId, String conversationNo, String routeRef,
+                                  long conditionVersion, long requestVersion,
+                                  String placeName, String placeRegion, String originalUserText) {
+    }
+
+    public record ViaRoutePlaceChoiceRequest(long customerId, String conversationNo,
+                                             long conditionVersion, long choiceRequestVersion,
+                                             long currentRequestVersion, String taskNo,
+                                             String placeChoiceId) {
+    }
+
+    public record ViaRouteResponse(String status, long conditionVersion, String detail,
+                                   RouteCardDto routeCard,
+                                   ViaRoutePlaceChoicesView placeChoices) {
+    }
+
+    public record ViaRoutePlaceChoicesView(String taskNo, String role,
+                                           List<ViaRoutePlaceChoiceView> choices,
+                                           Instant expiresAt) {
+    }
+
+    public record ViaRoutePlaceChoiceView(String placeChoiceId, String name, String type,
+                                          String city, String address, String businessType,
+                                          Instant expiresAt) {
     }
 
     public record CurrentRouteCheckRequest(long customerId, String conversationNo, String routeRef,

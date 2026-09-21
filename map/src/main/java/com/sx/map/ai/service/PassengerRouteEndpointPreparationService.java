@@ -11,6 +11,8 @@ import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.ChoiceTask;
 import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.PlaceCandidate;
 import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.SelectedChoice;
 import com.sx.map.ai.service.PassengerRouteConditionsCache.ConfirmedConditions;
+import com.sx.map.ai.service.PassengerRoutePartialEndpointCache.EndpointRole;
+import com.sx.map.ai.service.PassengerRoutePartialEndpointCache.PartialEndpoint;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -37,13 +39,103 @@ public class PassengerRouteEndpointPreparationService {
     private final PassengerRouteEndpointResolver endpointResolver;
     private final PassengerRouteConditionsCache conditionsCache;
     private final PassengerRoutePlaceChoiceCache placeChoiceCache;
+    private final PassengerRoutePartialEndpointCache partialEndpointCache;
 
     public PassengerRouteEndpointPreparationService(PassengerRouteEndpointResolver endpointResolver,
                                                     PassengerRouteConditionsCache conditionsCache,
-                                                    PassengerRoutePlaceChoiceCache placeChoiceCache) {
+                                                    PassengerRoutePlaceChoiceCache placeChoiceCache,
+                                                    PassengerRoutePartialEndpointCache partialEndpointCache) {
         this.endpointResolver = endpointResolver;
         this.conditionsCache = conditionsCache;
         this.placeChoiceCache = placeChoiceCache;
+        this.partialEndpointCache = partialEndpointCache;
+    }
+
+    /**
+     * 首轮只提供一个端点时先确认地点身份。唯一地点写入短时缓存，重名地点仍由乘客选择；
+     * 两种情况都不会在另一端缺失时发起算路。
+     */
+    public PreparationResult preparePartial(long customerId, String conversationNo,
+                                            String requestNo, long conditionVersion,
+                                            EndpointRole endpointRole, String placeName,
+                                            String placeRegion, PassengerRouteIntent intent,
+                                            String originalUserText) {
+        validateOwnerAndVersion(customerId, conversationNo, requestNo, conditionVersion);
+        Objects.requireNonNull(endpointRole, "单端点角色不能为空");
+        Objects.requireNonNull(intent, "原始业务意图不能为空");
+        String name = requiredText(placeName, "地点名称", MAX_NAME_LENGTH);
+        String region = optionalText(placeRegion, "地点地区", MAX_REGION_LENGTH);
+        String userText = requiredText(originalUserText, "原始提问", MAX_USER_TEXT_LENGTH);
+        Resolution resolution = endpointResolver.resolve(name, region, endpointRole);
+        EndpointFeedback knownFeedback = EndpointFeedback.from(resolution);
+        EndpointFeedback missingFeedback = EndpointFeedback.missing();
+        EndpointFeedback originFeedback = endpointRole == EndpointRole.ORIGIN
+                ? knownFeedback : missingFeedback;
+        EndpointFeedback destinationFeedback = endpointRole == EndpointRole.DESTINATION
+                ? knownFeedback : missingFeedback;
+        if (resolution.status() == Status.UNIQUE) {
+            PartialEndpoint partial = partialEndpointCache.save(customerId, conversationNo,
+                    requestNo, conditionVersion, endpointRole, resolution.place(), intent, userText);
+            return PreparationResult.waiting(originFeedback, destinationFeedback, partial);
+        }
+        if (resolution.selectableCandidates().isEmpty()) {
+            return PreparationResult.clarification(originFeedback, destinationFeedback);
+        }
+        ChoiceRole choiceRole = endpointRole == EndpointRole.ORIGIN
+                ? ChoiceRole.ORIGIN : ChoiceRole.DESTINATION;
+        List<PlaceCandidate> candidates = toPlaceCandidates(resolution);
+        ChoiceTask task = placeChoiceCache.save(customerId, conversationNo,
+                conditionVersion, conditionVersion, choiceRole, intent, userText,
+                null, null, candidates);
+        return PreparationResult.placeChoices(originFeedback, destinationFeedback,
+                choiceRole, task.taskNo(), task.summaries(), task.expiresAt());
+    }
+
+    /** 使用上一条服务端追问绑定的可信单端点，解析本轮补充的另一端。 */
+    public PreparationResult completePartial(long customerId, String conversationNo,
+                                             String followUpRequestNo, long partialConditionVersion,
+                                             String currentRequestNo, long currentConditionVersion,
+                                             EndpointRole endpointRole, String placeName,
+                                             String placeRegion) {
+        validateOwnerAndVersion(customerId, conversationNo, currentRequestNo, currentConditionVersion);
+        String trustedFollowUpRequestNo = requiredText(
+                followUpRequestNo, "待续接请求号", MAX_NUMBER_LENGTH);
+        PartialEndpoint partial = partialEndpointCache.find(customerId, conversationNo,
+                trustedFollowUpRequestNo, partialConditionVersion).orElse(null);
+        if (partial == null || endpointRole == null || endpointRole == partial.knownRole()) {
+            return null;
+        }
+        String name = requiredText(placeName, "待补齐地点名称", MAX_NAME_LENGTH);
+        String region = optionalText(placeRegion, "待补齐地点地区", MAX_REGION_LENGTH);
+        Resolution resolution = endpointResolver.resolve(name, region, endpointRole);
+        EndpointFeedback knownFeedback = uniqueFeedback(partial.knownPlace());
+        EndpointFeedback missingFeedback = EndpointFeedback.from(resolution);
+        EndpointFeedback originFeedback = partial.knownRole() == EndpointRole.ORIGIN
+                ? knownFeedback : missingFeedback;
+        EndpointFeedback destinationFeedback = partial.knownRole() == EndpointRole.DESTINATION
+                ? knownFeedback : missingFeedback;
+        PassengerRouteSnapshot.Place origin = partial.knownRole() == EndpointRole.ORIGIN
+                ? partial.knownPlace() : resolution.place();
+        PassengerRouteSnapshot.Place destination = partial.knownRole() == EndpointRole.DESTINATION
+                ? partial.knownPlace() : resolution.place();
+        if (resolution.status() != Status.UNIQUE) {
+            if (resolution.selectableCandidates().isEmpty()) {
+                return PreparationResult.clarification(originFeedback, destinationFeedback);
+            }
+            ChoiceRole choiceRole = endpointRole == EndpointRole.ORIGIN
+                    ? ChoiceRole.ORIGIN : ChoiceRole.DESTINATION;
+            ChoiceTask task = placeChoiceCache.save(customerId, conversationNo,
+                    currentConditionVersion, currentConditionVersion, choiceRole,
+                    partial.intent(), partial.originalUserText(),
+                    partial.knownRole() == EndpointRole.ORIGIN ? partial.knownPlace() : null,
+                    partial.knownRole() == EndpointRole.DESTINATION ? partial.knownPlace() : null,
+                    toPlaceCandidates(resolution));
+            return PreparationResult.placeChoices(originFeedback, destinationFeedback,
+                    choiceRole, task.taskNo(), task.summaries(), task.expiresAt());
+        }
+        ConfirmedConditions confirmed = conditionsCache.saveConfirmed(customerId, conversationNo,
+                currentConditionVersion, origin, destination);
+        return PreparationResult.ready(originFeedback, destinationFeedback, confirmed.expiresAt());
     }
 
     /**
@@ -63,15 +155,8 @@ public class PassengerRouteEndpointPreparationService {
                                      PassengerRouteIntent intent,
                                      String originalUserText) {
         // 在任何可能计费的地图查询前检查完整输入，避免只查完起点才发现终点或归属无效。
-        if (customerId <= 0 || conditionVersion <= 0) {
-            throw new IllegalArgumentException("缺少可信乘客或条件版本");
-        }
-        String trustedConversationNo = requiredText(conversationNo, "会话编号", MAX_NUMBER_LENGTH);
-        String trustedRequestNo = requiredText(requestNo, "当前请求号", MAX_NUMBER_LENGTH);
-        if (!trustedConversationNo.equals(conversationNo)
-                || !trustedRequestNo.equals(requestNo)) {
-            throw new IllegalArgumentException("服务端会话编号或请求号格式无效");
-        }
+        validateOwnerAndVersion(customerId, conversationNo, requestNo, conditionVersion);
+        String trustedConversationNo = conversationNo;
         String origin = requiredText(originName, "起点名称", MAX_NAME_LENGTH);
         String destination = requiredText(destinationName, "终点名称", MAX_NAME_LENGTH);
         String originArea = optionalText(originRegion, "起点地区", MAX_REGION_LENGTH);
@@ -79,8 +164,8 @@ public class PassengerRouteEndpointPreparationService {
         Objects.requireNonNull(intent, "原始业务意图不能为空");
         String userText = requiredText(originalUserText, "原始提问", MAX_USER_TEXT_LENGTH);
 
-        Resolution originResolution = endpointResolver.resolve(origin, originArea);
-        Resolution destinationResolution = endpointResolver.resolve(destination, destinationArea);
+        Resolution originResolution = endpointResolver.resolve(origin, originArea, EndpointRole.ORIGIN);
+        Resolution destinationResolution = endpointResolver.resolve(destination, destinationArea, EndpointRole.DESTINATION);
         EndpointFeedback originFeedback = EndpointFeedback.from(originResolution);
         EndpointFeedback destinationFeedback = EndpointFeedback.from(destinationResolution);
         if (originResolution.status() != Status.UNIQUE) {
@@ -112,10 +197,7 @@ public class PassengerRouteEndpointPreparationService {
                                           EndpointFeedback originFeedback, EndpointFeedback destinationFeedback,
                                           String remainingName, String remainingRegion) {
         Resolution unresolved = role == ChoiceRole.ORIGIN ? originResolution : destinationResolution;
-        List<PlaceCandidate> candidates = unresolved.selectableCandidates().stream()
-                .map(candidate -> new PlaceCandidate(candidate.place(), null, List.of(),
-                        candidate.summary().type()))
-                .toList();
+        List<PlaceCandidate> candidates = toPlaceCandidates(unresolved);
         // 首轮 prepare 的条件版本取自 begin.requestVersion，因此这里同时是选项所属的
         // 请求版本。完整地点留在 map-service；返回给编排层的只有 taskNo 和展示摘要。
         ChoiceTask task = role == ChoiceRole.ORIGIN && destinationResolution.place() == null
@@ -130,14 +212,32 @@ public class PassengerRouteEndpointPreparationService {
     /** 选择只读取 map-service 保存的地点身份；若两端都歧义，继续让乘客选择终点。 */
     public PreparationResult select(long customerId, String conversationNo, String taskNo,
                                     String placeChoiceId, long conditionVersion, long choiceRequestVersion,
-                                    long currentRequestVersion) {
+                                    long currentRequestVersion, String currentRequestNo) {
         SelectedChoice selected = placeChoiceCache.select(taskNo, placeChoiceId, customerId,
                 conversationNo, conditionVersion, choiceRequestVersion).orElse(null);
+        if (selected != null && selected.role() != ChoiceRole.WAYPOINT
+                && !PassengerRouteEndpointResolver.directionCompatible(selected.candidate().place().name(),
+                selected.candidate().displayType(), selected.role() == ChoiceRole.ORIGIN
+                        ? EndpointRole.ORIGIN : EndpointRole.DESTINATION)) {
+            return null; // 单端点选择也不能恢复旧缓存中的反向候选。
+        }
         if (selected == null || selected.role() == ChoiceRole.WAYPOINT || currentRequestVersion <= choiceRequestVersion
-                || (selected.role() == ChoiceRole.ORIGIN && selected.destination() == null
-                && selected.remainingName() == null)
                 || (selected.role() == ChoiceRole.DESTINATION && selected.origin() == null)) {
+            if (selected == null || selected.role() == ChoiceRole.WAYPOINT
+                    || currentRequestVersion <= choiceRequestVersion) {
+                return null;
+            }
+            // 首轮单端点的重名地点选择完成后，只保存该端点并继续追问另一端。
+            if (selected.role() == ChoiceRole.DESTINATION && selected.origin() == null) {
+                return saveSelectedPartial(customerId, conversationNo, currentRequestNo,
+                        currentRequestVersion, selected);
+            }
             return null;
+        }
+        if (selected.role() == ChoiceRole.ORIGIN && selected.destination() == null
+                && selected.remainingName() == null) {
+            return saveSelectedPartial(customerId, conversationNo, currentRequestNo,
+                    currentRequestVersion, selected);
         }
         PassengerRouteSnapshot.Place origin = selected.role() == ChoiceRole.ORIGIN
                 ? selected.candidate().place() : selected.origin();
@@ -146,7 +246,8 @@ public class PassengerRouteEndpointPreparationService {
         EndpointFeedback originFeedback = uniqueFeedback(origin);
         EndpointFeedback destinationFeedback;
         if (destination == null) {
-            Resolution resolution = endpointResolver.resolve(selected.remainingName(), selected.remainingRegion());
+            Resolution resolution = endpointResolver.resolve(selected.remainingName(), selected.remainingRegion(),
+                    EndpointRole.DESTINATION);
             destinationFeedback = EndpointFeedback.from(resolution);
             if (resolution.status() != Status.UNIQUE) {
                 if (resolution.selectableCandidates().isEmpty()) {
@@ -168,6 +269,51 @@ public class PassengerRouteEndpointPreparationService {
         ConfirmedConditions confirmed = conditionsCache.saveConfirmed(
                 customerId, conversationNo, conditionVersion, origin, destination);
         return PreparationResult.ready(originFeedback, destinationFeedback, confirmed.expiresAt());
+    }
+
+    /** 保留旧调用签名，现有完整起终点选项流程不会走单端点分支。 */
+    public PreparationResult select(long customerId, String conversationNo, String taskNo,
+                                    String placeChoiceId, long conditionVersion,
+                                    long choiceRequestVersion, long currentRequestVersion) {
+        return select(customerId, conversationNo, taskNo, placeChoiceId, conditionVersion,
+                choiceRequestVersion, currentRequestVersion, null);
+    }
+
+    private PreparationResult saveSelectedPartial(long customerId, String conversationNo,
+                                                   String currentRequestNo,
+                                                   long currentRequestVersion,
+                                                   SelectedChoice selected) {
+        String trustedRequestNo = requiredText(currentRequestNo, "当前请求号", MAX_NUMBER_LENGTH);
+        EndpointRole role = selected.role() == ChoiceRole.ORIGIN
+                ? EndpointRole.ORIGIN : EndpointRole.DESTINATION;
+        PartialEndpoint partial = partialEndpointCache.save(customerId, conversationNo,
+                trustedRequestNo, currentRequestVersion, role, selected.candidate().place(),
+                selected.intent(), selected.originalUserText());
+        EndpointFeedback known = uniqueFeedback(selected.candidate().place());
+        EndpointFeedback missing = EndpointFeedback.missing();
+        return PreparationResult.waiting(
+                role == EndpointRole.ORIGIN ? known : missing,
+                role == EndpointRole.DESTINATION ? known : missing,
+                partial);
+    }
+
+    private static List<PlaceCandidate> toPlaceCandidates(Resolution resolution) {
+        return resolution.selectableCandidates().stream()
+                .map(candidate -> new PlaceCandidate(candidate.place(), null, List.of(),
+                        candidate.summary().type()))
+                .toList();
+    }
+
+    private static void validateOwnerAndVersion(long customerId, String conversationNo,
+                                                String requestNo, long conditionVersion) {
+        if (customerId <= 0 || conditionVersion <= 0) {
+            throw new IllegalArgumentException("缺少可信乘客或条件版本");
+        }
+        String trustedConversationNo = requiredText(conversationNo, "会话编号", MAX_NUMBER_LENGTH);
+        String trustedRequestNo = requiredText(requestNo, "当前请求号", MAX_NUMBER_LENGTH);
+        if (!trustedConversationNo.equals(conversationNo) || !trustedRequestNo.equals(requestNo)) {
+            throw new IllegalArgumentException("服务端会话编号或请求号格式无效");
+        }
     }
 
     private static EndpointFeedback uniqueFeedback(PassengerRouteSnapshot.Place place) {
@@ -199,6 +345,7 @@ public class PassengerRouteEndpointPreparationService {
 
     public enum PreparationStatus {
         READY_FOR_ROUTE,
+        WAITING_FOR_OTHER_ENDPOINT,
         NEEDS_PLACE_CHOICE,
         NEEDS_CLARIFICATION
     }
@@ -221,6 +368,19 @@ public class PassengerRouteEndpointPreparationService {
             return new EndpointFeedback(Status.UNIQUE, List.of(new CandidateSummary(
                     place.name(), null, place.city(), null, place.address())));
         }
+
+        private static EndpointFeedback missing() {
+            return new EndpointFeedback(Status.MISSING, List.of());
+        }
+    }
+
+    public record PartialEndpointSummary(long conditionVersion, String followUpRequestNo,
+                                         EndpointRole knownRole, String knownPlaceName,
+                                         PassengerRouteIntent intent, Instant expiresAt) {
+        private static PartialEndpointSummary from(PartialEndpoint partial) {
+            return new PartialEndpointSummary(partial.conditionVersion(), partial.followUpRequestNo(),
+                    partial.knownRole(), partial.knownPlace().name(), partial.intent(), partial.expiresAt());
+        }
     }
 
     public record PreparationResult(PreparationStatus status,
@@ -229,7 +389,8 @@ public class PassengerRouteEndpointPreparationService {
                                     ChoiceRole choiceRole,
                                     String choiceTaskNo,
                                     List<ChoiceSummary> choices,
-                                    Instant expiresAt) {
+                                    Instant expiresAt,
+                                    PartialEndpointSummary partialEndpoint) {
         public PreparationResult {
             Objects.requireNonNull(status, "确认准备状态不能为空");
             Objects.requireNonNull(origin, "起点反馈不能为空");
@@ -243,6 +404,15 @@ public class PassengerRouteEndpointPreparationService {
                 if (choiceRole != null || choiceTaskNo != null || !choices.isEmpty()) {
                     throw new IllegalArgumentException("已确认路线条件不能附带地点选项");
                 }
+                if (partialEndpoint != null) {
+                    throw new IllegalArgumentException("已确认路线条件不能附带单端点");
+                }
+            } else if (status == PreparationStatus.WAITING_FOR_OTHER_ENDPOINT) {
+                Objects.requireNonNull(partialEndpoint, "单端点续接信息不能为空");
+                Objects.requireNonNull(expiresAt, "单端点续接有效期不能为空");
+                if (choiceRole != null || choiceTaskNo != null || !choices.isEmpty()) {
+                    throw new IllegalArgumentException("单端点续接不能附带地点选项");
+                }
             } else if (status == PreparationStatus.NEEDS_PLACE_CHOICE) {
                 Objects.requireNonNull(choiceRole, "待选择地点缺少角色");
                 if (choiceTaskNo == null || choiceTaskNo.isBlank() || choices.isEmpty()) {
@@ -253,8 +423,11 @@ public class PassengerRouteEndpointPreparationService {
                         || choiceRole == ChoiceRole.DESTINATION && destination.status() == Status.UNIQUE) {
                     throw new IllegalArgumentException("唯一地点不应再次要求选择");
                 }
+                if (partialEndpoint != null) {
+                    throw new IllegalArgumentException("地点选择不能附带单端点续接信息");
+                }
             } else if (choiceRole != null || choiceTaskNo != null || !choices.isEmpty()
-                    || expiresAt != null) {
+                    || expiresAt != null || partialEndpoint != null) {
                 throw new IllegalArgumentException("仅文字澄清不能附带地点选项或有效期");
             }
         }
@@ -262,19 +435,26 @@ public class PassengerRouteEndpointPreparationService {
         private static PreparationResult ready(EndpointFeedback origin, EndpointFeedback destination,
                                                Instant expiresAt) {
             return new PreparationResult(PreparationStatus.READY_FOR_ROUTE,
-                    origin, destination, null, null, List.of(), expiresAt);
+                    origin, destination, null, null, List.of(), expiresAt, null);
+        }
+
+        private static PreparationResult waiting(EndpointFeedback origin, EndpointFeedback destination,
+                                                 PartialEndpoint partial) {
+            return new PreparationResult(PreparationStatus.WAITING_FOR_OTHER_ENDPOINT,
+                    origin, destination, null, null, List.of(), partial.expiresAt(),
+                    PartialEndpointSummary.from(partial));
         }
 
         private static PreparationResult placeChoices(EndpointFeedback origin, EndpointFeedback destination,
                                                       ChoiceRole role, String taskNo,
                                                       List<ChoiceSummary> choices, Instant expiresAt) {
             return new PreparationResult(PreparationStatus.NEEDS_PLACE_CHOICE,
-                    origin, destination, role, taskNo, choices, expiresAt);
+                    origin, destination, role, taskNo, choices, expiresAt, null);
         }
 
         private static PreparationResult clarification(EndpointFeedback origin, EndpointFeedback destination) {
             return new PreparationResult(PreparationStatus.NEEDS_CLARIFICATION,
-                    origin, destination, null, null, List.of(), null);
+                    origin, destination, null, null, List.of(), null, null);
         }
     }
 }

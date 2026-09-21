@@ -1,6 +1,8 @@
 package com.sx.map.service;
 
 import com.sx.map.exception.AmapApiException;
+import com.sx.map.exception.AmapRouteEvidenceInsufficientException;
+import com.sx.map.exception.AmapRouteNotFoundException;
 import com.sx.map.model.dto.AmapPoiCandidate;
 import com.sx.map.model.dto.PassengerRouteCandidate;
 import com.sx.map.model.dto.Point;
@@ -62,6 +64,35 @@ public class WaypointRoutePlanningService {
                                                         String poiType) {
         requirePoint(origin, "起点");
         requirePoint(destination, "终点");
+        PreparedCandidates prepared = prepareCandidates(rawCandidates, poiType);
+
+        List<Point> convertedEndpoints = coordinateConvertService.convertWgs84ToAmap(List.of(origin, destination));
+        if (convertedEndpoints == null || convertedEndpoints.size() != 2) {
+            throw new AmapApiException("起终点坐标转换结果不完整");
+        }
+        return planCandidatesWithAmapEndpoints(
+                convertedEndpoints.get(0), convertedEndpoints.get(1), prepared);
+    }
+
+    /**
+     * 使用已经由高德地点查询确认的 GCJ02 起终点规划指定途经点路线。
+     *
+     * AI 客服的可信起终点保存在 map-service 内部，坐标已经是 GCJ02；该入口禁止再次执行
+     * WGS84 转换。调用方仍只能传入地图服务保存的可信地点，不能采用模型或客户端提交的坐标。
+     */
+    public List<PassengerRouteCandidate> planCandidatesFromAmapCoordinates(
+            Point amapOrigin,
+            Point amapDestination,
+            List<AmapPoiCandidate> rawCandidates,
+            String poiType) {
+        requirePoint(amapOrigin, "起点");
+        requirePoint(amapDestination, "终点");
+        PreparedCandidates prepared = prepareCandidates(rawCandidates, poiType);
+        return planCandidatesWithAmapEndpoints(amapOrigin, amapDestination, prepared);
+    }
+
+    private static PreparedCandidates prepareCandidates(List<AmapPoiCandidate> rawCandidates,
+                                                        String poiType) {
         if (rawCandidates == null || rawCandidates.isEmpty()) {
             throw new AmapApiException("没有可用于路线规划的POI候选");
         }
@@ -79,19 +110,21 @@ public class WaypointRoutePlanningService {
         if (candidateInputs.isEmpty()) {
             throw new AmapApiException("指定地点缺少可用于算路的坐标");
         }
+        return new PreparedCandidates(List.copyOf(candidateInputs), normalizedPoiType);
+    }
 
-        List<Point> convertedEndpoints = coordinateConvertService.convertWgs84ToAmap(List.of(origin, destination));
-        if (convertedEndpoints == null || convertedEndpoints.size() != 2) {
-            throw new AmapApiException("起终点坐标转换结果不完整");
-        }
-        Point amapOrigin = convertedEndpoints.get(0);
-        Point amapDestination = convertedEndpoints.get(1);
-
+    private List<PassengerRouteCandidate> planCandidatesWithAmapEndpoints(
+            Point amapOrigin,
+            Point amapDestination,
+            PreparedCandidates prepared) {
         List<CandidatePlan> plans = new ArrayList<>();
         boolean ambiguousPassage = false;
+        boolean incompleteRouteData = false;
         boolean evaluatedAnyRoute = false;
+        boolean planningFailure = false;
+        boolean allPlanningFailuresRouteNotFound = true;
         String lastPlanningFailureMessage = null;
-        for (CandidateInput candidateInput : candidateInputs) {
+        for (CandidateInput candidateInput : prepared.candidateInputs()) {
             AmapPoiCandidate candidate = candidateInput.waypoint();
             List<Point> orderedWaypoints = candidateInput.orderedWaypoints();
             try {
@@ -107,7 +140,14 @@ public class WaypointRoutePlanningService {
                             routeOption
                     );
                     if (evaluation.status() == WaypointRouteCandidateEvaluator.Status.ACCEPTED) {
-                        accepted.add(new AcceptedOption(routeOption, evaluation));
+                        try {
+                            accepted.add(new AcceptedOption(routeOption, evaluation,
+                                    candidateNavigationSteps(routeOption.steps())));
+                        } catch (AmapApiException e) {
+                            incompleteRouteData = true;
+                            log.warn("跳过缺少完整导航步骤的已验证路线 poiId={} reason={}",
+                                    poiId(candidate), e.getMessage());
+                        }
                     } else {
                         ambiguousPassage |= evaluation.status() == WaypointRouteCandidateEvaluator.Status.AMBIGUOUS;
                         log.info("路线未通过指定地点验证 poiId={} status={} reason={}",
@@ -119,6 +159,8 @@ public class WaypointRoutePlanningService {
                 }
             } catch (AmapApiException | RestClientException e) {
                 // 一个原始POI失败时继续评估其他候选。只有全部失败时本方法才整体失败。
+                planningFailure = true;
+                allPlanningFailuresRouteNotFound &= e instanceof AmapRouteNotFoundException;
                 lastPlanningFailureMessage = e instanceof AmapApiException
                         ? e.getMessage()
                         : "高德路线服务调用失败";
@@ -129,12 +171,21 @@ public class WaypointRoutePlanningService {
 
         if (plans.isEmpty()) {
             if (ambiguousPassage) {
-                throw new AmapApiException("地图证据不足，暂无法确认路线是否经过指定地点");
+                throw new AmapRouteEvidenceInsufficientException(
+                        "地图证据不足，暂无法确认路线是否经过指定地点");
+            }
+            if (incompleteRouteData) {
+                throw new AmapRouteEvidenceInsufficientException(
+                        "已验证路线缺少完整导航步骤，暂无法生成客服路线");
             }
             if (!evaluatedAnyRoute && lastPlanningFailureMessage != null) {
+                if (planningFailure && allPlanningFailuresRouteNotFound) {
+                    throw new AmapRouteNotFoundException(
+                            "没有找到经过指定地点的可达路线: " + lastPlanningFailureMessage);
+                }
                 throw new AmapApiException("指定途经点路线规划失败: " + lastPlanningFailureMessage);
             }
-            throw new AmapApiException("没有找到已验证经过指定地点的路线");
+            throw new AmapRouteNotFoundException("没有找到已验证经过指定地点的路线");
         }
 
         Instant generatedAt = Instant.now();
@@ -150,8 +201,9 @@ public class WaypointRoutePlanningService {
                         "PRC-" + UUID.randomUUID().toString().replace("-", ""),
                         plan.waypoint(),
                         plan.orderedWaypoints(),
-                        passageMode(normalizedPoiType),
+                        passageMode(prepared.poiType()),
                         route,
+                        accepted.navigationSteps(),
                         accepted.evaluation().reason().name(),
                         generatedAt,
                         expiresAt
@@ -238,12 +290,43 @@ public class WaypointRoutePlanningService {
         return value == null ? Long.MAX_VALUE : value;
     }
 
+    private static List<PassengerRouteCandidate.NavigationStep> candidateNavigationSteps(
+            List<AmapDrivingRouteService.NavigationStep> steps) {
+        if (steps == null || steps.isEmpty()) {
+            throw new AmapApiException("导航步骤为空");
+        }
+        List<PassengerRouteCandidate.NavigationStep> converted = new ArrayList<>(steps.size());
+        for (AmapDrivingRouteService.NavigationStep step : steps) {
+            if (step == null || step.polyline() == null || step.polyline().isEmpty()) {
+                throw new AmapApiException("导航步骤或分段折线为空");
+            }
+            List<Point> polyline = new ArrayList<>(step.polyline().size());
+            for (Point point : step.polyline()) {
+                if (!isValidPoint(point)) {
+                    throw new AmapApiException("导航步骤包含无效坐标");
+                }
+                Point copy = new Point();
+                copy.setLng(point.getLng());
+                copy.setLat(point.getLat());
+                polyline.add(copy);
+            }
+            converted.add(new PassengerRouteCandidate.NavigationStep(
+                    step.instruction(), step.action(), step.assistantAction(),
+                    step.orientation(), step.roadName(), polyline));
+        }
+        return List.copyOf(converted);
+    }
+
     private record AcceptedOption(AmapDrivingRouteService.DrivingRouteOption option,
-                                  WaypointRouteCandidateEvaluator.Evaluation evaluation) {
+                                  WaypointRouteCandidateEvaluator.Evaluation evaluation,
+                                  List<PassengerRouteCandidate.NavigationStep> navigationSteps) {
     }
 
     private record CandidateInput(AmapPoiCandidate waypoint,
                                   List<Point> orderedWaypoints) {
+    }
+
+    private record PreparedCandidates(List<CandidateInput> candidateInputs, String poiType) {
     }
 
     private record CandidatePlan(AmapPoiCandidate waypoint,

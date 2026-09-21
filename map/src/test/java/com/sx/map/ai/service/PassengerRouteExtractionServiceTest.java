@@ -135,6 +135,32 @@ class PassengerRouteExtractionServiceTest {
     }
 
     @Test
+    void parsesViaRoutePlanFields() {
+        modelReturns("{\"originName\":null,\"destinationName\":null,"
+                + "\"intent\":\"VIA_ROUTE_PLAN\",\"viaPlaceName\":\"五常收费站\","
+                + "\"viaPlaceRegion\":\"杭州\"}");
+
+        ExtractEndpointsResponse result = service.extract("改走杭州的五常收费站");
+
+        assertThat(result.intent()).isEqualTo("VIA_ROUTE_PLAN");
+        assertThat(result.viaPlaceName()).isEqualTo("五常收费站");
+        assertThat(result.viaPlaceRegion()).isEqualTo("杭州");
+        assertThat(result.checkPlaceName()).isNull();
+    }
+
+    @Test
+    void rejectsViaPlaceNameThatWasNotCopiedFromUserText() {
+        modelReturns("{\"originName\":null,\"destinationName\":null,"
+                + "\"intent\":\"VIA_ROUTE_PLAN\",\"viaPlaceName\":\"五常收费站\","
+                + "\"viaPlaceRegion\":null}");
+
+        ExtractEndpointsResponse result = service.extract("改走五常");
+
+        assertThat(result.intent()).isEqualTo("VIA_ROUTE_PLAN");
+        assertThat(result.viaPlaceName()).isNull();
+    }
+
+    @Test
     void rejectsUnknownIntentAndIrrelevantCheckFields() {
         modelReturns("{\"originName\":\"A\",\"destinationName\":\"B\","
                 + "\"intent\":\"UNKNOWN\",\"checkPlaceName\":\"伪造地点\"}");

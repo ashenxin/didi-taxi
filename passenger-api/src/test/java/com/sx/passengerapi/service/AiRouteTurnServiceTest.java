@@ -41,6 +41,13 @@ import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RoutePlaceChoiceRequ
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteView;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteReplayRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteReplayResponse;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.PartialEndpointView;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.PartialEndpointCompleteRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRoutePlaceChoiceRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRoutePlaceChoiceView;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRoutePlaceChoicesView;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteResponse;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ai.AiSseEvents.ContentEvent;
 import com.sx.passengerapi.model.ai.AiSseEvents.TurnCompletedEvent;
@@ -127,6 +134,55 @@ class AiRouteTurnServiceTest {
     }
 
     @Test
+    void singleOriginIsPersistedThenDestinationCompletesRouteOnNextTurn() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-1", 1, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                "德清", null, null, null, "DEFAULT_ROUTE")));
+        when(mapRouteAi.preparePartial(any())).thenReturn(success(new RoutePreparationResponse(
+                "WAITING_FOR_OTHER_ENDPOINT",
+                new EndpointFeedbackView("UNIQUE", List.of()),
+                new EndpointFeedbackView("MISSING", List.of()), Instant.now().plusSeconds(300),
+                null, new PartialEndpointView(1, "REQ-1", "ORIGIN", "DESTINATION",
+                "德清", "DEFAULT_ROUTE", Instant.now().plusSeconds(300)))));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-1"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-2", "REQ-1", 2, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "从德清出发", "turn-1");
+
+        ArgumentCaptor<AiTurnCompleteRequest> firstReply = ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
+        verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-1"), firstReply.capture());
+        assertThat(firstReply.getValue().content()).contains("已记住起点", "请告诉我终点");
+        assertThat(firstReply.getValue().payloadJson()).contains("partialEndpoint", "DESTINATION");
+
+        AssistantMessageView latest = new AssistantMessageView("AIM-2", "REQ-1", "ASSISTANT",
+                "TEXT", firstReply.getValue().content(), firstReply.getValue().payloadJson(), 2,
+                LocalDateTime.now(), "COMPLETED", null, null);
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-3", 3, latest, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, "宁波站", null, null, "DEFAULT_ROUTE")));
+        when(mapRouteAi.completePartial(any())).thenReturn(success(new RoutePreparationResponse(
+                "READY_FOR_ROUTE", new EndpointFeedbackView("UNIQUE", List.of()),
+                new EndpointFeedbackView("UNIQUE", List.of()), Instant.now().plusSeconds(300))));
+        when(mapRouteAi.defaultRoute(any())).thenReturn(success(card()));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-3"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-4", "REQ-3", 4, LocalDateTime.now())));
+        sink = new RecordingSink();
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "到宁波站", "turn-2");
+
+        ArgumentCaptor<ExtractEndpointsRequest> extract = ArgumentCaptor.forClass(ExtractEndpointsRequest.class);
+        verify(mapRouteAi, times(2)).extract(extract.capture());
+        assertThat(extract.getAllValues().get(1).expectedEndpointRole()).isEqualTo("DESTINATION");
+        verify(mapRouteAi).completePartial(new PartialEndpointCompleteRequest(
+                CUSTOMER_ID, CONVERSATION_NO, "REQ-1", 1, "REQ-3", 3,
+                "DESTINATION", "宁波站", null));
+        verify(mapRouteAi).defaultRoute(new DefaultRouteRequest(CUSTOMER_ID, CONVERSATION_NO, 3));
+        assertThat(sink.eventNames()).containsExactly("turn.started", "route.card", "turn.completed");
+    }
+
+    @Test
     void placeChoiceIsPersistedAndFinalSelectionDirectlyGeneratesRoute() {
         String taskNo = "AIT-00000000-0000-4000-8000-000000000001";
         String choiceId = "PC-00000000-0000-4000-8000-000000000001";
@@ -176,7 +232,7 @@ class AiRouteTurnServiceTest {
         assertThat(sink.eventNames()).containsExactly("turn.started", "route.card", "turn.completed");
         assertThat(sink.lastContent().assistantMessage().content()).contains("预计行驶");
         verify(mapRouteAi).selectPlace(new RoutePlaceChoiceRequest(CUSTOMER_ID, CONVERSATION_NO,
-                taskNo, choiceId, 1, 1, 3));
+                taskNo, choiceId, 1, 1, 3, "REQ-2"));
         ArgumentCaptor<AiTurnCompleteRequest> second = ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
         verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-2"), second.capture());
         assertThat(second.getValue().messageType()).isEqualTo("ROUTE_CARD");
@@ -316,7 +372,7 @@ class AiRouteTurnServiceTest {
     }
 
     @Test
-    void currentRouteCheckWithoutPersistedRouteAsksToPlanOneFirst() {
+    void currentRouteCheckWithoutRouteAsksForEndpointsBeforeGeneratingOne() {
         when(passengerAi.begin(eq(CONVERSATION_NO), any()))
                 .thenReturn(success(new AiTurnBeginResponse("REQ-1", 1, null, null)));
         when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
@@ -329,8 +385,241 @@ class AiRouteTurnServiceTest {
 
         service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "这条路线经过太湖服务区吗", "turn-1");
 
-        assertThat(sink.lastContent().assistantMessage().content()).contains("请先规划一条路线");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("当前会话还没有可核查的路线")
+                .contains("请告诉我完整的起点和终点")
+                .contains("我将先生成路线，再核查是否经过「太湖服务区」");
+        // 两端缺失时不能凭空算路，也不能核查不存在的路线。
+        verify(mapRouteAi, never()).prepare(any());
+        verify(mapRouteAi, never()).defaultRoute(any());
         verify(mapRouteAi, never()).checkCurrentRoute(any());
+        // 追问落库携带服务端上下文，客户端事件不暴露内部字段。
+        ArgumentCaptor<AiTurnCompleteRequest> completed = ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
+        verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-1"), completed.capture());
+        assertThat(completed.getValue().payloadJson())
+                .contains("\"checkContext\"")
+                .contains("\"intent\":\"CURRENT_ROUTE_CHECK\"")
+                .contains("太湖服务区");
+        assertThat(sink.lastContent().assistantMessage().payload()).isNull();
+    }
+
+    @Test
+    void currentRouteCheckWithoutRouteGeneratesDefaultRouteThenChecksIt() {
+        String routeRef = card().routeRef();
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-3", 5, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                "德清高速路口", "西溪湿地", null, null, "CURRENT_ROUTE_CHECK",
+                "太湖服务区", null, "PASS_NEARBY")));
+        when(passengerAi.listMessages(CONVERSATION_NO, CUSTOMER_ID, 50, null))
+                .thenReturn(success(new AiMessageListResponse(List.of(), false)));
+        when(mapRouteAi.prepare(any())).thenReturn(success(new RoutePreparationResponse(
+                "READY_FOR_ROUTE", null, null, Instant.now().plusSeconds(300))));
+        when(mapRouteAi.defaultRoute(any())).thenReturn(success(card()));
+        when(mapRouteAi.checkCurrentRoute(any())).thenReturn(success(new CurrentRouteCheckResponse(
+                "CHECKED", "PASSED", "ROUTE_PASSES_NEARBY", "路线折线与目标地点最近约452米",
+                new CurrentRouteCheckTargetView("太湖服务区", "服务区", "湖州", "吴兴区", "SERVICE_AREA"),
+                "PASS_NEARBY", null, null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-3"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-6", "REQ-3", 6, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "这条路线经过太湖服务区吗", "turn-3");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "route.card", "turn.completed");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("这是本轮新生成的默认路线。")
+                .contains("会经过「太湖服务区」附近");
+        Map<String, Object> payload = sink.lastContent().assistantMessage().payload();
+        assertThat(payload).containsOnlyKeys("routeCard", "routeCheck");
+        assertThat(payload.toString()).contains("polyline", routeRef);
+        verify(mapRouteAi).prepare(new RoutePreparationRequest(CUSTOMER_ID, CONVERSATION_NO,
+                "REQ-3", 5, "德清高速路口", null, "西溪湿地", null, "CURRENT_ROUTE_CHECK",
+                "这条路线经过太湖服务区吗"));
+        verify(mapRouteAi).defaultRoute(new DefaultRouteRequest(CUSTOMER_ID, CONVERSATION_NO, 5));
+        verify(mapRouteAi).checkCurrentRoute(new CurrentRouteCheckRequest(CUSTOMER_ID,
+                CONVERSATION_NO, routeRef, 5, "太湖服务区", null, "PASS_NEARBY",
+                "这条路线经过太湖服务区吗"));
+        // 持久化载荷只保留摘要，折线仍只存在于本轮 SSE 与地图短时缓存。
+        ArgumentCaptor<AiTurnCompleteRequest> completed = ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
+        verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-3"), completed.capture());
+        assertThat(completed.getValue().messageType()).isEqualTo("ROUTE_CARD");
+        assertThat(completed.getValue().payloadJson())
+                .contains(routeRef)
+                .contains("routeCheck")
+                .doesNotContain("polyline")
+                .doesNotContain("checkContext");
+    }
+
+    @Test
+    void routeExistsQueryAnswersFoundWithoutShowingRouteCard() {
+        String detail = "途经五常收费站的路线";
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-4", 6, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                "德清高速路口", "西溪湿地", null, null, "ROUTE_EXISTS",
+                "五常收费站", null, null)));
+        when(mapRouteAi.prepare(any())).thenReturn(success(new RoutePreparationResponse(
+                "READY_FOR_ROUTE", null, null, Instant.now().plusSeconds(300))));
+        when(mapRouteAi.viaRoute(any())).thenReturn(success(new ViaRouteResponse(
+                "ROUTE_READY", 1, detail, viaCard(), null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-4"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-8", "REQ-4", 8, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "有没有经过五常收费站的路线", "turn-4");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "answer.completed", "turn.completed");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("找到一条从当前起点到终点、经过「五常收费站」的路线")
+                .contains(detail);
+        assertThat(sink.lastContent().assistantMessage().payload().toString())
+                .contains("routeExists")
+                .contains("FOUND")
+                .doesNotContain("polyline")
+                .doesNotContain("routeRef");
+        verify(mapRouteAi).viaRoute(new ViaRouteRequest(CUSTOMER_ID, CONVERSATION_NO,
+                null, 6, 6, "五常收费站", null, "有没有经过五常收费站的路线"));
+        // 终态结论不再需要续接上下文，落库载荷与客户端载荷一致。
+        ArgumentCaptor<AiTurnCompleteRequest> completed = ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
+        verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-4"), completed.capture());
+        assertThat(completed.getValue().payloadJson())
+                .contains("routeExists")
+                .doesNotContain("checkContext");
+    }
+
+    @Test
+    void routeExistsQueryReportsNotFoundInQueryScope() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-4", 6, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                "德清高速路口", "西溪湿地", null, null, "ROUTE_EXISTS",
+                "五常收费站", null, null)));
+        when(mapRouteAi.prepare(any())).thenReturn(success(new RoutePreparationResponse(
+                "READY_FOR_ROUTE", null, null, Instant.now().plusSeconds(300))));
+        when(mapRouteAi.viaRoute(any())).thenReturn(success(new ViaRouteResponse(
+                "ROUTE_NOT_FOUND", 1, "高德未返回经过该地点的路线", null, null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-4"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-8", "REQ-4", 8, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "有没有经过五常收费站的路线", "turn-4");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "answer.completed", "turn.completed");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("本次查询没有找到经过「五常收费站」的已验证路线")
+                .contains("可以补充城市或换一个地点再试");
+        assertThat(sink.lastContent().assistantMessage().payload().toString())
+                .contains("routeExists")
+                .contains("NOT_FOUND_IN_QUERY");
+    }
+
+    @Test
+    void routeExistsQueryPlaceChoiceContinuesViaSelection() throws Exception {
+        String taskNo = "AIT-00000000-0000-4000-8000-000000000005";
+        String choiceId = "PC-00000000-0000-4000-8000-000000000005";
+        Instant expiresAt = Instant.now().plusSeconds(300);
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-4", 6, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                "德清高速路口", "西溪湿地", null, null, "ROUTE_EXISTS",
+                "五常收费站", null, null)));
+        when(mapRouteAi.prepare(any())).thenReturn(success(new RoutePreparationResponse(
+                "READY_FOR_ROUTE", null, null, Instant.now().plusSeconds(300))));
+        when(mapRouteAi.viaRoute(any())).thenReturn(success(new ViaRouteResponse(
+                "NEEDS_PLACE_CHOICE", 6, null, null, new ViaRoutePlaceChoicesView(taskNo, "WAYPOINT",
+                List.of(new ViaRoutePlaceChoiceView(choiceId, "五常收费站", "收费站",
+                        "杭州", "余杭区", "TOLL_STATION", expiresAt)), expiresAt))));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-4"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-8", "REQ-4", 8, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "有没有经过五常收费站的路线", "turn-4");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "place.choices", "turn.completed");
+        ArgumentCaptor<AiTurnCompleteRequest> asked = ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
+        verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-4"), asked.capture());
+        assertThat(asked.getValue().payloadJson())
+                .contains("\"flow\":\"ROUTE_EXISTS\"")
+                .contains("\"checkContext\"")
+                .contains("五常收费站");
+        assertThat(sink.lastContent().assistantMessage().payload().toString())
+                .doesNotContain("checkContext")
+                .doesNotContain("routeRef");
+
+        AssistantMessageView latest = new AssistantMessageView("AIM-8", "REQ-4", "ASSISTANT",
+                "PLACE_CHOICES", "请确认具体地点", asked.getValue().payloadJson(), 8,
+                LocalDateTime.now(), "COMPLETED", null, null);
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-5", 7, latest, null)));
+        when(mapRouteAi.selectViaRoutePlace(any())).thenReturn(success(new ViaRouteResponse(
+                "ROUTE_READY", 6, "途经五常收费站的路线", viaCard(), null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-5"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-10", "REQ-5", 10, LocalDateTime.now())));
+        sink = new RecordingSink();
+
+        service.selectPlaceChoice(sink, CUSTOMER_ID, CONVERSATION_NO,
+                taskNo, choiceId, 6, "五常收费站", "杭州", "turn-5");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "answer.completed", "turn.completed");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("找到一条从当前起点到终点、经过「五常收费站」的路线");
+        verify(mapRouteAi).selectViaRoutePlace(new ViaRoutePlaceChoiceRequest(CUSTOMER_ID,
+                CONVERSATION_NO, 6, 6, 7, taskNo, choiceId));
+        verify(mapRouteAi, never()).selectCurrentRouteCheckPlace(any());
+    }
+
+    @Test
+    void replayedRouteCardRestoresStoredRouteCheckAlongsidePolyline() {
+        RouteCardDto source = card();
+        RouteCardDto current = new RouteCardDto(source.routeRef(), source.origin(), source.destination(),
+                source.via(), source.route(), Instant.now().minusSeconds(10), Instant.now().plusSeconds(240));
+        String routeRef = source.routeRef();
+        String stored = "{\"routeCard\":{\"routeRef\":\"" + routeRef
+                + "\",\"origin\":{\"name\":\"德清高速路口\"},"
+                + "\"destination\":{\"name\":\"西溪湿地\"},"
+                + "\"route\":{\"distanceMeters\":45600,\"durationSeconds\":3300}},"
+                + "\"routeCheck\":{\"routeRef\":\"" + routeRef + "\",\"status\":\"CHECKED\","
+                + "\"verdict\":\"PASSED\",\"checkMode\":\"PASS_NEARBY\","
+                + "\"target\":{\"name\":\"太湖服务区\"}}}";
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-3", 5, null, routeReply(stored))));
+        when(mapRouteAi.replay(new RouteReplayRequest(CUSTOMER_ID, CONVERSATION_NO, routeRef)))
+                .thenReturn(success(new RouteReplayResponse(current)));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "这条路线经过太湖服务区吗", "turn-3");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "route.card", "turn.completed");
+        Map<String, Object> payload = sink.lastContent().assistantMessage().payload();
+        assertThat(payload).containsOnlyKeys("routeCard", "routeCheck");
+        assertThat(payload.toString())
+                .contains("polyline", "PASSED", "太湖服务区")
+                .doesNotContain("expired=true");
+    }
+
+    @Test
+    void viaRoutePlanUsesLatestPersistedRouteAndPersistsNewViaSummary() {
+        String routeRef = card().routeRef();
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-7", 13, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "VIA_ROUTE_PLAN",
+                "五常收费站", null, null, null, null)));
+        when(passengerAi.listMessages(CONVERSATION_NO, CUSTOMER_ID, 50, null))
+                .thenReturn(success(routeHistory(routeRef)));
+        when(mapRouteAi.viaRoute(any())).thenReturn(success(new ViaRouteResponse(
+                "ROUTE_READY", 1, null, viaCard(), null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-7"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-14", "REQ-7", 14,
+                        LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "改走五常收费站", "turn-7");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "route.card", "turn.completed");
+        assertThat(sink.lastContent().assistantMessage().content()).contains("途经五常收费站");
+        verify(mapRouteAi).viaRoute(new ViaRouteRequest(CUSTOMER_ID, CONVERSATION_NO,
+                routeRef, 0, 13, "五常收费站", null, "改走五常收费站"));
+        ArgumentCaptor<AiTurnCompleteRequest> completed = ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
+        verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-7"), completed.capture());
+        assertThat(completed.getValue().payloadJson())
+                .contains("\"via\":{\"name\":\"五常收费站\"}")
+                .doesNotContain("polyline");
     }
 
     @Test
@@ -360,10 +649,15 @@ class AiRouteTurnServiceTest {
         verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-3"), first.capture());
         assertThat(first.getValue().messageType()).isEqualTo("PLACE_CHOICES");
         assertThat(first.getValue().content()).contains("德清收费站");
+        // 落库载荷携带服务端续接上下文，客户端事件只看到公开选项。
         assertThat(first.getValue().payloadJson())
                 .contains("\"flow\":\"CURRENT_ROUTE_CHECK\"")
                 .contains(choiceId)
-                .doesNotContain("routeRef");
+                .contains("\"checkContext\"")
+                .contains(routeRef);
+        assertThat(sink.lastContent().assistantMessage().payload().toString())
+                .doesNotContain("routeRef")
+                .doesNotContain("checkContext");
 
         AssistantMessageView latest = new AssistantMessageView("AIM-6", "REQ-3", "ASSISTANT",
                 "PLACE_CHOICES", "请选择核查地点", first.getValue().payloadJson(), 6,
@@ -424,7 +718,12 @@ class AiRouteTurnServiceTest {
         ArgumentCaptor<AiTurnCompleteRequest> question = ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
         verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-5"), question.capture());
         assertThat(question.getValue().messageType()).isEqualTo("ROUTE_CHECK_CHOICES");
-        assertThat(question.getValue().payloadJson()).contains(taskNo).contains(label).doesNotContain("routeRef");
+        // 落库载荷携带服务端续接上下文，客户端事件只看到公开选项。
+        assertThat(question.getValue().payloadJson())
+                .contains(taskNo).contains(label).contains("\"checkContext\"").contains(routeRef);
+        assertThat(sink.lastContent().assistantMessage().payload().toString())
+                .doesNotContain("routeRef")
+                .doesNotContain("checkContext");
         assertThat(sink.eventNames()).containsExactly(
                 "turn.started", "route-check.choices", "turn.completed");
 
@@ -495,6 +794,49 @@ class AiRouteTurnServiceTest {
                 .doesNotContain("暂时无法确认");
         verify(mapRouteAi).selectCurrentRouteCheckMode(new CurrentRouteCheckModeChoiceRequest(
                 CUSTOMER_ID, CONVERSATION_NO, routeRef, 9, 11, taskNo, "ENTER_HIGHWAY"));
+    }
+
+    @Test
+    void tollDirectionConflictDoesNotTellPassengerThatAnExitRouteUsesTheEntrance() throws Exception {
+        String routeRef = card().routeRef();
+        String taskNo = "RCT-00000000-0000-4000-8000-000000000005";
+        String label = "从该入口驶入高速";
+        CurrentRouteCheckTargetView target = new CurrentRouteCheckTargetView(
+                "五常收费站(G25长深高速入口北向)", "收费站", "杭州", "余杭区", "TOLL_STATION");
+        String payload = objectMapper.writeValueAsString(Map.of("routeCheckChoices", Map.of(
+                "taskNo", taskNo,
+                "target", target,
+                "choices", List.of(
+                        new CurrentRouteCheckModeChoiceView("PASS_NEARBY", "沿路线经过该地点附近"),
+                        new CurrentRouteCheckModeChoiceView("ENTER_HIGHWAY", label)),
+                "requestVersion", 9)));
+        AssistantMessageView latest = new AssistantMessageView("AIM-14", "REQ-7", "ASSISTANT",
+                "ROUTE_CHECK_CHOICES", "请选择核查方式", payload, 12,
+                LocalDateTime.now(), "COMPLETED", null, null);
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-8", 13, latest, null)));
+        when(passengerAi.listMessages(CONVERSATION_NO, CUSTOMER_ID, 50, null))
+                .thenReturn(success(routeHistory(routeRef)));
+        when(mapRouteAi.selectCurrentRouteCheckMode(any())).thenReturn(success(
+                new CurrentRouteCheckResponse("CHECKED", "CONFLICT",
+                        "TOLL_ACTION_DIRECTION_CONFLICT",
+                        "路线在到达目标收费站前仍行驶在高速上，收费站后离开高速，"
+                                + "属于驶出高速，不是从该入口驶入",
+                        target, "ENTER_HIGHWAY", null, null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-8"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse(
+                        "AIM-16", "REQ-8", 14, LocalDateTime.now())));
+
+        service.selectCurrentRouteCheckMode(sink, CUSTOMER_ID, CONVERSATION_NO,
+                taskNo, "ENTER_HIGHWAY", 9, label, "turn-8");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "answer.completed", "turn.completed");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("当前提问与所选地点或路线状态不一致")
+                .contains("属于驶出高速，不是从该入口驶入")
+                .doesNotContain("会从「五常收费站");
+        verify(mapRouteAi).selectCurrentRouteCheckMode(new CurrentRouteCheckModeChoiceRequest(
+                CUSTOMER_ID, CONVERSATION_NO, routeRef, 9, 13, taskNo, "ENTER_HIGHWAY"));
     }
 
     @Test
@@ -700,6 +1042,29 @@ class AiRouteTurnServiceTest {
     }
 
     @Test
+    void unverifiedTollEndpointExplainsEvidenceFailureInsteadOfGenericOutage() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-2", 2, confirmationQuestion(), null)));
+        when(mapRouteAi.confirm(any())).thenReturn(success(new RouteConfirmResponse("CONFIRMED", null)));
+        when(mapRouteAi.defaultRoute(any()))
+                .thenThrow(feignError(422, "X-Ai-Error-Code", "AI_ROUTE_UNVERIFIABLE"));
+        when(passengerAi.fail(eq(CONVERSATION_NO), eq("REQ-2"), any()))
+                .thenReturn(success(new com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiTurnFailResponse(
+                        "AIM-4", "REQ-2", 4)));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "对", "turn-2");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "turn.failed");
+        assertThat(sink.lastFailed().code()).isEqualTo("AI_ROUTE_UNVERIFIABLE");
+        assertThat(sink.lastFailed().message()).contains("已找到驾车路线", "无法确认", "收费站");
+        verify(passengerAi, never()).complete(eq(CONVERSATION_NO), eq("REQ-2"), any());
+        ArgumentCaptor<AiTurnFailRequest> failure = ArgumentCaptor.forClass(AiTurnFailRequest.class);
+        verify(passengerAi).fail(eq(CONVERSATION_NO), eq("REQ-2"), failure.capture());
+        assertThat(failure.getValue().failureCode()).isEqualTo("AI_ROUTE_UNVERIFIABLE");
+        assertThat(failure.getValue().failureMessage()).isEqualTo(sink.lastFailed().message());
+    }
+
+    @Test
     void errorCodeHeaderIsMatchedCaseInsensitively() {
         when(passengerAi.begin(eq(CONVERSATION_NO), any()))
                 .thenReturn(success(new AiTurnBeginResponse("REQ-2", 2, confirmationQuestion(), null)));
@@ -773,6 +1138,12 @@ class AiRouteTurnServiceTest {
                         List.of(new GeoPointView(120.1, 30.2), new GeoPointView(120.2, 30.3))),
                 Instant.parse("2026-09-18T02:00:00Z"),
                 Instant.parse("2026-09-18T02:05:00Z"));
+    }
+
+    private static RouteCardDto viaCard() {
+        RouteCardDto base = card();
+        return new RouteCardDto(base.routeRef(), base.origin(), base.destination(),
+                new PlaceView("五常收费站"), base.route(), base.generatedAt(), base.expiresAt());
     }
 
     private static <T> ResponseVo<T> success(T data) {

@@ -15,6 +15,11 @@ import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RoutePreparationResp
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RoutePlaceChoiceRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteReplayRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteReplayResponse;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.PartialEndpointPrepareRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.PartialEndpointCompleteRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRoutePlaceChoiceRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteResponse;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.config.MapInternalFeignConfiguration;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -31,6 +36,14 @@ public interface MapRouteAiClient {
 
     @PostMapping("/api/v1/internal/ai/route/prepare")
     ResponseVo<RoutePreparationResponse> prepare(@RequestBody RoutePreparationRequest request);
+
+    @PostMapping("/api/v1/internal/ai/route/partial")
+    ResponseVo<RoutePreparationResponse> preparePartial(
+            @RequestBody PartialEndpointPrepareRequest request);
+
+    @PostMapping("/api/v1/internal/ai/route/partial/complete")
+    ResponseVo<RoutePreparationResponse> completePartial(
+            @RequestBody PartialEndpointCompleteRequest request);
 
     @PostMapping("/api/v1/internal/ai/route/place-choice")
     ResponseVo<RoutePreparationResponse> selectPlace(@RequestBody RoutePlaceChoiceRequest request);
@@ -52,6 +65,13 @@ public interface MapRouteAiClient {
 
     @PostMapping("/api/v1/internal/ai/route/default")
     ResponseVo<RouteCardDto> defaultRoute(@RequestBody DefaultRouteRequest request);
+
+    @PostMapping("/api/v1/internal/ai/route/via")
+    ResponseVo<ViaRouteResponse> viaRoute(@RequestBody ViaRouteRequest request);
+
+    @PostMapping("/api/v1/internal/ai/route/via/place-choice")
+    ResponseVo<ViaRouteResponse> selectViaRoutePlace(
+            @RequestBody ViaRoutePlaceChoiceRequest request);
 
     @PostMapping("/api/v1/internal/ai/route/replay")
     ResponseVo<RouteReplayResponse> replay(@RequestBody RouteReplayRequest request);

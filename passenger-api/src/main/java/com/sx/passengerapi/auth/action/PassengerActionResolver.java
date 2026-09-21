@@ -10,6 +10,7 @@ import java.util.Optional;
 
 import static com.sx.passengerapi.auth.action.PassengerActionCode.ACCOUNT_CANCEL;
 import static com.sx.passengerapi.auth.action.PassengerActionCode.AI_CONVERSATION_CREATE;
+import static com.sx.passengerapi.auth.action.PassengerActionCode.AI_CONVERSATION_DELETE;
 import static com.sx.passengerapi.auth.action.PassengerActionCode.AI_HISTORY_READ;
 import static com.sx.passengerapi.auth.action.PassengerActionCode.AI_MESSAGE_SEND;
 import static com.sx.passengerapi.auth.action.PassengerActionCode.AUTO_PAY_MANAGE;
@@ -64,6 +65,9 @@ public class PassengerActionResolver {
             rule("GET", "/app/api/v1/benefits/overview", BENEFIT_READ),
             rule("GET", "/app/api/v1/benefits/points", BENEFIT_READ),
             rule("POST", "/app/api/v1/ai/conversations", AI_CONVERSATION_CREATE),
+            rule("GET", "/app/api/v1/ai/conversations", AI_HISTORY_READ),
+            rule("GET", "/app/api/v1/ai/conversations/{conversationNo}/requests/{requestNo}", AI_HISTORY_READ),
+            rule("DELETE", "/app/api/v1/ai/conversations/{conversationNo}", AI_CONVERSATION_DELETE),
             rule("POST", "/app/api/v1/ai/conversations/{conversationNo}/messages/stream", AI_MESSAGE_SEND),
             rule("POST", "/app/api/v1/ai/conversations/{conversationNo}/route-tasks/{taskNo}/place-choice/stream", AI_MESSAGE_SEND),
             rule("POST", "/app/api/v1/ai/conversations/{conversationNo}/route-check-tasks/{taskNo}/mode-choice/stream", AI_MESSAGE_SEND),

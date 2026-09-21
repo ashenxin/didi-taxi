@@ -2,6 +2,9 @@ package com.sx.passengerapi.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationDeleteResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationListResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiRequestStatusResponse;
 import com.sx.passengerapi.common.exception.GlobalExceptionHandler;
 import com.sx.passengerapi.service.AiRouteTurnService;
 import org.junit.jupiter.api.AfterEach;
@@ -24,6 +27,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
@@ -114,6 +118,30 @@ class PassengerAiConversationControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.messages[0].clientMessageNo").value("turn-1"))
                 .andExpect(jsonPath("$.data.messages[1].clientMessageNo").isEmpty());
+    }
+
+    @Test
+    void exposesConversationListRequestStatusAndDelete() throws Exception {
+        when(turnService.listConversations(10001L, 20, null))
+                .thenReturn(new AiConversationListResponse(java.util.List.of(), false, null));
+        mvc.perform(get("/app/api/v1/ai/conversations")
+                        .header("X-User-Id", "10001").param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversations").isArray());
+
+        when(turnService.requestStatus(10001L, "AIC-1", "REQ-1"))
+                .thenReturn(new AiRequestStatusResponse("REQ-1", 1L, "turn-1", "PROCESSING", null));
+        mvc.perform(get("/app/api/v1/ai/conversations/AIC-1/requests/REQ-1")
+                        .header("X-User-Id", "10001"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PROCESSING"));
+
+        when(turnService.deleteConversation(10001L, "AIC-1"))
+                .thenReturn(new AiConversationDeleteResponse("AIC-1", null));
+        mvc.perform(delete("/app/api/v1/ai/conversations/AIC-1")
+                        .header("X-User-Id", "10001"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conversationNo").value("AIC-1"));
     }
 
     @Test

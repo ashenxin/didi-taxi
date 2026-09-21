@@ -7,7 +7,10 @@ import com.sx.passengerapi.client.MapRouteAiClient;
 import com.sx.passengerapi.client.PassengerAiConversationClient;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateRequest;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationDeleteResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationListResponse;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiMessageListResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiRequestStatusResponse;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiTurnBeginRequest;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiTurnBeginResponse;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiTurnCompleteRequest;
@@ -32,6 +35,11 @@ import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RoutePreparationResp
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RoutePlaceChoiceRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteReplayRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.RouteReplayResponse;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.PartialEndpointPrepareRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.PartialEndpointCompleteRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRoutePlaceChoiceRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteRequest;
+import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteResponse;
 import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ai.AiSseEvents.AssistantMessageEvent;
@@ -53,7 +61,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * AI 客服路线轮次编排：确认两端并生成默认路线卡，以及核查当前路线是否经过指定地点。
+ * AI 客服路线轮次编排：确认两端、生成默认或指定途经点路线卡，以及核查当前路线。
  *
  * 地图地点、路线与分钟数只来自 map-service 确定性能力，模型只负责提取地点名称；
  * 本类按结构化状态决定分支，不依赖模型文本作为业务权威。事件顺序遵循 API 契约：
@@ -69,12 +77,17 @@ public class AiRouteTurnService {
     static final String CONFIRMED = "CONFIRMED";
     static final String NOT_ACCEPTED = "NOT_ACCEPTED";
     static final String READY_FOR_ROUTE = "READY_FOR_ROUTE";
+    static final String WAITING_FOR_OTHER_ENDPOINT = "WAITING_FOR_OTHER_ENDPOINT";
     static final String NEEDS_PLACE_CHOICE = "NEEDS_PLACE_CHOICE";
     static final String NEEDS_CHECK_MODE_CHOICE = "NEEDS_CHECK_MODE_CHOICE";
     static final String UNIQUE = "UNIQUE";
     static final String CURRENT_ROUTE_CHECK = "CURRENT_ROUTE_CHECK";
+    static final String VIA_ROUTE_PLAN = "VIA_ROUTE_PLAN";
+    static final String ROUTE_EXISTS = "ROUTE_EXISTS";
 
     private static final String DEFAULT_PLACE_CHOICE_FLOW = "ROUTE_PREPARATION";
+    private static final String PARTIAL_ENDPOINT_FLOW = "PARTIAL_ENDPOINT";
+    private static final String CHECK_CONTEXT_FIELD = "checkContext";
     private static final int MESSAGE_PAGE_SIZE = 50;
 
     private static final String ASK_FOR_ENDPOINTS =
@@ -85,8 +98,15 @@ public class AiRouteTurnService {
             "之前的起终点信息已失效，请重新告诉我完整的起点和终点。";
     private static final String ASK_FOR_CHECK_PLACE =
             "请告诉我要核查的收费站、服务区或加油站名称。";
+    private static final String ASK_FOR_VIA_PLACE =
+            "请告诉我新路线必须经过的收费站、服务区或加油站名称。";
     private static final String CURRENT_ROUTE_UNAVAILABLE =
             "当前会话没有可核查的有效路线，请先规划一条路线。";
+    private static final String ASK_FOR_ROUTE_EXISTS_PLACE =
+            "请告诉我要查询的收费站、服务区或加油站名称。";
+    private static final String NEW_DEFAULT_ROUTE_PREFIX = "这是本轮新生成的默认路线。";
+    private static final Set<String> CHECK_MODES =
+            Set.of("PASS_NEARBY", "USE_EXIT", "ENTER_HIGHWAY", "VISIT_PLACE");
 
     private final PassengerAiConversationClient passengerAi;
     private final MapRouteAiClient mapRouteAi;
@@ -108,7 +128,34 @@ public class AiRouteTurnService {
     /** 分页读取历史消息；归属校验在下游，跨乘客访问按会话不存在处理。 */
     public AiMessageListResponse listMessages(long customerId, String conversationNo,
                                               Integer limit, Long beforeSequence) {
-        return unwrap(passengerAi.listMessages(conversationNo, customerId, limit, beforeSequence), "listMessages");
+        AiMessageListResponse page = unwrap(passengerAi.listMessages(
+                conversationNo, customerId, limit, beforeSequence), "listMessages");
+        if (page.messages() == null) {
+            return page;
+        }
+        return new AiMessageListResponse(page.messages().stream()
+                .map(this::withoutCheckContext).toList(), page.hasMore());
+    }
+
+    public AiConversationListResponse listConversations(long customerId, Integer limit,
+                                                        String beforeConversationNo) {
+        return unwrap(passengerAi.listConversations(
+                customerId, limit, beforeConversationNo), "listConversations");
+    }
+
+    public AiRequestStatusResponse requestStatus(long customerId, String conversationNo,
+                                                 String requestNo) {
+        AiRequestStatusResponse status = unwrap(passengerAi.requestStatus(
+                conversationNo, requestNo, customerId), "requestStatus");
+        return new AiRequestStatusResponse(status.requestNo(), status.requestVersion(),
+                status.clientMessageNo(), status.status(),
+                withoutCheckContext(status.assistantReply()));
+    }
+
+    public AiConversationDeleteResponse deleteConversation(long customerId,
+                                                            String conversationNo) {
+        return unwrap(passengerAi.deleteConversation(
+                conversationNo, customerId), "deleteConversation");
     }
 
     /** 执行一轮文字消息；任何异常都以 turn.failed 收尾。 */
@@ -143,7 +190,8 @@ public class AiRouteTurnService {
                 return;
             }
 
-            handleFreshText(sink, customerId, conversationNo, requestNo, begin.requestVersion(), content);
+            handleFreshText(sink, customerId, conversationNo, requestNo,
+                    begin.requestVersion(), content, begin.latestAssistantMessage());
             sink.turnCompleted(new TurnCompletedEvent(requestNo));
         } catch (Exception e) {
             TurnFailedEvent failed = classify(requestNo, e);
@@ -182,15 +230,65 @@ public class AiRouteTurnService {
      * 符合"乘客更改任一端时使旧路线与选项失效"的契约。
      */
     private void handleFreshText(AiTurnEventSink sink, long customerId, String conversationNo,
-                                 String requestNo, long conditionVersion, String content) {
+                                 String requestNo, long conditionVersion, String content,
+                                 AssistantMessageView latestAssistantMessage) {
+        PartialEndpointPayload pending = parsePartialEndpointPayload(latestAssistantMessage);
         ExtractEndpointsResponse extracted = unwrap(mapRouteAi.extract(
-                new ExtractEndpointsRequest(content)), "extract");
+                new ExtractEndpointsRequest(content,
+                        pending == null ? null : pending.missingRole())), "extract");
         if (CURRENT_ROUTE_CHECK.equals(extracted.intent())) {
             handleCurrentRouteCheck(sink, customerId, conversationNo, requestNo,
                     conditionVersion, content, extracted);
             return;
         }
-        if (extracted.originName() == null || extracted.destinationName() == null) {
+        if (ROUTE_EXISTS.equals(extracted.intent())) {
+            handleRouteExists(sink, customerId, conversationNo, requestNo,
+                    conditionVersion, content, extracted);
+            return;
+        }
+        // 上一轮只问到一半端点的核查请求：本轮补齐两端后继续原核查，而不是改判成普通规划。
+        CheckContext pendingCheck = parsePendingCheckContext(latestAssistantMessage);
+        if (pendingCheck != null) {
+            if (hasText(extracted.originName()) && hasText(extracted.destinationName())) {
+                prepareCheckWithEndpoints(sink, customerId, conversationNo, requestNo,
+                        conditionVersion, content, extracted, pendingCheck);
+            } else {
+                askForCheckEndpoints(sink, customerId, conversationNo, requestNo, pendingCheck);
+            }
+            return;
+        }
+        boolean hasOrigin = hasText(extracted.originName());
+        boolean hasDestination = hasText(extracted.destinationName());
+        if (pending != null && !(hasOrigin && hasDestination)) {
+            String missingName = "ORIGIN".equals(pending.missingRole())
+                    ? extracted.originName() : extracted.destinationName();
+            String missingRegion = "ORIGIN".equals(pending.missingRole())
+                    ? extracted.originRegion() : extracted.destinationRegion();
+            if (!hasText(missingName)) {
+                completeText(sink, customerId, conversationNo, requestNo,
+                        partialPromptText(pending.knownRole(), pending.knownPlaceName()),
+                        partialPayloadJson(pending));
+                return;
+            }
+            continuePartialEndpoint(sink, customerId, conversationNo, requestNo,
+                    conditionVersion, missingName, missingRegion, pending);
+            return;
+        }
+        if (hasOrigin != hasDestination) {
+            if (VIA_ROUTE_PLAN.equals(extracted.intent()) && !hasText(extracted.viaPlaceName())) {
+                completeText(sink, customerId, conversationNo, requestNo, ASK_FOR_VIA_PLACE, null);
+                return;
+            }
+            preparePartialEndpoint(sink, customerId, conversationNo, requestNo, conditionVersion,
+                    content, extracted, hasOrigin ? "ORIGIN" : "DESTINATION");
+            return;
+        }
+        if (VIA_ROUTE_PLAN.equals(extracted.intent())) {
+            handleViaRoutePlan(sink, customerId, conversationNo, requestNo,
+                    conditionVersion, content, extracted);
+            return;
+        }
+        if (!hasOrigin || !hasDestination) {
             completeText(sink, customerId, conversationNo, requestNo, ASK_FOR_ENDPOINTS, null);
             return;
         }
@@ -210,7 +308,227 @@ public class AiRouteTurnService {
         }
     }
 
-    /** 当前路线只能取自本会话已持久化的最新路线卡，模型不能提交 routeRef。 */
+    private void preparePartialEndpoint(AiTurnEventSink sink, long customerId,
+                                        String conversationNo, String requestNo,
+                                        long conditionVersion, String content,
+                                        ExtractEndpointsResponse extracted, String endpointRole) {
+        String placeName = "ORIGIN".equals(endpointRole)
+                ? extracted.originName() : extracted.destinationName();
+        String placeRegion = "ORIGIN".equals(endpointRole)
+                ? extracted.originRegion() : extracted.destinationRegion();
+        RoutePreparationResponse prep = unwrap(mapRouteAi.preparePartial(
+                new PartialEndpointPrepareRequest(customerId, conversationNo, requestNo,
+                        conditionVersion, endpointRole, placeName, placeRegion,
+                        extracted.intent(), content)), "preparePartial");
+        if (WAITING_FOR_OTHER_ENDPOINT.equals(prep.status())) {
+            completePartialPrompt(sink, customerId, conversationNo, requestNo,
+                    prep.partialEndpoint(), extracted.viaPlaceName(), extracted.viaPlaceRegion());
+        } else if (NEEDS_PLACE_CHOICE.equals(prep.status())) {
+            completePlaceChoices(sink, customerId, conversationNo, requestNo,
+                    conditionVersion, conditionVersion, prep, PARTIAL_ENDPOINT_FLOW,
+                    extracted.viaPlaceName(), extracted.viaPlaceRegion());
+        } else {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    singleEndpointClarification(endpointRole, placeName, prep), null);
+        }
+    }
+
+    private void continuePartialEndpoint(AiTurnEventSink sink, long customerId,
+                                         String conversationNo, String requestNo,
+                                         long currentConditionVersion,
+                                         String placeName, String placeRegion,
+                                         PartialEndpointPayload pending) {
+        RoutePreparationResponse prep = unwrap(mapRouteAi.completePartial(
+                new PartialEndpointCompleteRequest(customerId, conversationNo,
+                        pending.followUpRequestNo(), pending.conditionVersion(), requestNo,
+                        currentConditionVersion, pending.missingRole(), placeName, placeRegion)),
+                "completePartial");
+        if (READY_FOR_ROUTE.equals(prep.status())) {
+            if (VIA_ROUTE_PLAN.equals(pending.intent())) {
+                requestViaRoute(sink, customerId, conversationNo, requestNo,
+                        null, currentConditionVersion, currentConditionVersion,
+                        pending.viaPlaceName(), pending.viaPlaceRegion(), placeName);
+            } else {
+                completeDefaultRoute(sink, customerId, conversationNo, requestNo,
+                        currentConditionVersion);
+            }
+        } else if (NEEDS_PLACE_CHOICE.equals(prep.status())) {
+            String flow = VIA_ROUTE_PLAN.equals(pending.intent())
+                    ? VIA_ROUTE_PLAN : DEFAULT_PLACE_CHOICE_FLOW;
+            completePlaceChoices(sink, customerId, conversationNo, requestNo,
+                    currentConditionVersion, currentConditionVersion, prep, flow,
+                    pending.viaPlaceName(), pending.viaPlaceRegion());
+        } else if ("CONTEXT_UNAVAILABLE".equals(prep.status())) {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    CONFIRMATION_EXPIRED, null);
+        } else {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    singleEndpointClarification(pending.missingRole(), placeName, prep),
+                    partialPayloadJson(pending));
+        }
+    }
+
+    private String singleEndpointClarification(String endpointRole, String placeName,
+                                               RoutePreparationResponse prep) {
+        EndpointFeedbackView feedback = "ORIGIN".equals(endpointRole)
+                ? prep.originFeedback() : prep.destinationFeedback();
+        String label = "ORIGIN".equals(endpointRole) ? "起点" : "终点";
+        if (feedback == null) {
+            return "没有识别到明确的" + label + "，请补充更具体的地点名称。";
+        }
+        return endpointClarification(label, placeName, feedback)
+                + "请补充城市、区县或更具体的地址。";
+    }
+
+    private void completePartialPrompt(AiTurnEventSink sink, long customerId,
+                                       String conversationNo, String requestNo,
+                                       com.sx.passengerapi.client.dto.maproute.MapRouteDtos.PartialEndpointView partial,
+                                       String viaPlaceName, String viaPlaceRegion) {
+        if (partial == null || !requestNo.equals(partial.followUpRequestNo())) {
+            throw new IllegalStateException("单端点续接响应不完整");
+        }
+        PartialEndpointPayload payload = new PartialEndpointPayload(
+                partial.conditionVersion(), partial.followUpRequestNo(), partial.knownRole(),
+                partial.missingRole(), partial.knownPlaceName(), partial.intent(),
+                viaPlaceName, viaPlaceRegion);
+        completeText(sink, customerId, conversationNo, requestNo,
+                partialPromptText(partial.knownRole(), partial.knownPlaceName()),
+                partialPayloadJson(payload));
+    }
+
+    private static String partialPromptText(String knownRole, String knownPlaceName) {
+        return "ORIGIN".equals(knownRole)
+                ? "已记住起点「" + knownPlaceName + "」，请告诉我终点。"
+                : "已记住终点「" + knownPlaceName + "」，请告诉我起点。";
+    }
+
+    private String partialPayloadJson(PartialEndpointPayload payload) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("conditionVersion", payload.conditionVersion());
+        view.put("followUpRequestNo", payload.followUpRequestNo());
+        view.put("knownRole", payload.knownRole());
+        view.put("missingRole", payload.missingRole());
+        view.put("knownPlaceName", payload.knownPlaceName());
+        view.put("intent", payload.intent());
+        if (hasText(payload.viaPlaceName())) view.put("viaPlaceName", payload.viaPlaceName());
+        if (hasText(payload.viaPlaceRegion())) view.put("viaPlaceRegion", payload.viaPlaceRegion());
+        try {
+            return objectMapper.writeValueAsString(Map.of("partialEndpoint", view));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("单端点续接摘要序列化失败", e);
+        }
+    }
+
+    /** 支持沿用当前路线两端，也支持本轮完整提供起终点与指定途经点。 */
+    private void handleViaRoutePlan(AiTurnEventSink sink, long customerId,
+                                    String conversationNo, String requestNo,
+                                    long requestVersion, String content,
+                                    ExtractEndpointsResponse extracted) {
+        if (!hasText(extracted.viaPlaceName())) {
+            completeText(sink, customerId, conversationNo, requestNo, ASK_FOR_VIA_PLACE, null);
+            return;
+        }
+        boolean hasOrigin = hasText(extracted.originName());
+        boolean hasDestination = hasText(extracted.destinationName());
+        if (hasOrigin != hasDestination) {
+            completeText(sink, customerId, conversationNo, requestNo, ASK_FOR_ENDPOINTS, null);
+            return;
+        }
+        if (hasOrigin) {
+            RoutePreparationResponse prep = unwrap(mapRouteAi.prepare(new RoutePreparationRequest(
+                    customerId, conversationNo, requestNo, requestVersion,
+                    extracted.originName(), extracted.originRegion(),
+                    extracted.destinationName(), extracted.destinationRegion(),
+                    extracted.intent(), content)), "prepareViaEndpoints");
+            if (READY_FOR_ROUTE.equals(prep.status())) {
+                requestViaRoute(sink, customerId, conversationNo, requestNo,
+                        null, requestVersion, requestVersion,
+                        extracted.viaPlaceName(), extracted.viaPlaceRegion(), content);
+            } else if (NEEDS_PLACE_CHOICE.equals(prep.status())) {
+                completePlaceChoices(sink, customerId, conversationNo, requestNo,
+                        requestVersion, requestVersion, prep, VIA_ROUTE_PLAN,
+                        extracted.viaPlaceName(), extracted.viaPlaceRegion());
+            } else {
+                completeText(sink, customerId, conversationNo, requestNo,
+                        buildClarification(extracted, prep), null);
+            }
+            return;
+        }
+        String routeRef = latestPersistedRouteRef(customerId, conversationNo);
+        if (routeRef == null) {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    CURRENT_ROUTE_UNAVAILABLE, null);
+            return;
+        }
+        requestViaRoute(sink, customerId, conversationNo, requestNo,
+                routeRef, 0, requestVersion,
+                extracted.viaPlaceName(), extracted.viaPlaceRegion(), content);
+    }
+
+    private void requestViaRoute(AiTurnEventSink sink, long customerId,
+                                 String conversationNo, String requestNo,
+                                 String routeRef, long conditionVersion,
+                                 long requestVersion, String placeName,
+                                 String placeRegion, String originalUserText) {
+        ViaRouteResponse result = unwrap(mapRouteAi.viaRoute(new ViaRouteRequest(
+                customerId, conversationNo, routeRef, conditionVersion, requestVersion,
+                placeName, placeRegion, originalUserText)), "viaRoute");
+        completeViaRouteResult(sink, customerId, conversationNo, requestNo,
+                requestVersion, placeName, result);
+    }
+
+    private void completeViaRouteResult(AiTurnEventSink sink, long customerId,
+                                        String conversationNo, String requestNo,
+                                        long requestVersion, String requestedPlaceName,
+                                        ViaRouteResponse result) {
+        switch (result.status()) {
+            case "ROUTE_READY" -> completeRouteCard(sink, customerId, conversationNo,
+                    requestNo, result.routeCard());
+            case NEEDS_PLACE_CHOICE -> completeViaPlaceChoices(sink, customerId, conversationNo,
+                    requestNo, requestVersion, requestedPlaceName, result, VIA_ROUTE_PLAN, null);
+            case "PLACE_NOT_FOUND" -> completeText(sink, customerId, conversationNo, requestNo,
+                    "没有找到「" + requestedPlaceName + "」，请补充城市或更具体的名称。", null);
+            case "PLACE_UNVERIFIABLE" -> completeText(sink, customerId, conversationNo, requestNo,
+                    "暂时无法使用「" + requestedPlaceName + "」规划路线："
+                            + detailOrFallback(result.detail(), "地图地点信息不足") + "。", null);
+            case "ROUTE_NOT_FOUND" -> completeText(sink, customerId, conversationNo, requestNo,
+                    "没有找到已验证经过「" + requestedPlaceName + "」的可达路线。", null);
+            case "CONTEXT_UNAVAILABLE" -> completeText(sink, customerId, conversationNo, requestNo,
+                    "路线条件已失效，请重新告诉我完整的起点和终点。", null);
+            default -> throw new IllegalStateException("未知的指定途经点规划状态: " + result.status());
+        }
+    }
+
+    private void completeViaPlaceChoices(AiTurnEventSink sink, long customerId,
+                                         String conversationNo, String requestNo,
+                                         long requestVersion, String requestedPlaceName,
+                                         ViaRouteResponse result, String flow,
+                                         CheckContext context) {
+        var choices = result.placeChoices();
+        if (choices == null || choices.choices() == null || choices.choices().isEmpty()
+                || result.conditionVersion() <= 0) {
+            throw new IllegalStateException("指定途经点选项响应不完整");
+        }
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("taskNo", choices.taskNo());
+        view.put("role", choices.role());
+        view.put("choices", choices.choices());
+        view.put("expiresAt", choices.expiresAt());
+        view.put("conditionVersion", result.conditionVersion());
+        view.put("requestVersion", requestVersion);
+        view.put("flow", flow);
+        String payloadJson;
+        try {
+            payloadJson = objectMapper.writeValueAsString(Map.of("placeChoices", view));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("指定途经点选项摘要序列化失败", e);
+        }
+        String text = "地图找到以下可能对应「" + requestedPlaceName + "」的地点，请确认具体地点。";
+        sendChoiceMessage(sink, customerId, conversationNo, requestNo, "PLACE_CHOICES",
+                "place.choices", text, payloadJson, context);
+    }
+
+    /** 当前路线优先取自本会话已持久化的最新路线卡，模型不能提交 routeRef。 */
     private void handleCurrentRouteCheck(AiTurnEventSink sink, long customerId,
                                          String conversationNo, String requestNo,
                                          long requestVersion, String content,
@@ -221,37 +539,359 @@ public class AiRouteTurnService {
         }
         String routeRef = latestPersistedRouteRef(customerId, conversationNo);
         if (routeRef == null) {
-            completeText(sink, customerId, conversationNo, requestNo, CURRENT_ROUTE_UNAVAILABLE, null);
+            CheckContext context = checkContext(CURRENT_ROUTE_CHECK, extracted, null, false, false);
+            if (hasText(extracted.originName()) && hasText(extracted.destinationName())) {
+                prepareCheckWithEndpoints(sink, customerId, conversationNo, requestNo,
+                        requestVersion, content, extracted, context);
+            } else {
+                askForCheckEndpoints(sink, customerId, conversationNo, requestNo, context);
+            }
             return;
         }
+        CheckContext context = checkContext(CURRENT_ROUTE_CHECK, extracted, routeRef, true, false);
         CurrentRouteCheckResponse result = unwrap(mapRouteAi.checkCurrentRoute(
                 new CurrentRouteCheckRequest(customerId, conversationNo, routeRef, requestVersion,
                         extracted.checkPlaceName(), extracted.checkPlaceRegion(),
                         extracted.checkMode(), content)),
                 "checkCurrentRoute");
+        if ("CONTEXT_UNAVAILABLE".equals(result.status())) {
+            // 旧路线快照已失效：按“没有可核查路线”重新生成一条，再核查这条新路线。
+            CheckContext renewed = context.withRouteRef(null, false).asPreviousRouteExpired();
+            if (hasText(extracted.originName()) && hasText(extracted.destinationName())) {
+                prepareCheckWithEndpoints(sink, customerId, conversationNo, requestNo,
+                        requestVersion, content, extracted, renewed);
+            } else {
+                askForCheckEndpoints(sink, customerId, conversationNo, requestNo, renewed);
+            }
+            return;
+        }
         completeCurrentRouteCheckResult(sink, customerId, conversationNo, requestNo,
-                requestVersion, extracted.checkPlaceName(), result);
+                requestVersion, extracted.checkPlaceName(), result, context);
+    }
+
+    /** 核查类意图的上下文：routeShown 表示被核查的路线是否已经展示给乘客。 */
+    private static CheckContext checkContext(String intent, ExtractEndpointsResponse extracted,
+                                             String routeRef, boolean routeShown,
+                                             boolean previousRouteExpired) {
+        return new CheckContext(intent, extracted.checkPlaceName(), extracted.checkPlaceRegion(),
+                normalizeCheckMode(extracted.checkMode()), routeRef, routeShown, previousRouteExpired);
+    }
+
+    /**
+     * 核查类意图的起终点准备：地图定位两端后按原意图继续。
+     * 端点仍有歧义时先返回地点选项，选项载荷携带同一份核查上下文。
+     */
+    private void prepareCheckWithEndpoints(AiTurnEventSink sink, long customerId,
+                                           String conversationNo, String requestNo,
+                                           long conditionVersion, String content,
+                                           ExtractEndpointsResponse extracted,
+                                           CheckContext context) {
+        RoutePreparationResponse prep = unwrap(mapRouteAi.prepare(new RoutePreparationRequest(
+                customerId, conversationNo, requestNo, conditionVersion,
+                extracted.originName(), extracted.originRegion(),
+                extracted.destinationName(), extracted.destinationRegion(),
+                context.intent(), content)), "prepareCheck");
+        if (READY_FOR_ROUTE.equals(prep.status())) {
+            if (ROUTE_EXISTS.equals(context.intent())) {
+                requestRouteExists(sink, customerId, conversationNo, requestNo, conditionVersion,
+                        content, context.placeName(), context.placeRegion(), null, conditionVersion);
+            } else {
+                createDefaultRouteThenCheck(sink, customerId, conversationNo, requestNo,
+                        conditionVersion, content, context);
+            }
+        } else if (NEEDS_PLACE_CHOICE.equals(prep.status())) {
+            completePlaceChoices(sink, customerId, conversationNo, requestNo,
+                    conditionVersion, conditionVersion, prep, DEFAULT_PLACE_CHOICE_FLOW,
+                    null, null, context);
+        } else {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    buildCheckClarification(extracted, prep, context), null, context);
+        }
+    }
+
+    /** 端点定位失败的追问仍保留核查上下文，乘客补齐端点后继续原核查。 */
+    private String buildCheckClarification(ExtractEndpointsResponse extracted,
+                                           RoutePreparationResponse prep, CheckContext context) {
+        String nextStep = ROUTE_EXISTS.equals(context.intent())
+                ? "查询有没有经过「" + context.placeName() + "」的路线"
+                : "生成路线并核查是否经过「" + context.placeName() + "」";
+        return endpointClarification("起点", extracted.originName(), prep.originFeedback())
+                + endpointClarification("终点", extracted.destinationName(), prep.destinationFeedback())
+                + "请补充后我继续" + nextStep + "。";
+    }
+
+    /** 缺少两端时的核查追问：上下文随追问消息落库，下一轮直接续接。 */
+    private void askForCheckEndpoints(AiTurnEventSink sink, long customerId,
+                                      String conversationNo, String requestNo,
+                                      CheckContext context) {
+        completeText(sink, customerId, conversationNo, requestNo,
+                askForCheckEndpointsText(context), null, context);
+    }
+
+    private static String askForCheckEndpointsText(CheckContext context) {
+        String prefix = context.previousRouteExpired() ? "之前的路线已失效，" : "";
+        return ROUTE_EXISTS.equals(context.intent())
+                ? prefix + "请告诉我完整的起点和终点，我来查询有没有经过「"
+                + context.placeName() + "」的路线。"
+                : prefix + "当前会话还没有可核查的路线。请告诉我完整的起点和终点，"
+                + "我将先生成路线，再核查是否经过「" + context.placeName() + "」。";
+    }
+
+    /**
+     * 没有可核查路线时先按本轮两端生成默认路线，再核查这条新路线；
+     * 路线卡与核查结论同轮下发，避免把结论挂到乘客还没看到的路线。
+     */
+    private void createDefaultRouteThenCheck(AiTurnEventSink sink, long customerId,
+                                             String conversationNo, String requestNo,
+                                             long conditionVersion, String content,
+                                             CheckContext context) {
+        RouteCardDto card = createDefaultRoute(customerId, conversationNo, conditionVersion);
+        if (card == null) {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    "路线条件已过期，请重新告诉我完整的起点和终点。", null);
+            return;
+        }
+        CheckContext stored = context.withRouteRef(card.routeRef(), false);
+        CurrentRouteCheckResponse result = unwrap(mapRouteAi.checkCurrentRoute(
+                new CurrentRouteCheckRequest(customerId, conversationNo, card.routeRef(),
+                        conditionVersion, context.placeName(), context.placeRegion(),
+                        context.checkMode(), content)),
+                "checkNewRoute");
+        completeNewRouteCheckResult(sink, customerId, conversationNo, requestNo,
+                conditionVersion, context.placeName(), result, card, stored);
+    }
+
+    /** 新生成路线的核查结论只能随 route.card 下发，客户端据此知道核查的是哪条路线。 */
+    private void completeNewRouteCheckResult(AiTurnEventSink sink, long customerId,
+                                             String conversationNo, String requestNo,
+                                             long requestVersion, String requestedPlaceName,
+                                             CurrentRouteCheckResponse result, RouteCardDto card,
+                                             CheckContext context) {
+        String routeRef = card.routeRef();
+        switch (result.status()) {
+            case "CHECKED" -> completeRouteCardWithCheck(sink, customerId, conversationNo,
+                    requestNo, card, routeCheckView(routeRef, result, requestedPlaceName),
+                    NEW_DEFAULT_ROUTE_PREFIX, currentRouteVerdictText(result, requestedPlaceName));
+            case NEEDS_PLACE_CHOICE -> completeCurrentRoutePlaceChoices(sink, customerId,
+                    conversationNo, requestNo, requestVersion, requestedPlaceName, result, context);
+            case NEEDS_CHECK_MODE_CHOICE -> completeCurrentRouteModeChoices(sink, customerId,
+                    conversationNo, requestNo, requestVersion, requestedPlaceName, result, context);
+            case "PLACE_NOT_FOUND" -> completeRouteCardWithCheck(sink, customerId, conversationNo,
+                    requestNo, card,
+                    unverifiableCheckView(routeRef, requestedPlaceName, context.placeRegion(),
+                            context.checkMode(),
+                            "没有找到「" + requestedPlaceName + "」，请补充城市或更具体的名称。"),
+                    NEW_DEFAULT_ROUTE_PREFIX, "暂时无法核查「" + requestedPlaceName
+                            + "」：没有找到该地点，请补充城市或更具体的名称。");
+            case "PLACE_UNVERIFIABLE" -> completeRouteCardWithCheck(sink, customerId, conversationNo,
+                    requestNo, card,
+                    unverifiableCheckView(routeRef, requestedPlaceName, context.placeRegion(),
+                            context.checkMode(),
+                            detailOrFallback(result.detail(), "地图地点信息不足")),
+                    NEW_DEFAULT_ROUTE_PREFIX, "暂时无法核查「" + requestedPlaceName + "」："
+                            + detailOrFallback(result.detail(), "地图地点信息不足") + "。");
+            case "CONTEXT_UNAVAILABLE" -> completeText(sink, customerId, conversationNo, requestNo,
+                    "路线条件已过期，请重新告诉我完整的起点和终点。", null);
+            default -> throw new IllegalStateException("未知的当前路线核查状态: " + result.status());
+        }
     }
 
     private void completeCurrentRouteCheckResult(AiTurnEventSink sink, long customerId,
                                                  String conversationNo, String requestNo,
                                                  long requestVersion, String requestedPlaceName,
-                                                 CurrentRouteCheckResponse result) {
+                                                 CurrentRouteCheckResponse result,
+                                                 CheckContext context) {
         switch (result.status()) {
-            case "CHECKED" -> completeText(sink, customerId, conversationNo, requestNo,
-                    currentRouteVerdictText(result, requestedPlaceName), null);
+            case "CHECKED" -> emitCompletedCheck(sink, customerId, conversationNo, requestNo,
+                    requestedPlaceName, result, context);
             case NEEDS_PLACE_CHOICE -> completeCurrentRoutePlaceChoices(sink, customerId,
-                    conversationNo, requestNo, requestVersion, requestedPlaceName, result);
+                    conversationNo, requestNo, requestVersion, requestedPlaceName, result, context);
             case NEEDS_CHECK_MODE_CHOICE -> completeCurrentRouteModeChoices(sink, customerId,
-                    conversationNo, requestNo, requestVersion, requestedPlaceName, result);
+                    conversationNo, requestNo, requestVersion, requestedPlaceName, result, context);
             case "PLACE_NOT_FOUND" -> completeText(sink, customerId, conversationNo, requestNo,
                     "没有找到「" + requestedPlaceName + "」，请补充城市或更具体的名称。", null);
             case "PLACE_UNVERIFIABLE" -> completeText(sink, customerId, conversationNo, requestNo,
                     "暂时无法核查「" + requestedPlaceName + "」：" + detailOrFallback(
                             result.detail(), "地图地点信息不足") + "。", null);
             case "CONTEXT_UNAVAILABLE" -> completeText(sink, customerId, conversationNo, requestNo,
-                    CURRENT_ROUTE_UNAVAILABLE, null);
+                    context != null && !context.routeShown()
+                            ? "刚生成的路线已失效，请重新告诉我完整的起点和终点。"
+                            : CURRENT_ROUTE_UNAVAILABLE, null);
             default -> throw new IllegalStateException("未知的当前路线核查状态: " + result.status());
+        }
+    }
+
+    /** 已展示的路线直接回答结论；本轮新建但尚未展示的路线先补发 route.card。 */
+    private void emitCompletedCheck(AiTurnEventSink sink, long customerId, String conversationNo,
+                                    String requestNo, String requestedPlaceName,
+                                    CurrentRouteCheckResponse result, CheckContext context) {
+        String verdictText = currentRouteVerdictText(result, requestedPlaceName);
+        String routeRef = context == null ? null : context.routeRef();
+        if (context != null && !context.routeShown() && hasText(routeRef)) {
+            resumeRouteCardWithCheck(sink, customerId, conversationNo, requestNo, routeRef,
+                    routeCheckView(routeRef, result, requestedPlaceName),
+                    NEW_DEFAULT_ROUTE_PREFIX, verdictText);
+            return;
+        }
+        completeText(sink, customerId, conversationNo, requestNo, verdictText,
+                routeCheckPayloadJson(routeCheckView(routeRef, result, requestedPlaceName)));
+    }
+
+    /** 查询有无经过指定地点的路线：只给存在性结论，不展示路线卡。 */
+    private void handleRouteExists(AiTurnEventSink sink, long customerId, String conversationNo,
+                                   String requestNo, long requestVersion, String content,
+                                   ExtractEndpointsResponse extracted) {
+        if (!hasText(extracted.checkPlaceName())) {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    ASK_FOR_ROUTE_EXISTS_PLACE, null);
+            return;
+        }
+        CheckContext context = checkContext(ROUTE_EXISTS, extracted, null, false, false);
+        if (!hasText(extracted.originName()) || !hasText(extracted.destinationName())) {
+            askForCheckEndpoints(sink, customerId, conversationNo, requestNo, context);
+            return;
+        }
+        prepareCheckWithEndpoints(sink, customerId, conversationNo, requestNo,
+                requestVersion, content, extracted, context);
+    }
+
+    /** 复用途经点算路能力：验证能否给出经过该地点的路线，但不展示路线卡。 */
+    private void requestRouteExists(AiTurnEventSink sink, long customerId, String conversationNo,
+                                    String requestNo, long requestVersion, String content,
+                                    String placeName, String placeRegion, String routeRef,
+                                    long conditionVersion) {
+        CheckContext context = new CheckContext(ROUTE_EXISTS, placeName, placeRegion, null,
+                routeRef, false, false);
+        ViaRouteResponse result = unwrap(mapRouteAi.viaRoute(new ViaRouteRequest(
+                customerId, conversationNo, routeRef, conditionVersion, requestVersion,
+                placeName, placeRegion, content)), "routeExists");
+        completeRouteExistsResult(sink, customerId, conversationNo, requestNo,
+                requestVersion, placeName, result, context);
+    }
+
+    private void completeRouteExistsResult(AiTurnEventSink sink, long customerId,
+                                           String conversationNo, String requestNo,
+                                           long requestVersion, String requestedPlaceName,
+                                           ViaRouteResponse result, CheckContext context) {
+        switch (result.status()) {
+            case "ROUTE_READY" -> completeText(sink, customerId, conversationNo, requestNo,
+                    routeExistsText(context, "FOUND", requestedPlaceName, result.detail()),
+                    routeExistsPayloadJson(context, "FOUND", requestedPlaceName, result.detail()));
+            case "ROUTE_NOT_FOUND" -> completeText(sink, customerId, conversationNo, requestNo,
+                    routeExistsText(context, "NOT_FOUND_IN_QUERY", requestedPlaceName,
+                            result.detail()),
+                    routeExistsPayloadJson(context, "NOT_FOUND_IN_QUERY", requestedPlaceName,
+                            result.detail()));
+            case "PLACE_NOT_FOUND" -> completeText(sink, customerId, conversationNo, requestNo,
+                    "没有找到「" + requestedPlaceName + "」，请补充城市或更具体的名称。",
+                    routeExistsPayloadJson(context, "UNVERIFIABLE", requestedPlaceName,
+                            "PLACE_NOT_FOUND"));
+            case "PLACE_UNVERIFIABLE" -> completeText(sink, customerId, conversationNo, requestNo,
+                    "暂时无法查询经过「" + requestedPlaceName + "」的路线："
+                            + detailOrFallback(result.detail(), "地图地点信息不足") + "。",
+                    routeExistsPayloadJson(context, "UNVERIFIABLE", requestedPlaceName,
+                            detailOrFallback(result.detail(), "地图地点信息不足")));
+            case "CONTEXT_UNAVAILABLE" -> completeText(sink, customerId, conversationNo, requestNo,
+                    "路线条件已过期，请重新告诉我完整的起点和终点。", null);
+            case NEEDS_PLACE_CHOICE -> completeViaPlaceChoices(sink, customerId, conversationNo,
+                    requestNo, requestVersion, requestedPlaceName, result, ROUTE_EXISTS, context);
+            default -> throw new IllegalStateException("未知的路线存在性查询状态: " + result.status());
+        }
+    }
+
+    /** 只陈述本次查询范围内的结论，不推断不存在经过该地点的其他路线。 */
+    private static String routeExistsText(CheckContext context, String conclusion,
+                                          String requestedPlaceName, String detail) {
+        String placeName = hasText(requestedPlaceName) ? requestedPlaceName : context.placeName();
+        return switch (conclusion) {
+            case "FOUND" -> "找到一条从当前起点到终点、经过「" + placeName + "」的路线"
+                    + (hasText(detail) ? "（" + detail.strip() + "）" : "") + "。";
+            case "NOT_FOUND_IN_QUERY" -> "本次查询没有找到经过「" + placeName
+                    + "」的已验证路线" + (hasText(detail) ? "（" + detail.strip() + "）" : "")
+                    + "，可以补充城市或换一个地点再试。";
+            default -> "暂时无法确认有没有经过「" + placeName + "」的路线："
+                    + (hasText(detail) ? detail.strip() : "地图地点信息不足") + "。";
+        };
+    }
+
+    private String routeExistsPayloadJson(CheckContext context, String conclusion,
+                                          String requestedPlaceName, String detail) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        Map<String, Object> place = new LinkedHashMap<>();
+        place.put("name", hasText(requestedPlaceName) ? requestedPlaceName : context.placeName());
+        if (hasText(context.placeRegion())) {
+            place.put("city", context.placeRegion());
+        }
+        view.put("place", place);
+        view.put("conclusion", conclusion);
+        if (hasText(detail)) {
+            view.put("detail", detail.strip());
+        }
+        try {
+            return objectMapper.writeValueAsString(Map.of("routeExists", view));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("路线存在性结论序列化失败", e);
+        }
+    }
+
+    /**
+     * 路线核查结论视图：只描述被核查的路线、目标地点与结论，
+     * 不包含坐标、折线或导航步骤。
+     */
+    private Map<String, Object> routeCheckView(String routeRef, CurrentRouteCheckResponse result,
+                                               String requestedPlaceName) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("routeRef", routeRef);
+        view.put("status", result.status());
+        view.put("verdict", result.verdict());
+        if (hasText(result.checkMode())) {
+            view.put("checkMode", result.checkMode());
+        }
+        if (hasText(result.reason())) {
+            view.put("reason", result.reason());
+        }
+        if (hasText(result.detail())) {
+            view.put("detail", result.detail());
+        }
+        view.put("target", result.target() == null
+                ? targetFromRequestedName(requestedPlaceName, null)
+                : objectMapper.convertValue(result.target(),
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
+                        }));
+        return view;
+    }
+
+    /** 地点未找到或不可核查时仍保留 routeCheck，客户端据此知道核查挂在哪条路线上。 */
+    private static Map<String, Object> unverifiableCheckView(String routeRef, String requestedPlaceName,
+                                                             String placeRegion, String checkMode,
+                                                             String detail) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("routeRef", routeRef);
+        view.put("status", "PLACE_UNVERIFIABLE");
+        view.put("verdict", "UNVERIFIABLE");
+        if (hasText(checkMode)) {
+            view.put("checkMode", checkMode);
+        }
+        view.put("detail", detail);
+        view.put("target", targetFromRequestedName(requestedPlaceName, placeRegion));
+        return view;
+    }
+
+    private static Map<String, Object> targetFromRequestedName(String requestedPlaceName,
+                                                               String placeRegion) {
+        Map<String, Object> target = new LinkedHashMap<>();
+        target.put("name", hasText(requestedPlaceName) ? requestedPlaceName : "所选地点");
+        if (hasText(placeRegion)) {
+            target.put("city", placeRegion.strip());
+        }
+        return target;
+    }
+
+    private String routeCheckPayloadJson(Map<String, Object> routeCheck) {
+        try {
+            return objectMapper.writeValueAsString(Map.of("routeCheck", routeCheck));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("路线核查结论序列化失败", e);
         }
     }
 
@@ -288,7 +928,8 @@ public class AiRouteTurnService {
     private void completeCurrentRouteModeChoices(AiTurnEventSink sink, long customerId,
                                                   String conversationNo, String requestNo,
                                                   long requestVersion, String requestedPlaceName,
-                                                  CurrentRouteCheckResponse result) {
+                                                  CurrentRouteCheckResponse result,
+                                                  CheckContext context) {
         var options = result.modeChoices();
         if (options == null || options.choices() == null || options.choices().size() < 2) {
             throw new IllegalStateException("当前路线核查含义选项响应不完整");
@@ -308,18 +949,16 @@ public class AiRouteTurnService {
             throw new IllegalStateException("当前路线核查含义选项序列化失败", e);
         }
         String text = "你说的“经过「" + targetName + "」”，是想确认以下哪一种情况？";
-        AiTurnCompleteResponse done = unwrap(passengerAi.complete(conversationNo, requestNo,
-                new AiTurnCompleteRequest(customerId, "ROUTE_CHECK_CHOICES", text, payloadJson)), "complete");
-        sink.content("route-check.choices", new ContentEvent(requestNo, new AssistantMessageEvent(
-                done.messageNo(), requestNo, "ASSISTANT", "ROUTE_CHECK_CHOICES", text,
-                parsePayloadJson(payloadJson), done.createdAt())));
+        sendChoiceMessage(sink, customerId, conversationNo, requestNo, "ROUTE_CHECK_CHOICES",
+                "route-check.choices", text, payloadJson, context);
     }
 
     /** 当前路线地点选项沿用既有 PLACE_CHOICES 事件，并写入 flow 供选择轮次安全分流。 */
     private void completeCurrentRoutePlaceChoices(AiTurnEventSink sink, long customerId,
                                                   String conversationNo, String requestNo,
                                                   long requestVersion, String requestedPlaceName,
-                                                  CurrentRouteCheckResponse result) {
+                                                  CurrentRouteCheckResponse result,
+                                                  CheckContext context) {
         var choices = result.placeChoices();
         if (choices == null || choices.choices() == null || choices.choices().isEmpty()) {
             throw new IllegalStateException("当前路线核查地点选项响应缺少候选");
@@ -339,11 +978,8 @@ public class AiRouteTurnService {
         }
         String text = "地图找到以下可能对应「" + requestedPlaceName
                 + "」的可核查地点，请确认具体地点。";
-        AiTurnCompleteResponse done = unwrap(passengerAi.complete(conversationNo, requestNo,
-                new AiTurnCompleteRequest(customerId, "PLACE_CHOICES", text, payloadJson)), "complete");
-        sink.content("place.choices", new ContentEvent(requestNo, new AssistantMessageEvent(
-                done.messageNo(), requestNo, "ASSISTANT", "PLACE_CHOICES", text,
-                parsePayloadJson(payloadJson), done.createdAt())));
+        sendChoiceMessage(sink, customerId, conversationNo, requestNo, "PLACE_CHOICES",
+                "place.choices", text, payloadJson, context);
     }
 
     /** 选项点击独立成一轮；旧任务、旧版本或越权选项均不能恢复地点身份。 */
@@ -367,8 +1003,7 @@ public class AiRouteTurnService {
                     sink.turnFailed(new TurnFailedEvent(requestNo, "AI_INTERNAL_ERROR", "服务暂时不可用，请稍后重试"));
                     return;
                 }
-                sink.content(eventNameFor(reply.messageType()), contentEvent(reply));
-                sink.turnCompleted(new TurnCompletedEvent(requestNo));
+                emitCompletedReply(sink, customerId, conversationNo, reply);
                 return;
             }
             PlaceChoicePayload previous = parsePlaceChoicePayload(begin.latestAssistantMessage());
@@ -377,22 +1012,54 @@ public class AiRouteTurnService {
                     || !previous.choiceIds().contains(placeChoiceId)) {
                 String expiredText = previous != null && CURRENT_ROUTE_CHECK.equals(previous.flow())
                         ? "这组核查地点选项已失效，请重新发起当前路线核查。"
+                        : previous != null && ROUTE_EXISTS.equals(previous.flow())
+                        ? "这组查询地点选项已失效，请重新说明要查询的地点。"
+                        : previous != null && VIA_ROUTE_PLAN.equals(previous.flow())
+                        ? "这组指定途经地点选项已失效，请重新说明途经要求。"
+                        : previous != null && PARTIAL_ENDPOINT_FLOW.equals(previous.flow())
+                        ? "这组地点选项已失效，请重新告诉我刚才提供的起点或终点。"
                         : "这组选项已失效，请重新告诉我起点和终点。";
                 completeText(sink, customerId, conversationNo, requestNo,
                         expiredText, null);
             } else if (CURRENT_ROUTE_CHECK.equals(previous.flow())) {
                 continueCurrentRouteCheckPlaceChoice(sink, customerId, conversationNo, requestNo,
                         begin.requestVersion(), taskNo, placeChoiceId, previous);
+            } else if (ROUTE_EXISTS.equals(previous.flow())) {
+                continueRouteExistsPlaceChoice(sink, customerId, conversationNo, requestNo,
+                        begin.requestVersion(), taskNo, placeChoiceId, previous);
+            } else if (VIA_ROUTE_PLAN.equals(previous.flow()) && "WAYPOINT".equals(previous.role())) {
+                continueViaRoutePlaceChoice(sink, customerId, conversationNo, requestNo,
+                        begin.requestVersion(), taskNo, placeChoiceId, previous);
             } else {
                 RoutePreparationResponse prep = unwrap(mapRouteAi.selectPlace(new RoutePlaceChoiceRequest(
                         customerId, conversationNo, taskNo, placeChoiceId,
-                        previous.conditionVersion(), previous.requestVersion(), begin.requestVersion())), "selectPlace");
-                if (READY_FOR_ROUTE.equals(prep.status())) {
-                    completeDefaultRoute(sink, customerId, conversationNo, requestNo,
-                            previous.conditionVersion());
+                        previous.conditionVersion(), previous.requestVersion(), begin.requestVersion(),
+                        requestNo)), "selectPlace");
+                if (WAITING_FOR_OTHER_ENDPOINT.equals(prep.status())) {
+                    completePartialPrompt(sink, customerId, conversationNo, requestNo,
+                            prep.partialEndpoint(), previous.viaPlaceName(), previous.viaPlaceRegion());
+                } else if (READY_FOR_ROUTE.equals(prep.status())) {
+                    CheckContext check = previous.checkContext();
+                    if (check != null && ROUTE_EXISTS.equals(check.intent())) {
+                        requestRouteExists(sink, customerId, conversationNo, requestNo,
+                                begin.requestVersion(), content, check.placeName(),
+                                check.placeRegion(), null, previous.conditionVersion());
+                    } else if (check != null && CURRENT_ROUTE_CHECK.equals(check.intent())) {
+                        createDefaultRouteThenCheck(sink, customerId, conversationNo, requestNo,
+                                previous.conditionVersion(), content, check);
+                    } else if (VIA_ROUTE_PLAN.equals(previous.flow())) {
+                        requestViaRoute(sink, customerId, conversationNo, requestNo,
+                                null, previous.conditionVersion(), begin.requestVersion(),
+                                previous.viaPlaceName(), previous.viaPlaceRegion(), content);
+                    } else {
+                        completeDefaultRoute(sink, customerId, conversationNo, requestNo,
+                                previous.conditionVersion());
+                    }
                 } else if (NEEDS_PLACE_CHOICE.equals(prep.status())) {
                     completePlaceChoices(sink, customerId, conversationNo, requestNo,
-                            previous.conditionVersion(), begin.requestVersion(), prep);
+                            previous.conditionVersion(), begin.requestVersion(), prep,
+                            previous.flow(), previous.viaPlaceName(), previous.viaPlaceRegion(),
+                            previous.checkContext());
                 } else if ("CONTEXT_UNAVAILABLE".equals(prep.status())) {
                     completeText(sink, customerId, conversationNo, requestNo,
                             "这组选项已过期，请重新告诉我起点和终点。", null);
@@ -410,12 +1077,29 @@ public class AiRouteTurnService {
         }
     }
 
+    private void continueViaRoutePlaceChoice(AiTurnEventSink sink, long customerId,
+                                             String conversationNo, String requestNo,
+                                             long currentRequestVersion, String taskNo,
+                                             String placeChoiceId,
+                                             PlaceChoicePayload previous) {
+        ViaRouteResponse result = unwrap(mapRouteAi.selectViaRoutePlace(
+                new ViaRoutePlaceChoiceRequest(customerId, conversationNo,
+                        previous.conditionVersion(), previous.requestVersion(),
+                        currentRequestVersion, taskNo, placeChoiceId)),
+                "selectViaRoutePlace");
+        completeViaRouteResult(sink, customerId, conversationNo, requestNo,
+                currentRequestVersion, "所选地点", result);
+    }
+
     private void continueCurrentRouteCheckPlaceChoice(AiTurnEventSink sink, long customerId,
                                                       String conversationNo, String requestNo,
                                                       long currentRequestVersion, String taskNo,
                                                       String placeChoiceId,
                                                       PlaceChoicePayload previous) {
-        String routeRef = latestPersistedRouteRef(customerId, conversationNo);
+        CheckContext previousContext = previous.checkContext();
+        // 本轮新生成但尚未展示的路线不在历史消息里，routeRef 只能来自上一轮的核查上下文。
+        String routeRef = previousContext != null && hasText(previousContext.routeRef())
+                ? previousContext.routeRef() : latestPersistedRouteRef(customerId, conversationNo);
         if (routeRef == null) {
             completeText(sink, customerId, conversationNo, requestNo, CURRENT_ROUTE_UNAVAILABLE, null);
             return;
@@ -425,7 +1109,30 @@ public class AiRouteTurnService {
                         previous.requestVersion(), currentRequestVersion, taskNo, placeChoiceId)),
                 "selectCurrentRouteCheckPlace");
         completeCurrentRouteCheckResult(sink, customerId, conversationNo, requestNo,
-                currentRequestVersion, "所选地点", result);
+                currentRequestVersion, "所选地点", result,
+                previousContext == null ? null
+                        : previousContext.withRouteRef(routeRef, previousContext.routeShown()));
+    }
+
+    /** 存在性查询的地点选项：复用去程算路复验地点身份，但只回答有无，不展示路线卡。 */
+    private void continueRouteExistsPlaceChoice(AiTurnEventSink sink, long customerId,
+                                                String conversationNo, String requestNo,
+                                                long currentRequestVersion, String taskNo,
+                                                String placeChoiceId,
+                                                PlaceChoicePayload previous) {
+        CheckContext context = previous.checkContext();
+        if (context == null) {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    "这组查询地点选项已失效，请重新说明要查询的地点。", null);
+            return;
+        }
+        ViaRouteResponse result = unwrap(mapRouteAi.selectViaRoutePlace(
+                new ViaRoutePlaceChoiceRequest(customerId, conversationNo,
+                        previous.conditionVersion(), previous.requestVersion(),
+                        currentRequestVersion, taskNo, placeChoiceId)),
+                "selectRouteExistsPlace");
+        completeRouteExistsResult(sink, customerId, conversationNo, requestNo,
+                currentRequestVersion, context.placeName(), result, context);
     }
 
     /**
@@ -457,8 +1164,7 @@ public class AiRouteTurnService {
                     sink.turnFailed(new TurnFailedEvent(requestNo, "AI_INTERNAL_ERROR", "服务暂时不可用，请稍后重试"));
                     return;
                 }
-                sink.content(eventNameFor(reply.messageType()), contentEvent(reply));
-                sink.turnCompleted(new TurnCompletedEvent(requestNo));
+                emitCompletedReply(sink, customerId, conversationNo, reply);
                 return;
             }
             RouteCheckChoicePayload previous = parseRouteCheckChoicePayload(begin.latestAssistantMessage());
@@ -488,7 +1194,10 @@ public class AiRouteTurnService {
                                                String taskNo,
                                                String checkMode,
                                                RouteCheckChoicePayload previous) {
-        String routeRef = latestPersistedRouteRef(customerId, conversationNo);
+        CheckContext previousContext = previous.checkContext();
+        // 选项绑定的路线必须与核查使用同一条 routeRef，否则地图会拒绝这次续接。
+        String routeRef = previousContext != null && hasText(previousContext.routeRef())
+                ? previousContext.routeRef() : latestPersistedRouteRef(customerId, conversationNo);
         if (routeRef == null) {
             completeText(sink, customerId, conversationNo, requestNo, CURRENT_ROUTE_UNAVAILABLE, null);
             return;
@@ -498,7 +1207,23 @@ public class AiRouteTurnService {
                         previous.requestVersion(), currentRequestVersion, taskNo, checkMode)),
                 "selectCurrentRouteCheckMode");
         completeCurrentRouteCheckResult(sink, customerId, conversationNo, requestNo,
-                currentRequestVersion, previous.targetName(), result);
+                currentRequestVersion, previous.targetName(), result,
+                previousContext == null ? null
+                        : previousContext.withRouteRef(routeRef, previousContext.routeShown()));
+    }
+
+    /** 已确认起终点仍然有效才生成路线；条件失效返回 null 由调用方给出可读反馈。 */
+    private RouteCardDto createDefaultRoute(long customerId, String conversationNo,
+                                            long conditionVersion) {
+        try {
+            return unwrap(mapRouteAi.defaultRoute(new DefaultRouteRequest(
+                    customerId, conversationNo, conditionVersion)), "default");
+        } catch (FeignException e) {
+            if (hasAiErrorCode(e, "AI_ROUTE_CONTEXT_UNAVAILABLE")) {
+                return null;
+            }
+            throw e;
+        }
     }
 
     private void completeDefaultRoute(AiTurnEventSink sink,
@@ -506,32 +1231,101 @@ public class AiRouteTurnService {
                                       String conversationNo,
                                       String requestNo,
                                       long conditionVersion) {
-        RouteCardDto card;
-        try {
-            card = unwrap(mapRouteAi.defaultRoute(new DefaultRouteRequest(
-                    customerId, conversationNo, conditionVersion)), "default");
-        } catch (FeignException e) {
-            if (hasAiErrorCode(e, "AI_ROUTE_CONTEXT_UNAVAILABLE")) {
-                completeText(sink, customerId, conversationNo, requestNo,
-                        "路线条件已过期，请重新告诉我完整的起点和终点。", null);
-                return;
-            }
-            throw e;
+        RouteCardDto card = createDefaultRoute(customerId, conversationNo, conditionVersion);
+        if (card == null) {
+            completeText(sink, customerId, conversationNo, requestNo,
+                    "路线条件已过期，请重新告诉我完整的起点和终点。", null);
+            return;
         }
-        String cardText = buildRouteCardText(card);
+        completeRouteCard(sink, customerId, conversationNo, requestNo, card);
+    }
+
+    private void completeRouteCard(AiTurnEventSink sink,
+                                   long customerId,
+                                   String conversationNo,
+                                   String requestNo,
+                                   RouteCardDto card) {
+        emitRouteCard(sink, customerId, conversationNo, requestNo, card, null, null, null);
+    }
+
+    /** 新生成路线的核查结论与路线卡同轮下发，避免把结论挂到乘客还没看到的路线。 */
+    private void completeRouteCardWithCheck(AiTurnEventSink sink, long customerId,
+                                            String conversationNo, String requestNo,
+                                            RouteCardDto card, Map<String, Object> routeCheck,
+                                            String textPrefix, String verdictText) {
+        emitRouteCard(sink, customerId, conversationNo, requestNo, card, routeCheck,
+                textPrefix, verdictText);
+    }
+
+    /** 本轮新建但尚未展示的路线先补发 route.card；地图缓存失效时降级为纯文本结论。 */
+    private void resumeRouteCardWithCheck(AiTurnEventSink sink, long customerId,
+                                          String conversationNo, String requestNo, String routeRef,
+                                          Map<String, Object> routeCheck, String textPrefix,
+                                          String verdictText) {
+        RouteCardDto card = replayRouteCardDto(customerId, conversationNo, routeRef);
+        if (card == null) {
+            completeText(sink, customerId, conversationNo, requestNo, verdictText,
+                    routeCheckPayloadJson(routeCheck));
+            return;
+        }
+        emitRouteCard(sink, customerId, conversationNo, requestNo, card, routeCheck,
+                textPrefix, verdictText);
+    }
+
+    private void emitRouteCard(AiTurnEventSink sink, long customerId, String conversationNo,
+                               String requestNo, RouteCardDto card, Map<String, Object> routeCheck,
+                               String textPrefix, String verdictText) {
+        if (card == null) {
+            throw new IllegalStateException("路线卡响应为空");
+        }
+        String text = (hasText(textPrefix) ? textPrefix : "") + buildRouteCardText(card)
+                + (hasText(verdictText) ? verdictText : "");
         // passenger-service 只持久化路线卡摘要；完整折线只发送给本轮 SSE 客户端。
-        String persistedPayload = toPersistedPayload(card);
+        String persistedPayload = toPersistedPayload(card, routeCheck);
         AiTurnCompleteResponse done = unwrap(passengerAi.complete(conversationNo, requestNo,
-                new AiTurnCompleteRequest(customerId, "ROUTE_CARD", cardText, persistedPayload)),
+                new AiTurnCompleteRequest(customerId, "ROUTE_CARD", text, persistedPayload)),
                 "complete");
         sink.content("route.card", new ContentEvent(requestNo, new AssistantMessageEvent(
-                done.messageNo(), requestNo, "ASSISTANT", "ROUTE_CARD", cardText,
-                Map.of("routeCard", objectMapper.convertValue(card, Map.class)), done.createdAt())));
+                done.messageNo(), requestNo, "ASSISTANT", "ROUTE_CARD", text,
+                routeCardPayload(cardAsMap(card), routeCheck), done.createdAt())));
+    }
+
+    private Map<String, Object> routeCardPayload(Map<String, Object> card,
+                                                 Map<String, Object> routeCheck) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("routeCard", card);
+        if (routeCheck != null) {
+            payload.put("routeCheck", routeCheck);
+        }
+        return payload;
+    }
+
+    private Map<String, Object> cardAsMap(RouteCardDto card) {
+        return objectMapper.convertValue(card,
+                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
+                });
     }
 
     private void completePlaceChoices(AiTurnEventSink sink, long customerId, String conversationNo,
                                       String requestNo, long conditionVersion, long requestVersion,
                                       RoutePreparationResponse prep) {
+        completePlaceChoices(sink, customerId, conversationNo, requestNo,
+                conditionVersion, requestVersion, prep, DEFAULT_PLACE_CHOICE_FLOW, null, null);
+    }
+
+    private void completePlaceChoices(AiTurnEventSink sink, long customerId, String conversationNo,
+                                      String requestNo, long conditionVersion, long requestVersion,
+                                      RoutePreparationResponse prep, String flow,
+                                      String viaPlaceName, String viaPlaceRegion) {
+        completePlaceChoices(sink, customerId, conversationNo, requestNo, conditionVersion,
+                requestVersion, prep, flow, viaPlaceName, viaPlaceRegion, null);
+    }
+
+    private void completePlaceChoices(AiTurnEventSink sink, long customerId, String conversationNo,
+                                      String requestNo, long conditionVersion, long requestVersion,
+                                      RoutePreparationResponse prep, String flow,
+                                      String viaPlaceName, String viaPlaceRegion,
+                                      CheckContext context) {
         var choices = prep.placeChoices();
         if (choices == null || choices.choices() == null || choices.choices().isEmpty()) {
             throw new IllegalStateException("地点选项响应缺少候选");
@@ -545,36 +1339,175 @@ public class AiRouteTurnService {
         view.put("expiresAt", choices.expiresAt());
         view.put("conditionVersion", conditionVersion);
         view.put("requestVersion", requestVersion);
-        view.put("flow", DEFAULT_PLACE_CHOICE_FLOW);
+        view.put("flow", flow);
+        if (hasText(viaPlaceName)) {
+            view.put("viaPlaceName", viaPlaceName);
+        }
+        if (hasText(viaPlaceRegion)) {
+            view.put("viaPlaceRegion", viaPlaceRegion);
+        }
         String payloadJson;
         try {
             payloadJson = objectMapper.writeValueAsString(Map.of("placeChoices", view));
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("地点选项摘要序列化失败", e);
         }
-        AiTurnCompleteResponse done = unwrap(passengerAi.complete(conversationNo, requestNo,
-                new AiTurnCompleteRequest(customerId, "PLACE_CHOICES", text, payloadJson)), "complete");
-        sink.content("place.choices", new ContentEvent(requestNo, new AssistantMessageEvent(
-                done.messageNo(), requestNo, "ASSISTANT", "PLACE_CHOICES", text,
-                parsePayloadJson(payloadJson), done.createdAt())));
+        sendChoiceMessage(sink, customerId, conversationNo, requestNo, "PLACE_CHOICES",
+                "place.choices", text, payloadJson, context);
+    }
+
+    /** 上下文脱敏视图：只描述核查意图与地点身份，routeRef 仅服务端续接时使用。 */
+    private static Map<String, Object> checkContextView(CheckContext context) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("intent", context.intent());
+        if (hasText(context.placeName())) {
+            view.put("placeName", context.placeName());
+        }
+        if (hasText(context.placeRegion())) {
+            view.put("placeRegion", context.placeRegion());
+        }
+        if (hasText(context.checkMode())) {
+            view.put("checkMode", context.checkMode());
+        }
+        if (hasText(context.routeRef())) {
+            view.put("routeRef", context.routeRef());
+        }
+        view.put("routeShown", context.routeShown());
+        if (context.previousRouteExpired()) {
+            view.put("previousRouteExpired", true);
+        }
+        return view;
+    }
+
+    /** 服务端私有上下文只写入持久化载荷，客户端事件与历史接口都由剥离方法过滤。 */
+    private String withCheckContext(String payloadJson, CheckContext context) {
+        if (context == null) {
+            return payloadJson;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        Map<String, Object> existing = parsePayloadJson(payloadJson);
+        if (existing != null) {
+            payload.putAll(existing);
+        }
+        payload.put(CHECK_CONTEXT_FIELD, checkContextView(context));
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("核查上下文序列化失败", e);
+        }
+    }
+
+    private Map<String, Object> clientPayload(String payloadJson) {
+        Map<String, Object> payload = parsePayloadJson(payloadJson);
+        if (payload == null || !payload.containsKey(CHECK_CONTEXT_FIELD)) {
+            return payload;
+        }
+        Map<String, Object> clientView = new LinkedHashMap<>(payload);
+        clientView.remove(CHECK_CONTEXT_FIELD);
+        return clientView.isEmpty() ? null : clientView;
+    }
+
+    private MessageView withoutCheckContext(MessageView message) {
+        String payloadJson = strippedPayloadJson(message.payloadJson());
+        if (payloadJson == null || payloadJson.equals(message.payloadJson())) {
+            return message;
+        }
+        return new MessageView(message.messageNo(), message.requestNo(), message.clientMessageNo(),
+                message.role(), message.messageType(), message.content(), payloadJson,
+                message.sequenceNo(), message.status(), message.createdAt());
+    }
+
+    private AssistantMessageView withoutCheckContext(AssistantMessageView reply) {
+        if (reply == null) {
+            return null;
+        }
+        String payloadJson = strippedPayloadJson(reply.payloadJson());
+        if (payloadJson == null || payloadJson.equals(reply.payloadJson())) {
+            return reply;
+        }
+        return new AssistantMessageView(reply.messageNo(), reply.requestNo(), reply.role(),
+                reply.messageType(), reply.content(), payloadJson, reply.sequenceNo(),
+                reply.createdAt(), reply.status(), reply.failureCode(), reply.failureMessage());
+    }
+
+    /** 历史与状态接口不返回服务端私有上下文；无其余字段时按无载荷返回。 */
+    private String strippedPayloadJson(String payloadJson) {
+        Map<String, Object> clientView = clientPayload(payloadJson);
+        if (clientView == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(clientView);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("客服消息载荷序列化失败", e);
+        }
+    }
+
+    private CheckContext parseCheckContext(JsonNode node) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        String intent = node.path("intent").asText(null);
+        String placeName = node.path("placeName").asText(null);
+        if (!Set.of(CURRENT_ROUTE_CHECK, ROUTE_EXISTS).contains(intent) || !hasText(placeName)) {
+            return null;
+        }
+        return new CheckContext(intent, placeName, node.path("placeRegion").asText(null),
+                node.path("checkMode").asText(null), node.path("routeRef").asText(null),
+                node.path("routeShown").asBoolean(false),
+                node.path("previousRouteExpired").asBoolean(false));
+    }
+
+    /** 上一轮追问落库的核查上下文：本轮补齐端点后继续原核查。 */
+    private CheckContext parsePendingCheckContext(AssistantMessageView message) {
+        if (message == null || !"TEXT".equals(message.messageType())
+                || !hasText(message.payloadJson())) {
+            return null;
+        }
+        try {
+            return parseCheckContext(objectMapper.readTree(message.payloadJson())
+                    .path(CHECK_CONTEXT_FIELD));
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    /** 只有地图认识的含义才透传；UNSPECIFIED 与模型自造值交给地图按原话追问。 */
+    private static String normalizeCheckMode(String checkMode) {
+        if (!hasText(checkMode)) {
+            return null;
+        }
+        String mode = checkMode.strip();
+        return CHECK_MODES.contains(mode) ? mode : null;
     }
 
     private PlaceChoicePayload parsePlaceChoicePayload(AssistantMessageView message) {
         if (message == null || !"PLACE_CHOICES".equals(message.messageType())) return null;
         try {
-            JsonNode root = objectMapper.readTree(message.payloadJson()).path("placeChoices");
+            JsonNode payload = objectMapper.readTree(message.payloadJson());
+            JsonNode root = payload.path("placeChoices");
             String taskNo = root.path("taskNo").asText(null);
             String flow = root.path("flow").asText(DEFAULT_PLACE_CHOICE_FLOW);
+            String role = root.path("role").asText(null);
             long conditionVersion = root.path("conditionVersion").asLong(0);
             long requestVersion = root.path("requestVersion").asLong(0);
+            String viaPlaceName = root.path("viaPlaceName").asText(null);
+            String viaPlaceRegion = root.path("viaPlaceRegion").asText(null);
+            CheckContext context = parseCheckContext(payload.path(CHECK_CONTEXT_FIELD));
             if (taskNo == null || requestVersion <= 0
-                    || !Set.of(DEFAULT_PLACE_CHOICE_FLOW, CURRENT_ROUTE_CHECK).contains(flow)
-                    || (DEFAULT_PLACE_CHOICE_FLOW.equals(flow) && conditionVersion <= 0)) {
+                    || !Set.of(DEFAULT_PLACE_CHOICE_FLOW, CURRENT_ROUTE_CHECK, VIA_ROUTE_PLAN,
+                    ROUTE_EXISTS).contains(flow)
+                    && !PARTIAL_ENDPOINT_FLOW.equals(flow)
+                    || (!CURRENT_ROUTE_CHECK.equals(flow) && conditionVersion <= 0)
+                    || (VIA_ROUTE_PLAN.equals(flow) && !"WAYPOINT".equals(role)
+                    && !hasText(viaPlaceName))
+                    || (ROUTE_EXISTS.equals(flow) && context == null)) {
                 return null;
             }
             Set<String> ids = new java.util.HashSet<>();
             root.path("choices").forEach(choice -> ids.add(choice.path("placeChoiceId").asText("")));
-            return new PlaceChoicePayload(taskNo, conditionVersion, requestVersion, flow, ids);
+            return new PlaceChoicePayload(taskNo, conditionVersion, requestVersion, flow,
+                    role, viaPlaceName, viaPlaceRegion, ids, context);
         } catch (Exception e) {
             return null;
         }
@@ -583,11 +1516,16 @@ public class AiRouteTurnService {
     private RouteCheckChoicePayload parseRouteCheckChoicePayload(AssistantMessageView message) {
         if (message == null || !"ROUTE_CHECK_CHOICES".equals(message.messageType())) return null;
         try {
-            JsonNode root = objectMapper.readTree(message.payloadJson()).path("routeCheckChoices");
+            JsonNode payload = objectMapper.readTree(message.payloadJson());
+            JsonNode root = payload.path("routeCheckChoices");
             String taskNo = root.path("taskNo").asText(null);
             long requestVersion = root.path("requestVersion").asLong(0);
             String targetName = root.path("target").path("name").asText("所选地点");
-            if (taskNo == null || requestVersion <= 0) return null;
+            CheckContext context = parseCheckContext(payload.path(CHECK_CONTEXT_FIELD));
+            if (taskNo == null || requestVersion <= 0
+                    || (context != null && !CURRENT_ROUTE_CHECK.equals(context.intent()))) {
+                return null;
+            }
             Map<String, String> labels = new java.util.HashMap<>();
             root.path("choices").forEach(choice -> {
                 String id = choice.path("choiceId").asText(null);
@@ -595,7 +1533,37 @@ public class AiRouteTurnService {
                 if (id != null && label != null) labels.put(id, label);
             });
             if (labels.size() < 2) return null;
-            return new RouteCheckChoicePayload(taskNo, requestVersion, targetName, Map.copyOf(labels));
+            return new RouteCheckChoicePayload(taskNo, requestVersion, targetName, Map.copyOf(labels),
+                    context);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private PartialEndpointPayload parsePartialEndpointPayload(AssistantMessageView message) {
+        if (message == null || !"TEXT".equals(message.messageType())
+                || message.payloadJson() == null) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(message.payloadJson()).path("partialEndpoint");
+            long conditionVersion = root.path("conditionVersion").asLong(0);
+            String followUpRequestNo = root.path("followUpRequestNo").asText(null);
+            String knownRole = root.path("knownRole").asText(null);
+            String missingRole = root.path("missingRole").asText(null);
+            String knownPlaceName = root.path("knownPlaceName").asText(null);
+            String intent = root.path("intent").asText(null);
+            if (conditionVersion <= 0 || !hasText(followUpRequestNo)
+                    || !Set.of("ORIGIN", "DESTINATION").contains(knownRole)
+                    || !Set.of("ORIGIN", "DESTINATION").contains(missingRole)
+                    || knownRole.equals(missingRole) || !hasText(knownPlaceName)
+                    || !Set.of("DEFAULT_ROUTE", VIA_ROUTE_PLAN).contains(intent)) {
+                return null;
+            }
+            return new PartialEndpointPayload(conditionVersion, followUpRequestNo,
+                    knownRole, missingRole, knownPlaceName, intent,
+                    root.path("viaPlaceName").asText(null),
+                    root.path("viaPlaceRegion").asText(null));
         } catch (Exception e) {
             return null;
         }
@@ -610,11 +1578,32 @@ public class AiRouteTurnService {
 
     private void completeText(AiTurnEventSink sink, long customerId, String conversationNo,
                               String requestNo, String text, String payloadJson) {
+        completeText(sink, customerId, conversationNo, requestNo, text, payloadJson, null);
+    }
+
+    /** 追问类文本把核查上下文写进持久化载荷，下发给客户端的载荷不含内部字段。 */
+    private void completeText(AiTurnEventSink sink, long customerId, String conversationNo,
+                              String requestNo, String text, String payloadJson,
+                              CheckContext context) {
+        String persistedPayload = withCheckContext(payloadJson, context);
         AiTurnCompleteResponse done = unwrap(passengerAi.complete(conversationNo, requestNo,
-                new AiTurnCompleteRequest(customerId, "TEXT", text, payloadJson)), "complete");
+                new AiTurnCompleteRequest(customerId, "TEXT", text, persistedPayload)), "complete");
         sink.content("answer.completed", new ContentEvent(requestNo, new AssistantMessageEvent(
                 done.messageNo(), requestNo, "ASSISTANT", "TEXT", text,
-                parsePayloadJson(payloadJson), done.createdAt())));
+                clientPayload(persistedPayload), done.createdAt())));
+    }
+
+    /** 选项类消息同样只把内部上下文留在服务端；客户端按事件类型读取公开选项。 */
+    private void sendChoiceMessage(AiTurnEventSink sink, long customerId, String conversationNo,
+                                   String requestNo, String messageType, String eventName,
+                                   String text, String payloadJson, CheckContext context) {
+        String persistedPayload = withCheckContext(payloadJson, context);
+        AiTurnCompleteResponse done = unwrap(passengerAi.complete(conversationNo, requestNo,
+                new AiTurnCompleteRequest(customerId, messageType, text, persistedPayload)),
+                "complete");
+        sink.content(eventName, new ContentEvent(requestNo, new AssistantMessageEvent(
+                done.messageNo(), requestNo, "ASSISTANT", messageType, text,
+                clientPayload(persistedPayload), done.createdAt())));
     }
 
     private boolean isConfirmationReply(String content, AiTurnBeginResponse begin) {
@@ -643,12 +1632,15 @@ public class AiRouteTurnService {
         }
     }
 
-    /** 持久化摘要：routeRef + 两端名称 + 里程与预计时间，不含折线。 */
-    private String toPersistedPayload(RouteCardDto card) {
+    /** 持久化摘要：routeRef + 两端名称 + 里程与预计时间，不含折线；核查结论同卷保存便于重放。 */
+    private String toPersistedPayload(RouteCardDto card, Map<String, Object> routeCheck) {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("routeRef", card.routeRef());
         summary.put("origin", Map.of("name", card.origin().name()));
         summary.put("destination", Map.of("name", card.destination().name()));
+        if (card.via() != null && hasText(card.via().name())) {
+            summary.put("via", Map.of("name", card.via().name()));
+        }
         summary.put("route", Map.of(
                 "coordinateSystem", card.route().coordinateSystem(),
                 "distanceMeters", card.route().distanceMeters(),
@@ -656,7 +1648,7 @@ public class AiRouteTurnService {
         summary.put("generatedAt", card.generatedAt().toString());
         summary.put("expiresAt", card.expiresAt().toString());
         try {
-            return objectMapper.writeValueAsString(Map.of("routeCard", summary));
+            return objectMapper.writeValueAsString(routeCardPayload(summary, routeCheck));
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("路线卡摘要序列化失败", e);
         }
@@ -665,8 +1657,10 @@ public class AiRouteTurnService {
     private String buildRouteCardText(RouteCardDto card) {
         double kilometers = Math.round(card.route().distanceMeters() / 100.0) / 10.0;
         long minutes = (card.route().durationSeconds() + 59) / 60;
+        String via = card.via() == null || !hasText(card.via().name())
+                ? "" : "，途经" + card.via().name();
         return "已为您规划从" + card.origin().name() + "到" + card.destination().name()
-                + "的路线，全程约" + kilometers + "公里，预计行驶" + minutes + "分钟。";
+                + "的路线" + via + "，全程约" + kilometers + "公里，预计行驶" + minutes + "分钟。";
     }
 
     private String buildClarification(ExtractEndpointsResponse extracted, RoutePreparationResponse prep) {
@@ -702,7 +1696,7 @@ public class AiRouteTurnService {
     private ContentEvent contentEvent(AssistantMessageView view) {
         return new ContentEvent(view.requestNo(), new AssistantMessageEvent(
                 view.messageNo(), view.requestNo(), view.role(), view.messageType(), view.content(),
-                parsePayloadJson(view.payloadJson()), view.createdAt()));
+                clientPayload(view.payloadJson()), view.createdAt()));
     }
 
     /** 有效期内从 map-service 恢复完整卡片；缓存或条件失效时只重放持久化摘要。 */
@@ -710,23 +1704,12 @@ public class AiRouteTurnService {
                                          String conversationNo) {
         Map<String, Object> stored = parsePayloadJson(view.payloadJson());
         Map<String, Object> summary = routeCardSummary(stored);
-        Object routeRefValue = summary.get("routeRef");
-        String routeRef = routeRefValue instanceof String ref && !ref.isBlank() ? ref : null;
+        Map<String, Object> routeCheck = storedRouteCheck(stored);
+        String routeRef = routeRefOf(summary);
         if (routeRef != null) {
-            try {
-                ResponseVo<RouteReplayResponse> response = mapRouteAi.replay(
-                        new RouteReplayRequest(customerId, conversationNo, routeRef));
-                RouteCardDto card = response != null && Objects.equals(response.getCode(), 200)
-                        && response.getData() != null ? response.getData().routeCard() : null;
-                if (card != null && routeRef.equals(card.routeRef()) && card.expiresAt() != null
-                        && card.expiresAt().isAfter(Instant.now()) && card.route() != null
-                        && card.route().polyline() != null && !card.route().polyline().isEmpty()) {
-                    return routeCardContent(view, objectMapper.convertValue(card, Map.class));
-                }
-            } catch (RuntimeException e) {
-                // 重放已成功落库的消息不依赖地图服务可用；只降级为历史展示摘要。
-                log.warn("客服路线卡重放缓存读取失败 requestNo={} type={}",
-                        view.requestNo(), e.getClass().getSimpleName());
+            RouteCardDto card = replayRouteCardDto(customerId, conversationNo, routeRef);
+            if (card != null) {
+                return routeCardContent(view, routeCardPayload(cardAsMap(card), routeCheck));
             }
         }
         Map<String, Object> expiredSummary = new LinkedHashMap<>(summary);
@@ -742,7 +1725,46 @@ public class AiRouteTurnService {
             expiredSummary.put("route", withoutPolyline);
         }
         expiredSummary.put("expired", true);
-        return routeCardContent(view, expiredSummary);
+        return routeCardContent(view, routeCardPayload(expiredSummary, routeCheck));
+    }
+
+    /** 路线卡折线只保留在地图短时缓存；缓存失效或卡片不完整时返回 null 由调用方降级。 */
+    private RouteCardDto replayRouteCardDto(long customerId, String conversationNo,
+                                            String routeRef) {
+        try {
+            ResponseVo<RouteReplayResponse> response = mapRouteAi.replay(
+                    new RouteReplayRequest(customerId, conversationNo, routeRef));
+            RouteCardDto card = response != null && Objects.equals(response.getCode(), 200)
+                    && response.getData() != null ? response.getData().routeCard() : null;
+            if (card != null && routeRef.equals(card.routeRef()) && card.expiresAt() != null
+                    && card.expiresAt().isAfter(Instant.now()) && card.route() != null
+                    && card.route().polyline() != null && !card.route().polyline().isEmpty()) {
+                return card;
+            }
+        } catch (RuntimeException e) {
+            // 重放已成功落库的消息不依赖地图服务可用；只降级为历史展示摘要。
+            log.warn("客服路线卡重放缓存读取失败 conversationNo={} type={}",
+                    conversationNo, e.getClass().getSimpleName());
+        }
+        return null;
+    }
+
+    private Map<String, Object> storedRouteCheck(Map<String, Object> stored) {
+        if (stored == null || !(stored.get("routeCheck") instanceof Map<?, ?> check)) {
+            return null;
+        }
+        Map<String, Object> view = new LinkedHashMap<>();
+        check.forEach((key, value) -> {
+            if (key instanceof String name) {
+                view.put(name, value);
+            }
+        });
+        return view.isEmpty() ? null : view;
+    }
+
+    private static String routeRefOf(Map<String, Object> summary) {
+        Object value = summary.get("routeRef");
+        return value instanceof String ref && !ref.isBlank() ? ref.strip() : null;
     }
 
     private Map<String, Object> routeCardSummary(Map<String, Object> stored) {
@@ -796,8 +1818,7 @@ public class AiRouteTurnService {
     }
 
     private String routeRefFromPayload(String payloadJson) {
-        Object value = routeCardSummary(parsePayloadJson(payloadJson)).get("routeRef");
-        return value instanceof String routeRef && !routeRef.isBlank() ? routeRef.strip() : null;
+        return routeRefOf(routeCardSummary(parsePayloadJson(payloadJson)));
     }
 
     private static String detailOrFallback(String detail, String fallback) {
@@ -808,10 +1829,10 @@ public class AiRouteTurnService {
         return value != null && !value.isBlank();
     }
 
-    private ContentEvent routeCardContent(AssistantMessageView view, Map<String, Object> card) {
+    private ContentEvent routeCardContent(AssistantMessageView view, Map<String, Object> payload) {
         return new ContentEvent(view.requestNo(), new AssistantMessageEvent(
                 view.messageNo(), view.requestNo(), view.role(), view.messageType(), view.content(),
-                Map.of("routeCard", card), view.createdAt()));
+                payload, view.createdAt()));
     }
 
     private Map<String, Object> parsePayloadJson(String payloadJson) {
@@ -860,6 +1881,8 @@ public class AiRouteTurnService {
                             "地点查询暂时失败，请稍后重试");
                     case "AI_ROUTE_NOT_FOUND" -> new TurnFailedEvent(requestNo, upstreamCode,
                             "当前起终点未找到可达路线，请更换地点后重试");
+                    case "AI_ROUTE_UNVERIFIABLE" -> new TurnFailedEvent(requestNo, upstreamCode,
+                            "已找到驾车路线，但无法确认从所选收费站按正确方向通行；请换个明确的高速出入口或普通地点重试");
                     case "AI_MAP_UNAVAILABLE" -> new TurnFailedEvent(requestNo, upstreamCode,
                             "地图算路暂时不可用，请稍后重试");
                     case "AI_PROVIDER_TIMEOUT" -> new TurnFailedEvent(requestNo, upstreamCode,
@@ -951,11 +1974,39 @@ public class AiRouteTurnService {
     private record ConfirmationPayload(long conditionVersion) {
     }
 
+    /**
+     * 服务端核查上下文：随追问或选项消息落库，用于在接下来的轮次恢复核查状态。
+     * routeShown 表示被核查的路线是否已经展示给乘客；previousRouteExpired 表示旧路线快照已失效。
+     */
+    private record CheckContext(String intent, String placeName, String placeRegion,
+                                String checkMode, String routeRef, boolean routeShown,
+                                boolean previousRouteExpired) {
+
+        CheckContext withRouteRef(String newRouteRef, boolean newRouteShown) {
+            return new CheckContext(intent, placeName, placeRegion, checkMode, newRouteRef,
+                    newRouteShown, previousRouteExpired);
+        }
+
+        CheckContext asPreviousRouteExpired() {
+            return new CheckContext(intent, placeName, placeRegion, checkMode, routeRef,
+                    routeShown, true);
+        }
+    }
+
     private record PlaceChoicePayload(String taskNo, long conditionVersion,
-                                      long requestVersion, String flow, Set<String> choiceIds) {
+                                      long requestVersion, String flow, String role,
+                                      String viaPlaceName, String viaPlaceRegion,
+                                      Set<String> choiceIds, CheckContext checkContext) {
     }
 
     private record RouteCheckChoicePayload(String taskNo, long requestVersion,
-                                           String targetName, Map<String, String> labelsByMode) {
+                                           String targetName, Map<String, String> labelsByMode,
+                                           CheckContext checkContext) {
+    }
+
+    private record PartialEndpointPayload(long conditionVersion, String followUpRequestNo,
+                                          String knownRole, String missingRole,
+                                          String knownPlaceName, String intent,
+                                          String viaPlaceName, String viaPlaceRegion) {
     }
 }

@@ -19,6 +19,7 @@ import java.util.regex.Pattern;
 @Component
 public class CurrentRouteSemanticConsistencyEvaluator {
     private static final double TARGET_CONTEXT_MAX_DISTANCE_METERS = 1_000D;
+    private static final double TOLL_ARRIVAL_MAX_DISTANCE_METERS = 100D;
     private static final double SUSTAINED_HIGHWAY_DISTANCE_METERS = 1_000D;
     private static final double EARTH_RADIUS_METERS = 6_371_000D;
     private static final Pattern HIGHWAY_NUMBER = Pattern.compile("(?i)(?:G|S)\\d{1,4}");
@@ -27,7 +28,7 @@ public class CurrentRouteSemanticConsistencyEvaluator {
                                AmapPoiCandidate place,
                                List<Point> navigationPoints,
                                CurrentRouteCheckMode mode,
-                               boolean targetActionProven) {
+                               boolean targetArrivalProven) {
         if (mode != CurrentRouteCheckMode.ENTER_HIGHWAY
                 && mode != CurrentRouteCheckMode.USE_EXIT) {
             return Evaluation.valid();
@@ -41,9 +42,10 @@ public class CurrentRouteSemanticConsistencyEvaluator {
             return Evaluation.conflict("TARGET_ROLE_CONFLICT",
                     "所选地点是高速入口，不能作为驶出高速的出口核查");
         }
-        // 匹配到目标地点的正向通行动作时，以地图事件为准，不再用道路名称作反向推断。
-        if (targetActionProven) {
-            return Evaluation.valid();
+        // “到达收费站”只证明路线经过收费站，不能单独证明是驶入还是驶出。
+        // 必须结合事件前后的有序道路状态判断通行动作方向。
+        if (targetArrivalProven) {
+            return evaluateTollTransition(route, place, navigationPoints, mode);
         }
         if (mode != CurrentRouteCheckMode.ENTER_HIGHWAY || route == null || route.steps().isEmpty()) {
             return Evaluation.unknown();
@@ -68,6 +70,96 @@ public class CurrentRouteSemanticConsistencyEvaluator {
                 : "路线在“" + entryName + "”已经驶入高速，接近目标地点时仍行驶在"
                 + highwayName + "上，因此不会再从该入口驶入高速";
         return Evaluation.conflict("ALREADY_ON_HIGHWAY_BEFORE_TARGET", detail);
+    }
+
+    private static Evaluation evaluateTollTransition(
+            AmapDrivingRouteService.DrivingRouteOption route,
+            AmapPoiCandidate place,
+            List<Point> navigationPoints,
+            CurrentRouteCheckMode mode) {
+        if (route == null || route.steps().isEmpty()) {
+            return Evaluation.unknown("TOLL_ACTION_DIRECTION_NOT_PROVEN",
+                    "路线缺少收费站前后的导航步骤，无法判断驶入或驶出高速");
+        }
+        ArrivalPosition arrival = targetTollArrival(route.steps(), targets(place, navigationPoints), place);
+        if (arrival == null) {
+            return Evaluation.unknown("TOLL_ACTION_DIRECTION_NOT_PROVEN",
+                    "无法定位目标收费站的到达事件，不能判断驶入或驶出高速");
+        }
+        int previous = previousStepWithGeometry(route.steps(), arrival.stepIndex());
+        int next = nextStepWithGeometry(route.steps(), arrival.stepIndex());
+        if (previous < 0 || next < 0) {
+            return Evaluation.unknown("TOLL_ACTION_DIRECTION_NOT_PROVEN",
+                    "目标收费站到达事件缺少前后道路状态，不能判断驶入或驶出高速");
+        }
+        boolean beforeHighway = isHighwayStep(route.steps().get(previous));
+        boolean afterHighway = isHighwayStep(route.steps().get(next));
+        if (beforeHighway == afterHighway) {
+            return Evaluation.unknown("TOLL_ACTION_DIRECTION_NOT_PROVEN",
+                    "目标收费站前后的道路状态不足以证明驶入或驶出高速");
+        }
+
+        boolean entering = !beforeHighway && afterHighway;
+        if ((mode == CurrentRouteCheckMode.ENTER_HIGHWAY && entering)
+                || (mode == CurrentRouteCheckMode.USE_EXIT && !entering)) {
+            return Evaluation.valid();
+        }
+        return Evaluation.conflict("TOLL_ACTION_DIRECTION_CONFLICT", entering
+                ? "路线在目标收费站后进入高速，属于驶入高速，不是从该出口驶出"
+                : "路线在到达目标收费站前仍行驶在高速上，收费站后离开高速，属于驶出高速，不是从该入口驶入");
+    }
+
+    private static ArrivalPosition targetTollArrival(
+            List<AmapDrivingRouteService.NavigationStep> steps,
+            List<Point> targets,
+            AmapPoiCandidate place) {
+        if (targets.isEmpty()) return null;
+        String stationName = stationName(place == null ? null : place.getName());
+        ArrivalPosition nearest = null;
+        for (int index = 0; index < steps.size(); index++) {
+            AmapDrivingRouteService.NavigationStep step = steps.get(index);
+            if (!containsTollArrival(step) || step.polyline().isEmpty()) continue;
+            String context = step.roadName() + " " + step.instruction();
+            if (!stationName.isBlank() && !matchesTollName(context, stationName)) continue;
+            Point eventPoint = step.polyline().getLast();
+            if (!validPoint(eventPoint)) continue;
+            double distance = targets.stream()
+                    .mapToDouble(target -> distanceMeters(eventPoint, target))
+                    .min().orElse(Double.POSITIVE_INFINITY);
+            if (distance <= TOLL_ARRIVAL_MAX_DISTANCE_METERS
+                    && (nearest == null || distance < nearest.distanceMeters())) {
+                nearest = new ArrivalPosition(index, distance);
+            }
+        }
+        return nearest;
+    }
+
+    private static int previousStepWithGeometry(
+            List<AmapDrivingRouteService.NavigationStep> steps, int eventIndex) {
+        for (int index = eventIndex - 1; index >= 0; index--) {
+            if (steps.get(index).polyline().size() >= 2) return index;
+        }
+        return -1;
+    }
+
+    private static int nextStepWithGeometry(
+            List<AmapDrivingRouteService.NavigationStep> steps, int eventIndex) {
+        for (int index = eventIndex + 1; index < steps.size(); index++) {
+            if (steps.get(index).polyline().size() >= 2) return index;
+        }
+        return -1;
+    }
+
+    private static String stationName(String name) {
+        if (name == null) return "";
+        String base = name.split("[（(]", 2)[0].trim();
+        return base.endsWith("收费站") ? base.substring(0, base.length() - 3).trim() : "";
+    }
+
+    private static boolean matchesTollName(String context, String stationName) {
+        return context.contains(stationName + "互通")
+                || context.contains(stationName + "枢纽")
+                || context.contains(stationName + "收费站");
     }
 
     private static boolean wasAlreadyOnHighway(List<AmapDrivingRouteService.NavigationStep> steps,
@@ -200,6 +292,9 @@ public class CurrentRouteSemanticConsistencyEvaluator {
     private record StepPosition(int stepIndex, int segmentIndex, double distanceMeters) {
     }
 
+    private record ArrivalPosition(int stepIndex, double distanceMeters) {
+    }
+
     public enum Status { VALID, CONFLICT, UNKNOWN }
 
     public record Evaluation(Status status, String reason, String detail) {
@@ -213,6 +308,10 @@ public class CurrentRouteSemanticConsistencyEvaluator {
 
         private static Evaluation unknown() {
             return new Evaluation(Status.UNKNOWN, "ROUTE_STATE_UNKNOWN", null);
+        }
+
+        private static Evaluation unknown(String reason, String detail) {
+            return new Evaluation(Status.UNKNOWN, reason, detail);
         }
     }
 }

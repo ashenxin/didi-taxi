@@ -17,10 +17,12 @@ import java.util.Set;
  * @param routingWaypoints  请求高德算路时使用的有序坐标；收费站可能仅使用POI中心，坐标本身不是经过证据。
  * @param passageMode       受控途经方式，用于解释本次如何验证“经过”。
  * @param route             经过指定地点的完整路线。
+ * @param navigationSteps   与完整路线对应的高德分段导航步骤，供路线快照后续核查其他地点。
  * @param passageVerification Java确定性规则给出的经过验证原因，不允许由模型自行填写。
  */
 public record PassengerRouteCandidate(String routeCandidateId, AmapPoiCandidate waypoint,
                                       List<Point> routingWaypoints, String passageMode, RouteResponse route,
+                                      List<NavigationStep> navigationSteps,
                                       String passageVerification, Instant generatedAt, Instant expiresAt) {
 
     /**
@@ -43,6 +45,7 @@ public record PassengerRouteCandidate(String routeCandidateId, AmapPoiCandidate 
                                    List<Point> routingWaypoints,
                                    String passageMode,
                                    RouteResponse route,
+                                   List<NavigationStep> navigationSteps,
                                    String passageVerification,
                                    Instant generatedAt,
                                    Instant expiresAt) {
@@ -63,6 +66,7 @@ public record PassengerRouteCandidate(String routeCandidateId, AmapPoiCandidate 
         }
         this.passageMode = passageMode;
         this.route = Objects.requireNonNull(route, "候选路线不能为空");
+        this.navigationSteps = navigationSteps == null ? List.of() : List.copyOf(navigationSteps);
         if (passageVerification == null || passageVerification.isBlank()) {
             throw new IllegalArgumentException("经过验证说明不能为空");
         }
@@ -74,4 +78,40 @@ public record PassengerRouteCandidate(String routeCandidateId, AmapPoiCandidate 
         }
     }
 
+    /**
+     * 兼容尚未迁移的既有构造调用。空导航步骤候选不能生成客服完整路线快照；
+     * 正式规划链路必须改用包含 navigationSteps 的完整构造方式。
+     */
+    public PassengerRouteCandidate(String routeCandidateId,
+                                   AmapPoiCandidate waypoint,
+                                   List<Point> routingWaypoints,
+                                   String passageMode,
+                                   RouteResponse route,
+                                   String passageVerification,
+                                   Instant generatedAt,
+                                   Instant expiresAt) {
+        this(routeCandidateId, waypoint, routingWaypoints, passageMode, route, List.of(),
+                passageVerification, generatedAt, expiresAt);
+    }
+
+    /** 同一路线的单个导航步骤；字段均来自高德响应，不能由模型生成。 */
+    public record NavigationStep(String instruction,
+                                 String action,
+                                 String assistantAction,
+                                 String orientation,
+                                 String roadName,
+                                 List<Point> polyline) {
+        public NavigationStep {
+            instruction = emptyIfNull(instruction);
+            action = emptyIfNull(action);
+            assistantAction = emptyIfNull(assistantAction);
+            orientation = emptyIfNull(orientation);
+            roadName = emptyIfNull(roadName);
+            polyline = polyline == null ? List.of() : List.copyOf(polyline);
+        }
+    }
+
+    private static String emptyIfNull(String value) {
+        return value == null ? "" : value;
+    }
 }

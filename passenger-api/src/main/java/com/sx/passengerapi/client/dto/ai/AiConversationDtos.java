@@ -18,6 +18,29 @@ public final class AiConversationDtos {
     public record AiConversationCreateResponse(String conversationNo) {
     }
 
+    public record AiConversationListResponse(List<ConversationView> conversations,
+                                             boolean hasMore,
+                                             String nextBeforeConversationNo) {
+    }
+
+    public record ConversationView(String conversationNo,
+                                   String title,
+                                   String status,
+                                   LocalDateTime lastMessageAt,
+                                   LocalDateTime createdAt) {
+    }
+
+    public record AiRequestStatusResponse(String requestNo,
+                                          long requestVersion,
+                                          String clientMessageNo,
+                                          String status,
+                                          AssistantMessageView assistantReply) {
+    }
+
+    public record AiConversationDeleteResponse(String conversationNo,
+                                               LocalDateTime deletedAt) {
+    }
+
     public record AiTurnBeginRequest(long customerId, String idempotencyKey, String content) {
     }
 

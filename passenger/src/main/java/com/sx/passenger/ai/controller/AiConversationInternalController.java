@@ -2,7 +2,10 @@ package com.sx.passenger.ai.controller;
 
 import com.sx.passenger.ai.dto.AiConversationCreateRequest;
 import com.sx.passenger.ai.dto.AiConversationCreateResponse;
+import com.sx.passenger.ai.dto.AiConversationDeleteResponse;
+import com.sx.passenger.ai.dto.AiConversationListResponse;
 import com.sx.passenger.ai.dto.AiMessageListResponse;
+import com.sx.passenger.ai.dto.AiRequestStatusResponse;
 import com.sx.passenger.ai.dto.AiTurnBeginRequest;
 import com.sx.passenger.ai.dto.AiTurnBeginResponse;
 import com.sx.passenger.ai.dto.AiTurnCompleteRequest;
@@ -13,6 +16,7 @@ import com.sx.passenger.ai.service.AiConversationService;
 import com.sx.passenger.common.util.ResultUtil;
 import com.sx.passenger.common.vo.ResponseVo;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -46,6 +50,31 @@ public class AiConversationInternalController {
                                                           @RequestParam(required = false) Long beforeSequence) {
         return ResultUtil.success(conversationService.listMessages(
                 conversationNo, customerId, limit, beforeSequence));
+    }
+
+    @GetMapping
+    public ResponseVo<AiConversationListResponse> listConversations(
+            @RequestParam long customerId,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String beforeConversationNo) {
+        return ResultUtil.success(conversationService.listConversations(
+                customerId, limit, beforeConversationNo));
+    }
+
+    @GetMapping("/{conversationNo}/requests/{requestNo}")
+    public ResponseVo<AiRequestStatusResponse> requestStatus(
+            @PathVariable String conversationNo,
+            @PathVariable String requestNo,
+            @RequestParam long customerId) {
+        return ResultUtil.success(conversationService.requestStatus(
+                conversationNo, requestNo, customerId));
+    }
+
+    @DeleteMapping("/{conversationNo}")
+    public ResponseVo<AiConversationDeleteResponse> deleteConversation(
+            @PathVariable String conversationNo,
+            @RequestParam long customerId) {
+        return ResultUtil.success(conversationService.deleteConversation(conversationNo, customerId));
     }
 
     @PostMapping("/{conversationNo}/turns/begin")

@@ -14,6 +14,8 @@ import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.ChoiceTask;
 import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.PlaceCandidate;
 import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.SelectedChoice;
 import com.sx.map.ai.service.PassengerRouteConditionsCache.ConfirmedConditions;
+import com.sx.map.ai.service.PassengerRoutePartialEndpointCache.EndpointRole;
+import com.sx.map.ai.service.PassengerRoutePartialEndpointCache.PartialEndpoint;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -37,16 +39,61 @@ class PassengerRouteEndpointPreparationServiceTest {
     private final PassengerRouteConditionsCache conditionsCache =
             mock(PassengerRouteConditionsCache.class);
     private final PassengerRoutePlaceChoiceCache choiceCache = mock(PassengerRoutePlaceChoiceCache.class);
+    private final PassengerRoutePartialEndpointCache partialCache =
+            mock(PassengerRoutePartialEndpointCache.class);
     private final PassengerRouteEndpointPreparationService service =
-            new PassengerRouteEndpointPreparationService(resolver, conditionsCache, choiceCache);
+            new PassengerRouteEndpointPreparationService(resolver, conditionsCache, choiceCache, partialCache);
+
+    @Test
+    void uniqueSingleOriginIsCachedAndWaitsForDestination() {
+        PassengerRouteSnapshot.Place origin = place("P-1", "德清", "湖州", "德清县", 120.0);
+        when(resolver.resolve("德清", null, EndpointRole.ORIGIN)).thenReturn(unique(origin));
+        Instant createdAt = Instant.now();
+        PartialEndpoint partial = new PartialEndpoint(42L, "AIC-1", "AIR-7", 7L,
+                EndpointRole.ORIGIN, origin, PassengerRouteIntent.DEFAULT_ROUTE,
+                "从德清出发", createdAt, createdAt.plusSeconds(300));
+        when(partialCache.save(42L, "AIC-1", "AIR-7", 7L, EndpointRole.ORIGIN,
+                origin, PassengerRouteIntent.DEFAULT_ROUTE, "从德清出发")).thenReturn(partial);
+
+        PreparationResult result = service.preparePartial(42L, "AIC-1", "AIR-7", 7L,
+                EndpointRole.ORIGIN, "德清", null, PassengerRouteIntent.DEFAULT_ROUTE, "从德清出发");
+
+        assertThat(result.status()).isEqualTo(PreparationStatus.WAITING_FOR_OTHER_ENDPOINT);
+        assertThat(result.partialEndpoint().knownPlaceName()).isEqualTo("德清");
+        assertThat(result.destination().status()).isEqualTo(Status.MISSING);
+        verify(conditionsCache, never()).saveConfirmed(eq(42L), eq("AIC-1"), eq(7L),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void completingSingleOriginUsesNewConditionVersionAndConfirmsBothEndpoints() {
+        PassengerRouteSnapshot.Place origin = place("P-1", "德清", "湖州", "德清县", 120.0);
+        PassengerRouteSnapshot.Place destination = place("P-2", "宁波站", "宁波", "海曙区", 121.5);
+        Instant createdAt = Instant.now();
+        PartialEndpoint partial = new PartialEndpoint(42L, "AIC-1", "AIR-7", 7L,
+                EndpointRole.ORIGIN, origin, PassengerRouteIntent.DEFAULT_ROUTE,
+                "从德清出发", createdAt, createdAt.plusSeconds(300));
+        when(partialCache.find(42L, "AIC-1", "AIR-7", 7L)).thenReturn(Optional.of(partial));
+        when(resolver.resolve("宁波站", null, EndpointRole.DESTINATION)).thenReturn(unique(destination));
+        ConfirmedConditions confirmed = new ConfirmedConditions(42L, "AIC-1", 9L,
+                origin, destination, createdAt, createdAt.plusSeconds(300));
+        when(conditionsCache.saveConfirmed(42L, "AIC-1", 9L, origin, destination))
+                .thenReturn(confirmed);
+
+        PreparationResult result = service.completePartial(42L, "AIC-1", "AIR-7", 7L,
+                "AIR-9", 9L, EndpointRole.DESTINATION, "宁波站", null);
+
+        assertThat(result.status()).isEqualTo(PreparationStatus.READY_FOR_ROUTE);
+        verify(conditionsCache).saveConfirmed(42L, "AIC-1", 9L, origin, destination);
+    }
 
     @Test
     void ambiguousOriginIsSavedAsOwnedChoicesWithOnlyDisplaySummariesReturned() {
         PassengerRouteSnapshot.Place first = place("P-1", "德清", "湖州", "德清县", 120.0);
         PassengerRouteSnapshot.Place second = place("P-2", "德清", "杭州", "同名地址", 120.1);
         PassengerRouteSnapshot.Place destination = place("P-3", "杭州东站", "杭州", "天城路", 120.2);
-        when(resolver.resolve("德清", null)).thenReturn(ambiguous(first, second));
-        when(resolver.resolve("杭州东站", null)).thenReturn(unique(destination));
+        when(resolver.resolve("德清", null, EndpointRole.ORIGIN)).thenReturn(ambiguous(first, second));
+        when(resolver.resolve("杭州东站", null, EndpointRole.DESTINATION)).thenReturn(unique(destination));
         ChoiceTask task = choiceTask(ChoiceRole.ORIGIN, null, destination, first, second);
         when(choiceCache.save(eq(42L), eq("AIC-1"), eq(7L), eq(7L),
                 eq(ChoiceRole.ORIGIN), eq(PassengerRouteIntent.DEFAULT_ROUTE), eq(ORIGINAL_TEXT),
@@ -76,8 +123,8 @@ class PassengerRouteEndpointPreparationServiceTest {
     void ambiguousDestinationKeepsResolvedOriginAndSavesDestinationChoices() {
         PassengerRouteSnapshot.Place origin = place("P-1", "德清", "湖州", "德清县", 120.0);
         PassengerRouteSnapshot.Place destination = place("P-2", "杭州东站", "杭州", "天城路", 120.2);
-        when(resolver.resolve("德清", null)).thenReturn(unique(origin));
-        when(resolver.resolve("杭州东站", null)).thenReturn(ambiguous(destination));
+        when(resolver.resolve("德清", null, EndpointRole.ORIGIN)).thenReturn(unique(origin));
+        when(resolver.resolve("杭州东站", null, EndpointRole.DESTINATION)).thenReturn(ambiguous(destination));
         ChoiceTask task = choiceTask(ChoiceRole.DESTINATION, origin, null, destination);
         when(choiceCache.save(eq(42L), eq("AIC-1"), eq(7L), eq(7L),
                 eq(ChoiceRole.DESTINATION), eq(PassengerRouteIntent.DEFAULT_ROUTE), eq(ORIGINAL_TEXT),
@@ -98,8 +145,8 @@ class PassengerRouteEndpointPreparationServiceTest {
     void bothAmbiguousEndpointsOfferOriginFirstWithoutGuessingDestination() {
         PassengerRouteSnapshot.Place origin = place("P-1", "德清", "湖州", "德清县", 120.0);
         PassengerRouteSnapshot.Place destination = place("P-2", "杭州东站", "杭州", "天城路", 120.2);
-        when(resolver.resolve("德清", null)).thenReturn(ambiguous(origin));
-        when(resolver.resolve("杭州东站", null)).thenReturn(ambiguous(destination));
+        when(resolver.resolve("德清", null, EndpointRole.ORIGIN)).thenReturn(ambiguous(origin));
+        when(resolver.resolve("杭州东站", null, EndpointRole.DESTINATION)).thenReturn(ambiguous(destination));
         when(choiceCache.save(eq(42L), eq("AIC-1"), eq(7L), eq(7L),
                 eq(ChoiceRole.ORIGIN), eq(PassengerRouteIntent.DEFAULT_ROUTE), eq(ORIGINAL_TEXT),
                 isNull(), isNull(), eq("杭州东站"), isNull(), anyList()))
@@ -117,9 +164,9 @@ class PassengerRouteEndpointPreparationServiceTest {
     @Test
     void missingTrustedOriginCandidatesStaysInTextClarification() {
         PassengerRouteSnapshot.Place destination = place("P-2", "杭州东站", "杭州", "天城路", 120.2);
-        when(resolver.resolve("德清", null)).thenReturn(new Resolution(
+        when(resolver.resolve("德清", null, EndpointRole.ORIGIN)).thenReturn(new Resolution(
                 Status.INVALID_MAP_DATA, null, List.of(summary("德清", "湖州", "无效地点")), List.of()));
-        when(resolver.resolve("杭州东站", null)).thenReturn(unique(destination));
+        when(resolver.resolve("杭州东站", null, EndpointRole.DESTINATION)).thenReturn(unique(destination));
 
         PreparationResult result = prepare();
 
@@ -133,8 +180,8 @@ class PassengerRouteEndpointPreparationServiceTest {
     void uniqueEndpointsAreConfirmedAndReadyForRouteWithoutSecondConfirmation() {
         PassengerRouteSnapshot.Place origin = place("P-1", "德清", "湖州", "德清县", 120.0);
         PassengerRouteSnapshot.Place destination = place("P-2", "杭州东站", "杭州", "天城路", 120.2);
-        when(resolver.resolve("德清", null)).thenReturn(unique(origin));
-        when(resolver.resolve("杭州东站", null)).thenReturn(unique(destination));
+        when(resolver.resolve("德清", null, EndpointRole.ORIGIN)).thenReturn(unique(origin));
+        when(resolver.resolve("杭州东站", null, EndpointRole.DESTINATION)).thenReturn(unique(destination));
         Instant createdAt = Instant.parse("2026-09-18T12:55:00Z");
         Instant expiresAt = Instant.parse("2026-09-18T13:00:00Z");
         ConfirmedConditions confirmed = new ConfirmedConditions(42L, "AIC-1", 7L,
@@ -160,7 +207,7 @@ class PassengerRouteEndpointPreparationServiceTest {
                 .thenReturn(Optional.of(new SelectedChoice("AIT-origin", ChoiceRole.ORIGIN,
                         PassengerRouteIntent.DEFAULT_ROUTE, ORIGINAL_TEXT, null, null,
                         "杭州东站", null, originCandidate, Instant.now().plusSeconds(300))));
-        when(resolver.resolve("杭州东站", null)).thenReturn(ambiguous(destination));
+        when(resolver.resolve("杭州东站", null, EndpointRole.DESTINATION)).thenReturn(ambiguous(destination));
         ChoiceTask destinationTask = choiceTask(ChoiceRole.DESTINATION, origin, null, destination);
         when(choiceCache.save(eq(42L), eq("AIC-1"), eq(7L), eq(8L),
                 eq(ChoiceRole.DESTINATION), eq(PassengerRouteIntent.DEFAULT_ROUTE), eq(ORIGINAL_TEXT),
@@ -201,6 +248,35 @@ class PassengerRouteEndpointPreparationServiceTest {
 
         assertThat(result).isNull();
         org.mockito.Mockito.verifyNoInteractions(conditionsCache, resolver);
+    }
+
+    @Test
+    void oldOriginExitChoiceCannotAdvanceOrBecomePartialEndpoint() {
+        PassengerRouteSnapshot.Place exit = place("P-EXIT", "德清收费站(G25高速出口)", "湖州", "德清", 120.0);
+        PlaceCandidate cached = new PlaceCandidate(exit, null, List.of(), "高速路出口");
+        when(choiceCache.select("AIT-exit", "PC-exit", 42L, "AIC-1", 7L, 7L))
+                .thenReturn(Optional.of(new SelectedChoice("AIT-exit", ChoiceRole.ORIGIN,
+                        PassengerRouteIntent.DEFAULT_ROUTE, ORIGINAL_TEXT, null, null,
+                        null, null, cached, Instant.now().plusSeconds(300))));
+
+        assertThat(service.select(42L, "AIC-1", "AIT-exit", "PC-exit", 7L, 7L, 8L, "AIR-8"))
+                .isNull();
+        org.mockito.Mockito.verifyNoInteractions(conditionsCache, partialCache, resolver);
+    }
+
+    @Test
+    void oldSingleDestinationEntranceChoiceCannotBecomePartialEndpoint() {
+        PassengerRouteSnapshot.Place entrance = place("P-ENTRY", "德清收费站(G25高速入口)",
+                "湖州", "德清", 120.0);
+        PlaceCandidate cached = new PlaceCandidate(entrance, null, List.of(), "高速路入口");
+        when(choiceCache.select("AIT-entry", "PC-entry", 42L, "AIC-1", 7L, 7L))
+                .thenReturn(Optional.of(new SelectedChoice("AIT-entry", ChoiceRole.DESTINATION,
+                        PassengerRouteIntent.DEFAULT_ROUTE, ORIGINAL_TEXT, null, null,
+                        null, null, cached, Instant.now().plusSeconds(300))));
+
+        assertThat(service.select(42L, "AIC-1", "AIT-entry", "PC-entry", 7L, 7L, 8L, "AIR-8"))
+                .isNull();
+        org.mockito.Mockito.verifyNoInteractions(conditionsCache, partialCache, resolver);
     }
 
     private PreparationResult prepare() {

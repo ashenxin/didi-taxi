@@ -14,7 +14,10 @@ public final class MapRouteDtos {
     private MapRouteDtos() {
     }
 
-    public record ExtractEndpointsRequest(String userText) {
+    public record ExtractEndpointsRequest(String userText, String expectedEndpointRole) {
+        public ExtractEndpointsRequest(String userText) {
+            this(userText, null);
+        }
     }
 
     public record ExtractEndpointsResponse(String originName,
@@ -22,6 +25,8 @@ public final class MapRouteDtos {
                                            String originRegion,
                                            String destinationRegion,
                                            String intent,
+                                           String viaPlaceName,
+                                           String viaPlaceRegion,
                                            String checkPlaceName,
                                            String checkPlaceRegion,
                                            String checkMode) {
@@ -31,7 +36,7 @@ public final class MapRouteDtos {
                                         String originRegion, String destinationRegion,
                                         String intent) {
             this(originName, destinationName, originRegion, destinationRegion, intent,
-                    null, null, null);
+                    null, null, null, null, null);
         }
 
         public ExtractEndpointsResponse(String originName, String destinationName,
@@ -39,7 +44,15 @@ public final class MapRouteDtos {
                                         String intent, String checkPlaceName,
                                         String checkPlaceRegion) {
             this(originName, destinationName, originRegion, destinationRegion, intent,
-                    checkPlaceName, checkPlaceRegion, "UNSPECIFIED");
+                    null, null, checkPlaceName, checkPlaceRegion, "UNSPECIFIED");
+        }
+
+        public ExtractEndpointsResponse(String originName, String destinationName,
+                                        String originRegion, String destinationRegion,
+                                        String intent, String checkPlaceName,
+                                        String checkPlaceRegion, String checkMode) {
+            this(originName, destinationName, originRegion, destinationRegion, intent,
+                    null, null, checkPlaceName, checkPlaceRegion, checkMode);
         }
     }
 
@@ -59,12 +72,41 @@ public final class MapRouteDtos {
                                            EndpointFeedbackView originFeedback,
                                            EndpointFeedbackView destinationFeedback,
                                            Instant expiresAt,
-                                           PlaceChoicesView placeChoices) {
+                                           PlaceChoicesView placeChoices,
+                                           PartialEndpointView partialEndpoint) {
         /** 保留既有默认路线测试与调用方使用的构造方式。 */
         public RoutePreparationResponse(String status, EndpointFeedbackView originFeedback,
                                         EndpointFeedbackView destinationFeedback, Instant expiresAt) {
-            this(status, originFeedback, destinationFeedback, expiresAt, null);
+            this(status, originFeedback, destinationFeedback, expiresAt, null, null);
         }
+
+        public RoutePreparationResponse(String status, EndpointFeedbackView originFeedback,
+                                        EndpointFeedbackView destinationFeedback, Instant expiresAt,
+                                        PlaceChoicesView placeChoices) {
+            this(status, originFeedback, destinationFeedback, expiresAt, placeChoices, null);
+        }
+    }
+
+    public record PartialEndpointView(long conditionVersion, String followUpRequestNo,
+                                      String knownRole, String missingRole,
+                                      String knownPlaceName, String intent,
+                                      Instant expiresAt) {
+    }
+
+    public record PartialEndpointPrepareRequest(long customerId, String conversationNo,
+                                                String requestNo, long conditionVersion,
+                                                String endpointRole, String placeName,
+                                                String placeRegion, String intent,
+                                                String originalUserText) {
+    }
+
+    public record PartialEndpointCompleteRequest(long customerId, String conversationNo,
+                                                 String followUpRequestNo,
+                                                 long partialConditionVersion,
+                                                 String currentRequestNo,
+                                                 long currentConditionVersion,
+                                                 String endpointRole, String placeName,
+                                                 String placeRegion) {
     }
 
     public record EndpointFeedbackView(String status, List<CandidateView> candidates) {
@@ -84,7 +126,14 @@ public final class MapRouteDtos {
 
     public record RoutePlaceChoiceRequest(long customerId, String conversationNo,
                                           String taskNo, String placeChoiceId, long conditionVersion,
-                                          long choiceRequestVersion, long currentRequestVersion) {
+                                          long choiceRequestVersion, long currentRequestVersion,
+                                          String currentRequestNo) {
+        public RoutePlaceChoiceRequest(long customerId, String conversationNo,
+                                       String taskNo, String placeChoiceId, long conditionVersion,
+                                       long choiceRequestVersion, long currentRequestVersion) {
+            this(customerId, conversationNo, taskNo, placeChoiceId, conditionVersion,
+                    choiceRequestVersion, currentRequestVersion, null);
+        }
     }
 
     /**
@@ -163,6 +212,32 @@ public final class MapRouteDtos {
     }
 
     public record DefaultRouteRequest(long customerId, String conversationNo, long conditionVersion) {
+    }
+
+    public record ViaRouteRequest(long customerId, String conversationNo, String routeRef,
+                                  long conditionVersion, long requestVersion,
+                                  String placeName, String placeRegion, String originalUserText) {
+    }
+
+    public record ViaRoutePlaceChoiceRequest(long customerId, String conversationNo,
+                                             long conditionVersion, long choiceRequestVersion,
+                                             long currentRequestVersion, String taskNo,
+                                             String placeChoiceId) {
+    }
+
+    public record ViaRouteResponse(String status, long conditionVersion, String detail,
+                                   RouteCardDto routeCard,
+                                   ViaRoutePlaceChoicesView placeChoices) {
+    }
+
+    public record ViaRoutePlaceChoicesView(String taskNo, String role,
+                                           List<ViaRoutePlaceChoiceView> choices,
+                                           Instant expiresAt) {
+    }
+
+    public record ViaRoutePlaceChoiceView(String placeChoiceId, String name, String type,
+                                          String city, String address, String businessType,
+                                          Instant expiresAt) {
     }
 
     public record RouteReplayRequest(long customerId, String conversationNo, String routeRef) {

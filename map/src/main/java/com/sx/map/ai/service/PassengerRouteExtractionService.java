@@ -40,6 +40,8 @@ public class PassengerRouteExtractionService {
     private static final Logger log = LoggerFactory.getLogger(PassengerRouteExtractionService.class);
     private static final String DEFAULT_INTENT = "DEFAULT_ROUTE";
     private static final String CURRENT_ROUTE_CHECK = "CURRENT_ROUTE_CHECK";
+    private static final String ROUTE_EXISTS = "ROUTE_EXISTS";
+    private static final String VIA_ROUTE_PLAN = "VIA_ROUTE_PLAN";
 
     private final ObjectProvider<PassengerRouteExtractionModel> extractionModelProvider;
     private final ObjectMapper objectMapper;
@@ -61,6 +63,18 @@ public class PassengerRouteExtractionService {
 
     /** 提取两端；地点缺失或输出无法解析时对应字段为 null，模型调用故障抛出稳定错误。 */
     public ExtractEndpointsResponse extract(String userText) {
+        return extract(userText, null);
+    }
+
+    /**
+     * 单端点续接时明确告知模型本轮只需补哪一端；这只是字段归类提示，地点文字仍须来自本轮原话。
+     */
+    public ExtractEndpointsResponse extract(String userText, String expectedEndpointRole) {
+        if (expectedEndpointRole != null
+                && !"ORIGIN".equals(expectedEndpointRole)
+                && !"DESTINATION".equals(expectedEndpointRole)) {
+            throw new IllegalArgumentException("待补齐端点角色无效");
+        }
         PassengerRouteExtractionModel extractionModel = extractionModelProvider.getIfAvailable();
         if (extractionModel == null) {
             throw new AiRouteBusinessException("AI_PROVIDER_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE,
@@ -69,7 +83,7 @@ public class PassengerRouteExtractionService {
         CompletableFuture<org.springframework.ai.chat.model.ChatResponse> future;
         try {
             future = CompletableFuture.supplyAsync(
-                    () -> extractionModel.call(buildPrompt(userText)), extractionExecutor);
+                    () -> extractionModel.call(buildPrompt(userText, expectedEndpointRole)), extractionExecutor);
         } catch (RejectedExecutionException e) {
             throw new AiRouteBusinessException("AI_PROVIDER_BUSY", HttpStatus.SERVICE_UNAVAILABLE,
                     "模型服务繁忙，请稍后重试", e);
@@ -100,29 +114,50 @@ public class PassengerRouteExtractionService {
                     "模型返回内容无效，请稍后重试");
         }
         String raw = response.getResult().getOutput().getText();
-        return enforceExactCheckPlaceMention(parseModelOutput(raw), userText);
+        return enforceExactPlaceMentions(parseModelOutput(raw), userText);
     }
 
     /**
-     * 核查地点必须来自乘客原话中的连续片段。模型可以识别意图和截取文字，但不能把“五常”
-     * 改写成“五常收费站”。这里不理解任何自然语言别名，只校验提取结果是否可追溯到原文。
+     * 核查地点和指定途经地点必须来自乘客原话中的连续片段。模型可以识别意图和截取文字，
+     * 但不能把“五常”改写成“五常收费站”。这里不理解任何自然语言别名，只校验提取结果
+     * 是否可追溯到原文。
      */
-    private static ExtractEndpointsResponse enforceExactCheckPlaceMention(
+    private static ExtractEndpointsResponse enforceExactPlaceMentions(
             ExtractEndpointsResponse extracted, String userText) {
-        if (extracted == null || !CURRENT_ROUTE_CHECK.equals(extracted.intent())
-                || extracted.checkPlaceName() == null
-                || (userText != null && userText.contains(extracted.checkPlaceName()))) {
+        if (extracted == null) {
             return extracted;
         }
-        return new ExtractEndpointsResponse(
-                extracted.originName(), extracted.destinationName(),
-                extracted.originRegion(), extracted.destinationRegion(),
-                extracted.intent(), null, extracted.checkPlaceRegion(), extracted.checkMode());
+        if ((CURRENT_ROUTE_CHECK.equals(extracted.intent()) || ROUTE_EXISTS.equals(extracted.intent()))
+                && !isExactMention(extracted.checkPlaceName(), userText)) {
+            return new ExtractEndpointsResponse(
+                    extracted.originName(), extracted.destinationName(),
+                    extracted.originRegion(), extracted.destinationRegion(),
+                    extracted.intent(), extracted.viaPlaceName(), extracted.viaPlaceRegion(),
+                    null, extracted.checkPlaceRegion(), extracted.checkMode());
+        }
+        if (VIA_ROUTE_PLAN.equals(extracted.intent())
+                && !isExactMention(extracted.viaPlaceName(), userText)) {
+            return new ExtractEndpointsResponse(
+                    extracted.originName(), extracted.destinationName(),
+                    extracted.originRegion(), extracted.destinationRegion(),
+                    extracted.intent(), null, extracted.viaPlaceRegion(),
+                    extracted.checkPlaceName(), extracted.checkPlaceRegion(), extracted.checkMode());
+        }
+        return extracted;
     }
 
-    private Prompt buildPrompt(String userText) {
+    private static boolean isExactMention(String placeName, String userText) {
+        return placeName == null || userText != null && userText.contains(placeName);
+    }
+
+    private Prompt buildPrompt(String userText, String expectedEndpointRole) {
+        String continuationInstruction = expectedEndpointRole == null ? "" : switch (expectedEndpointRole) {
+            case "ORIGIN" -> "\n\n本轮是补充缺失的起点。只要消息表达了一个地点，即使没有‘从’字，也将该地点逐字放入 originName；不要放入 destinationName。";
+            case "DESTINATION" -> "\n\n本轮是补充缺失的终点。只要消息表达了一个地点，即使没有‘到’字，也将该地点逐字放入 destinationName；不要放入 originName。";
+            default -> throw new IllegalArgumentException("待补齐端点角色无效");
+        };
         return new Prompt(java.util.List.of(
-                new SystemMessage(systemPrompt),
+                new SystemMessage(systemPrompt + continuationInstruction),
                 new UserMessage(userText)));
     }
 
@@ -165,14 +200,19 @@ public class PassengerRouteExtractionService {
             }
             String intent = normalizeIntent(textOrNull(node, "intent", DEFAULT_INTENT));
             boolean currentRouteCheck = CURRENT_ROUTE_CHECK.equals(intent);
+            boolean routeExists = ROUTE_EXISTS.equals(intent);
+            boolean viaRoutePlan = VIA_ROUTE_PLAN.equals(intent);
+            boolean checksPlace = currentRouteCheck || routeExists;
             return new ExtractEndpointsResponse(
                     textOrNull(node, "originName"),
                     textOrNull(node, "destinationName"),
                     textOrNull(node, "originRegion"),
                     textOrNull(node, "destinationRegion"),
                     intent,
-                    currentRouteCheck ? textOrNull(node, "checkPlaceName") : null,
-                    currentRouteCheck ? textOrNull(node, "checkPlaceRegion") : null,
+                    viaRoutePlan ? textOrNull(node, "viaPlaceName") : null,
+                    viaRoutePlan ? textOrNull(node, "viaPlaceRegion") : null,
+                    checksPlace ? textOrNull(node, "checkPlaceName") : null,
+                    checksPlace ? textOrNull(node, "checkPlaceRegion") : null,
                     currentRouteCheck ? normalizeCheckMode(textOrNull(node, "checkMode")) : null);
         } catch (Exception e) {
             return null;

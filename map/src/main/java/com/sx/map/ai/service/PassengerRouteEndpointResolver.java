@@ -1,14 +1,18 @@
 package com.sx.map.ai.service;
 
 import com.sx.map.ai.model.PassengerRouteSnapshot;
+import com.sx.map.ai.service.PassengerRoutePartialEndpointCache.EndpointRole;
 import com.sx.map.model.dto.AmapPoiCandidate;
 import com.sx.map.model.dto.Point;
 import com.sx.map.service.AmapPoiSearchService;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 在地图服务内部将客服会话提到的起点或终点名称解析为高德地点。
@@ -24,6 +28,7 @@ public class PassengerRouteEndpointResolver {
     private static final int MAX_REGION_LENGTH = 30;
     // AmapPoiSearchService 只请求第一页，每页 10 条；达到上限时无法证明后续没有同名地点。
     private static final int SEARCH_PAGE_SIZE = 10;
+    private static final int MAX_FOCUSED_CHOICES = 5;
 
     private final AmapPoiSearchService poiSearchService;
 
@@ -38,8 +43,16 @@ public class PassengerRouteEndpointResolver {
      * map-service，供后续生成短时地点选项，不会选取相似名称代替乘客决定。
      */
     public Resolution resolve(String placeName, String region) {
+        return resolve(placeName, region, null);
+    }
+
+    public Resolution resolve(String placeName, String region, EndpointRole role) {
         String name = requiredText(placeName, "起终点名称", MAX_NAME_LENGTH);
         String searchRegion = optionalText(region, "地区", MAX_REGION_LENGTH);
+        if (!directionCompatible(name, null, role)) {
+            // 用户明确说的是反向出入口，不能展示同站另一方向诱导其误选。
+            return Resolution.unresolved(Status.NOT_FOUND, List.of());
+        }
         List<AmapPoiCandidate> candidates = poiSearchService.search(name, searchRegion, null);
         if (candidates == null) {
             throw new IllegalStateException("地图地点查询未返回候选集合");
@@ -48,15 +61,42 @@ public class PassengerRouteEndpointResolver {
             return Resolution.unresolved(Status.NOT_FOUND, List.of());
         }
 
-        List<CandidateSummary> summaries = new ArrayList<>(candidates.size());
-        List<SelectableCandidate> selectableCandidates = new ArrayList<>(candidates.size());
-        List<AmapPoiCandidate> exactMatches = new ArrayList<>();
-        boolean hasInvalidCandidate = false;
+        boolean highwayAccess = isHighwayAccessRequest(name);
+        boolean scenicPlace = !highwayAccess && isScenicPlaceRequest(name);
+        List<AmapPoiCandidate> relevant = new ArrayList<>(candidates.size());
+        Set<String> seenIds = new HashSet<>();
+        Set<String> seenPlaces = new HashSet<>();
         for (AmapPoiCandidate candidate : candidates) {
             if (candidate == null || candidate.getName() == null || candidate.getName().isBlank()) {
-                hasInvalidCandidate = true;
                 continue;
             }
+            String candidateName = candidate.getName().strip();
+            if (!directionCompatible(candidateName, candidate.getType(), role)
+                    || !relevantToRequest(name, candidate, highwayAccess, scenicPlace)) {
+                continue;
+            }
+            String id = blankToNull(candidate.getPoiId());
+            if ((id != null && seenIds.contains(id))
+                    || !seenPlaces.add(candidateIdentity(candidate))) continue;
+            if (id != null) seenIds.add(id);
+            relevant.add(candidate);
+        }
+        if (highwayAccess || scenicPlace) {
+            // 高德第一页的相关度不等同于乘客意图；优先展示主地点和可通行入口。
+            relevant.sort(Comparator.comparingInt((AmapPoiCandidate candidate) ->
+                            toTrustedPlace(candidate) == null ? 1 : 0)
+                    .thenComparingInt(candidate -> candidatePriority(name, candidate, scenicPlace, role)));
+            if (relevant.size() > MAX_FOCUSED_CHOICES) {
+                relevant = new ArrayList<>(relevant.subList(0, MAX_FOCUSED_CHOICES));
+            }
+        }
+
+        List<CandidateSummary> summaries = new ArrayList<>(relevant.size());
+        List<SelectableCandidate> selectableCandidates = new ArrayList<>(relevant.size());
+        List<AmapPoiCandidate> exactMatches = new ArrayList<>();
+        boolean hasInvalidCandidate = candidates.stream().anyMatch(candidate ->
+                candidate == null || candidate.getName() == null || candidate.getName().isBlank());
+        for (AmapPoiCandidate candidate : relevant) {
             String candidateName = candidate.getName().strip();
             CandidateSummary summary = new CandidateSummary(candidateName, blankToNull(candidate.getType()),
                     blankToNull(candidate.getCity()), blankToNull(candidate.getDistrict()),
@@ -73,6 +113,9 @@ public class PassengerRouteEndpointResolver {
             }
         }
         List<CandidateSummary> visibleCandidates = List.copyOf(summaries);
+        if (visibleCandidates.isEmpty() && !hasInvalidCandidate && candidates.size() < SEARCH_PAGE_SIZE) {
+            return Resolution.unresolved(Status.NOT_FOUND, List.of());
+        }
         if (hasInvalidCandidate || candidates.size() >= SEARCH_PAGE_SIZE) {
             return Resolution.unresolved(Status.INCOMPLETE_RESULTS, visibleCandidates, selectableCandidates);
         }
@@ -84,6 +127,89 @@ public class PassengerRouteEndpointResolver {
         return place == null
                 ? Resolution.unresolved(Status.INVALID_MAP_DATA, visibleCandidates)
                 : Resolution.unique(place);
+    }
+
+    private static boolean isHighwayAccessRequest(String name) {
+        return name.contains("收费站") || name.contains("高速口") || name.contains("高速路口")
+                || name.contains("高速入口") || name.contains("高速出口");
+    }
+
+    private static boolean isScenicPlaceRequest(String name) {
+        return name.contains("湿地") || name.contains("公园") || name.contains("景区")
+                || name.contains("风景区");
+    }
+
+    private static boolean relevantToRequest(String requestedName, AmapPoiCandidate candidate,
+                                             boolean highwayAccess, boolean scenicPlace) {
+        String candidateName = candidate.getName().strip();
+        String type = candidate.getType() == null ? "" : candidate.getType();
+        if (highwayAccess) {
+            // “服务区与高速交叉口”等路口名不是乘客可以直接选择的高速收费站出入口。
+            return candidateName.contains("收费站") || type.contains("收费站")
+                    || type.contains("高速路入口") || type.contains("高速路出口")
+                    || candidateName.contains("高速入口") || candidateName.contains("高速出口");
+        }
+        if (scenicPlace) {
+            // 景区名称搜索常混入地铁、售票点和内部小景物；明确点名时仍允许精确搜索。
+            return candidateName.equals(requestedName) || !containsAny(candidateName + ";" + type,
+                    "地铁站", "公交站", "售票处", "停车场",
+                    "水塘", "餐厅", "商店", "卫生间", "游船码头");
+        }
+        return true;
+    }
+
+    private static boolean containsAny(String value, String... fragments) {
+        for (String fragment : fragments) {
+            if (value.contains(fragment)) return true;
+        }
+        return false;
+    }
+
+    private static int candidatePriority(String requestedName, AmapPoiCandidate candidate,
+                                         boolean scenicPlace, EndpointRole role) {
+        String candidateName = candidate.getName().strip();
+        if (candidateName.equals(requestedName)) return 0;
+        if (!scenicPlace) {
+            String placeHint = requestedName.replace("高速路口", "").replace("高速口", "")
+                    .replace("收费站", "").replace("高速入口", "").replace("高速出口", "").strip();
+            String locality = candidateName + ';' + candidate.getCity() + ';'
+                    + candidate.getDistrict() + ';' + candidate.getAddress();
+            boolean localMatch = !placeHint.isEmpty() && locality.contains(placeHint);
+            String type = candidate.getType() == null ? "" : candidate.getType();
+            boolean directedAccess = role == EndpointRole.ORIGIN
+                    ? candidateName.contains("入口") || type.contains("高速路入口")
+                    : role == EndpointRole.DESTINATION
+                    && (candidateName.contains("出口") || type.contains("高速路出口"));
+            return (localMatch ? 0 : 2) + (directedAccess ? 1 : 2);
+        }
+        if (candidateName.endsWith("湿地") || candidateName.endsWith("公园")
+                || candidateName.endsWith("景区")) return 1;
+        if (containsAny(candidateName, "入口", "大门")) return 2;
+        if (candidateName.endsWith("园") || candidateName.endsWith("区")) return 3;
+        return 4 + Math.min(candidateName.length(), 100);
+    }
+
+    private static String candidateIdentity(AmapPoiCandidate candidate) {
+        Point center = candidate.getCenterPoint();
+        return candidate.getName().strip() + '|' + candidate.getType() + '|'
+                + candidate.getCity() + '|' + candidate.getAddress() + '|'
+                + (center == null ? "" : center.getLng() + "," + center.getLat());
+    }
+
+    /** 只按明确的高速入口/出口标签排除反向地点，不从同名站点推断可掉头或可反向通行。 */
+    public static boolean directionCompatible(String name, String type, EndpointRole role) {
+        if (role == null) return true;
+        String placeName = name == null ? "" : name;
+        String placeType = type == null ? "" : type;
+        boolean highway = placeName.contains("收费站") || placeName.contains("高速")
+                || placeType.contains("高速路入口") || placeType.contains("高速路出口")
+                || placeType.contains("收费站");
+        if (!highway) return true;
+        boolean entrance = placeName.contains("入口") || placeType.contains("高速路入口");
+        boolean exit = placeName.contains("出口") || placeType.contains("高速路出口");
+        if (entrance && exit) return false; // 地图名称与类型互相矛盾，不能猜测通行方向。
+        if (!entrance && !exit) return true;
+        return role == EndpointRole.ORIGIN ? !exit : !entrance;
     }
 
     private static PassengerRouteSnapshot.Place toTrustedPlace(AmapPoiCandidate candidate) {
@@ -135,6 +261,7 @@ public class PassengerRouteEndpointResolver {
 
     public enum Status {
         UNIQUE,
+        MISSING,
         NOT_FOUND,
         NEEDS_CLARIFICATION,
         INCOMPLETE_RESULTS,

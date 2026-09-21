@@ -45,4 +45,16 @@ public interface PassengerAiConversationMapper extends BaseMapper<PassengerAiCon
     /** 定时对账只读取候选；真正过期前仍须逐行加锁复核。 */
     List<PassengerAiConversation> findStaleActiveRequests(@Param("cutoff") LocalDateTime cutoff,
                                                           @Param("limit") int limit);
+
+    /** 会话列表按最近消息时间、主键倒序；游标由服务端解析为同一乘客的会话行。 */
+    List<PassengerAiConversation> findActiveByCustomer(
+            @Param("customerId") long customerId,
+            @Param("beforeLastMessageAt") LocalDateTime beforeLastMessageAt,
+            @Param("beforeId") Long beforeId,
+            @Param("limit") int limit);
+
+    /** 行锁内逻辑删除，同时撤销活动请求，使迟到结果无法写回。 */
+    int markDeleted(@Param("id") long id,
+                    @Param("expectedRowVersion") long expectedRowVersion,
+                    @Param("deletedAt") LocalDateTime deletedAt);
 }

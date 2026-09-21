@@ -158,6 +158,49 @@ class CurrentRoutePassageServiceTest {
     }
 
     @Test
+    void leavingHighwayAtTollCannotBeMisreportedAsEnteringThroughNearbyEntrance() {
+        Point tollPoint = point(120.046877, 30.279328);
+        AmapPoiCandidate entrance = toll("五常收费站(G25长深高速入口北向)", tollPoint);
+        var highway = step("紫金港枢纽", "沿紫金港枢纽途径G25长深高速向南行驶进入匝道", "进入匝道",
+                point(120.053234, 30.338331), point(120.047392, 30.280991));
+        var targetArrival = step("五常互通", "沿五常互通向南行驶到达收费站", "到达收费站",
+                point(120.047392, 30.280991), tollPoint);
+        var localRoad = step("五常互通", "沿五常互通向西南行驶进入主路", "进入主路",
+                tollPoint, point(120.046368, 30.278126));
+        var route = option("gaode", List.of(
+                highway.polyline().getFirst(), highway.polyline().getLast(), tollPoint,
+                localRoad.polyline().getLast()), highway, targetArrival, localRoad);
+
+        CurrentRoutePassageService.CheckResult result = service.check(
+                route, entrance, CurrentRouteCheckMode.ENTER_HIGHWAY);
+
+        assertThat(result.verdict()).isEqualTo(CurrentRoutePassageService.Verdict.CONFLICT);
+        assertThat(result.reason()).isEqualTo("TOLL_ACTION_DIRECTION_CONFLICT");
+        assertThat(result.detail()).contains("驶出高速").contains("不是从该入口驶入");
+    }
+
+    @Test
+    void highwayToLocalRoadTransitionProvesUsingTheMatchingExit() {
+        Point tollPoint = point(120.046877, 30.279328);
+        AmapPoiCandidate exit = toll("五常收费站(G25长深高速出口千岛湖方向)", tollPoint);
+        var highway = step("G25长深高速", "沿G25长深高速向南行驶进入匝道", "进入匝道",
+                point(120.053234, 30.338331), point(120.047392, 30.280991));
+        var targetArrival = step("五常互通", "沿五常互通向南行驶到达收费站", "到达收费站",
+                point(120.047392, 30.280991), tollPoint);
+        var localRoad = step("五常互通", "沿五常互通向西南行驶进入主路", "进入主路",
+                tollPoint, point(120.046368, 30.278126));
+        var route = option("gaode", List.of(
+                highway.polyline().getFirst(), highway.polyline().getLast(), tollPoint,
+                localRoad.polyline().getLast()), highway, targetArrival, localRoad);
+
+        CurrentRoutePassageService.CheckResult result = service.check(
+                route, exit, CurrentRouteCheckMode.USE_EXIT);
+
+        assertThat(result.verdict()).isEqualTo(CurrentRoutePassageService.Verdict.PASSED);
+        assertThat(result.reason()).isEqualTo("EXIT_ARRIVAL_MATCHED");
+    }
+
+    @Test
     void earlierHighwayDoesNotConflictAfterRouteHasReturnedToLocalRoad() {
         AmapPoiCandidate nextEntrance = toll("练市收费站(S47湖杭高速入口)",
                 point(120.420, 30.690));

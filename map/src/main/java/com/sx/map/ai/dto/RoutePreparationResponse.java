@@ -12,12 +12,26 @@ public record RoutePreparationResponse(String status,
                                        EndpointFeedbackView originFeedback,
                                        EndpointFeedbackView destinationFeedback,
                                        Instant expiresAt,
-                                       PlaceChoicesView placeChoices) {
+                                       PlaceChoicesView placeChoices,
+                                       PartialEndpointView partialEndpoint) {
 
     /** 兼容不返回地点选项的既有调用方。 */
     public RoutePreparationResponse(String status, EndpointFeedbackView originFeedback,
                                     EndpointFeedbackView destinationFeedback, Instant expiresAt) {
-        this(status, originFeedback, destinationFeedback, expiresAt, null);
+        this(status, originFeedback, destinationFeedback, expiresAt, null, null);
+    }
+
+    public RoutePreparationResponse(String status, EndpointFeedbackView originFeedback,
+                                    EndpointFeedbackView destinationFeedback, Instant expiresAt,
+                                    PlaceChoicesView placeChoices) {
+        this(status, originFeedback, destinationFeedback, expiresAt, placeChoices, null);
+    }
+
+    /** 单端点已由 map-service 确认；不包含 POI ID、坐标或地址。 */
+    public record PartialEndpointView(long conditionVersion, String followUpRequestNo,
+                                      String knownRole, String missingRole,
+                                      String knownPlaceName, String intent,
+                                      Instant expiresAt) {
     }
 
     public record EndpointFeedbackView(String status, List<CandidateView> candidates) {

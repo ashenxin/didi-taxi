@@ -80,19 +80,19 @@ public class PassengerRoutePoiTools {
     }
 
     /**
-     * 当前路线核查先按乘客原话搜索，不让模型或口语别名表预先决定地点类型。
+     * 按乘客原话搜索具名途经地点，不让模型或口语别名表预先决定地点类型。
      *
-     * 高德返回的 typecode 才是地点类型的权威来源。调用方只保留当前业务支持的
-     * 收费站、服务区和加油站，并在名称不完全一致时让乘客确认具体 POI。
+     * 该入口同时供当前路线核查和指定途经点规划使用。高德返回的 typecode 才是
+     * 地点类型的权威来源；调用方后续只保留本期支持的三类地点。
      */
-    public List<AmapPoiCandidate> searchCurrentRouteCheckCandidates(String keywords, String region) {
-        String normalizedKeywords = requiredText(keywords, "核查地点名称", MAX_KEYWORDS_LENGTH);
+    public List<AmapPoiCandidate> searchNamedWaypointCandidates(String keywords, String region) {
+        String normalizedKeywords = requiredText(keywords, "指定地点名称", MAX_KEYWORDS_LENGTH);
         String normalizedRegion = optionalText(region, "地区", MAX_REGION_LENGTH);
         return poiSearchService.search(normalizedKeywords, normalizedRegion, null);
     }
 
-    /** 将高德结构化 typecode 收敛为本期允许核查的业务类型；未知类型不进入路线核查。 */
-    public BusinessType currentRouteCheckBusinessType(AmapPoiCandidate candidate) {
+    /** 将高德结构化 typecode 收敛为本期支持的途经地点业务类型。 */
+    public BusinessType waypointBusinessType(AmapPoiCandidate candidate) {
         if (candidate == null || !StringUtils.hasText(candidate.getTypeCode())) {
             return null;
         }
@@ -107,6 +107,16 @@ public class PassengerRoutePoiTools {
             return BusinessType.GAS_STATION;
         }
         return null;
+    }
+
+    /** 保留当前路线核查现有调用；实际使用同一套具名地点查询规则。 */
+    public List<AmapPoiCandidate> searchCurrentRouteCheckCandidates(String keywords, String region) {
+        return searchNamedWaypointCandidates(keywords, region);
+    }
+
+    /** 保留当前路线核查现有调用；地点类型仍只信任高德 typecode。 */
+    public BusinessType currentRouteCheckBusinessType(AmapPoiCandidate candidate) {
+        return waypointBusinessType(candidate);
     }
 
     /**

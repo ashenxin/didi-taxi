@@ -2,6 +2,8 @@ package com.sx.passenger.ai;
 
 import com.sx.passenger.ai.dto.AiConversationCreateResponse;
 import com.sx.passenger.ai.dto.AiMessageListResponse;
+import com.sx.passenger.ai.dto.AiConversationListResponse;
+import com.sx.passenger.ai.dto.AiRequestStatusResponse;
 import com.sx.passenger.ai.dto.AiTurnBeginResponse;
 import com.sx.passenger.ai.dto.AiTurnCompleteResponse;
 import com.sx.passenger.ai.dto.AiTurnFailResponse;
@@ -400,6 +402,61 @@ class AiConversationServiceIntegrationTest {
         String conversationNo = service.create(CUSTOMER_ID, "create-1").conversationNo();
 
         assertThatThrownBy(() -> service.listMessages(conversationNo, OTHER_CUSTOMER_ID, null, null))
+                .isInstanceOf(AiConversationNotFoundException.class);
+    }
+
+    @Test
+    void listConversationsReturnsOwnedActiveRowsAndUsesFirstUserMessageAsTitle() {
+        String first = service.create(CUSTOMER_ID, "create-1").conversationNo();
+        AiTurnBeginResponse begin = service.begin(first, CUSTOMER_ID, "turn-1", "从德清到宁波站");
+        service.complete(first, begin.requestNo(), CUSTOMER_ID, "TEXT", "已完成", null);
+        String second = service.create(CUSTOMER_ID, "create-2").conversationNo();
+        service.create(OTHER_CUSTOMER_ID, "foreign");
+        service.deleteConversation(second, CUSTOMER_ID);
+
+        AiConversationListResponse result = service.listConversations(CUSTOMER_ID, 20, null);
+
+        assertThat(result.hasMore()).isFalse();
+        assertThat(result.conversations()).singleElement()
+                .satisfies(item -> {
+                    assertThat(item.conversationNo()).isEqualTo(first);
+                    assertThat(item.title()).isEqualTo("从德清到宁波站");
+                    assertThat(item.status()).isEqualTo("ACTIVE");
+                });
+    }
+
+    @Test
+    void requestStatusDistinguishesProcessingAndCompleted() {
+        String conversationNo = service.create(CUSTOMER_ID, "create-1").conversationNo();
+        AiTurnBeginResponse begin = service.begin(conversationNo, CUSTOMER_ID, "turn-1", "从A到B");
+
+        AiRequestStatusResponse processing = service.requestStatus(
+                conversationNo, begin.requestNo(), CUSTOMER_ID);
+        assertThat(processing.status()).isEqualTo("PROCESSING");
+        assertThat(processing.assistantReply()).isNull();
+
+        service.complete(conversationNo, begin.requestNo(), CUSTOMER_ID, "TEXT", "已完成", null);
+        AiRequestStatusResponse completed = service.requestStatus(
+                conversationNo, begin.requestNo(), CUSTOMER_ID);
+        assertThat(completed.status()).isEqualTo("COMPLETED");
+        assertThat(completed.assistantReply().content()).isEqualTo("已完成");
+    }
+
+    @Test
+    void deleteIsIdempotentAndRejectsLateCompletion() {
+        String conversationNo = service.create(CUSTOMER_ID, "create-1").conversationNo();
+        AiTurnBeginResponse begin = service.begin(conversationNo, CUSTOMER_ID, "turn-1", "从A到B");
+
+        var first = service.deleteConversation(conversationNo, CUSTOMER_ID);
+        var replay = service.deleteConversation(conversationNo, CUSTOMER_ID);
+
+        assertThat(replay.conversationNo()).isEqualTo(first.conversationNo());
+        assertThat(replay.deletedAt()).isEqualTo(first.deletedAt());
+        assertThat(conversationRow(conversationNo).get("STATUS")).isEqualTo("DELETED");
+        assertThat(conversationRow(conversationNo).get("ACTIVE_REQUEST_NO")).isNull();
+        assertThatThrownBy(() -> service.complete(conversationNo, begin.requestNo(), CUSTOMER_ID,
+                "TEXT", "迟到回复", null)).isInstanceOf(AiConversationNotFoundException.class);
+        assertThatThrownBy(() -> service.deleteConversation(conversationNo, OTHER_CUSTOMER_ID))
                 .isInstanceOf(AiConversationNotFoundException.class);
     }
 

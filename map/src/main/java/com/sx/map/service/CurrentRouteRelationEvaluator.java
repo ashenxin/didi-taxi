@@ -82,6 +82,10 @@ public class CurrentRouteRelationEvaluator {
             return Evaluation.conflict(consistency.reason(), consistency.detail());
         }
         if (arrival.status() == WaypointRouteCandidateEvaluator.Status.ACCEPTED) {
+            if ((mode == CurrentRouteCheckMode.USE_EXIT || mode == CurrentRouteCheckMode.ENTER_HIGHWAY)
+                    && consistency.status() == CurrentRouteSemanticConsistencyEvaluator.Status.UNKNOWN) {
+                return Evaluation.ambiguous(consistency.reason(), consistency.detail());
+            }
             return acceptedAction(place, mode, arrival.detail());
         }
         if (arrival.reason() == WaypointRouteCandidateEvaluator.Reason.ROUTE_MISSES_PLACE) {
@@ -104,11 +108,13 @@ public class CurrentRouteRelationEvaluator {
         return switch (mode) {
             case VISIT_PLACE -> Evaluation.accepted("PLACE_ARRIVAL_MATCHED", arrivalDetail);
             case USE_EXIT -> canonicalName.contains("出口")
-                    ? Evaluation.accepted("EXIT_ARRIVAL_MATCHED", "目标出口附近有匹配的收费站到达事件")
+                    ? Evaluation.accepted("EXIT_ARRIVAL_MATCHED",
+                    "目标收费站前后道路状态与从该出口驶出高速一致")
                     : Evaluation.ambiguous("EXIT_ROLE_NOT_PROVEN",
                     "路线有匹配的收费站到达事件，但地图没有标明这是出口");
             case ENTER_HIGHWAY -> canonicalName.contains("入口")
-                    ? Evaluation.accepted("ENTRANCE_ARRIVAL_MATCHED", "目标入口附近有匹配的收费站到达事件")
+                    ? Evaluation.accepted("ENTRANCE_ARRIVAL_MATCHED",
+                    "目标收费站前后道路状态与从该入口驶入高速一致")
                     : Evaluation.ambiguous("ENTRANCE_ROLE_NOT_PROVEN",
                     "路线有匹配的收费站到达事件，但地图没有标明这是入口");
             default -> Evaluation.ambiguous("CHECK_MODE_UNSUPPORTED", "当前核查含义不支持该通行动作");

@@ -39,6 +39,28 @@ class RouteCardAssemblerTest {
         assertThat(card.expiresAt()).isEqualTo(generatedAt.plusSeconds(300));
     }
 
+    @Test
+    void mapsVerifiedViaPlaceToDisplayCard() {
+        Instant generatedAt = Instant.parse("2026-09-18T02:00:00Z");
+        PassengerRouteSnapshot base = snapshot(generatedAt);
+        PassengerRouteSnapshot.Place viaPlace = new PassengerRouteSnapshot.Place(
+                "P-1", "五常收费站", "余杭塘路", "杭州", START);
+        PassengerRouteSnapshot snapshot = new PassengerRouteSnapshot(
+                base.routeRef(), base.customerId(), base.conversationNo(), base.conditionVersion(),
+                base.origin(), base.destination(), base.provider(), base.coordinateSystem(),
+                base.travelMode(), PassengerRouteSnapshot.RouteKind.VIA_PLACE,
+                base.polyline(), base.navigationSteps(), base.distanceMeters(), base.durationSeconds(),
+                base.generatedAt(), base.expiresAt(),
+                new PassengerRouteSnapshot.ViaPlace(viaPlace,
+                        PassengerRouteSnapshot.BusinessType.TOLL_STATION, List.of()),
+                List.of(START), new PassengerRouteSnapshot.PassageVerification(
+                        "PASSED", "TOLL_ARRIVAL_MATCHED"));
+
+        RouteCardDto card = assembler.fromSnapshot(snapshot);
+
+        assertThat(card.via()).isEqualTo(new RouteCardDto.PlaceView("五常收费站"));
+    }
+
     private static PassengerRouteSnapshot snapshot(Instant generatedAt) {
         return new PassengerRouteSnapshot(
                 "9f8b2a44-6c1d-4b5e-9a0f-2c3d4e5f6a7b", 42L, "conversation-test", 1L,

@@ -2,7 +2,10 @@ package com.sx.passengerapi.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationDeleteResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationListResponse;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiMessageListResponse;
+import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiRequestStatusResponse;
 import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.util.ResultUtil;
 import com.sx.passengerapi.common.vo.ResponseVo;
@@ -17,6 +20,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -85,6 +89,37 @@ public class PassengerAiConversationController {
             throw new BizErrorException(400, "分页大小须为1至50");
         }
         return ResultUtil.success(turnService.listMessages(passengerId, conversationNo, limit, beforeSequence));
+    }
+
+    @GetMapping
+    public ResponseVo<AiConversationListResponse> listConversations(
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String beforeConversationNo) {
+        requireLogin(passengerId);
+        if (limit != null && (limit < 1 || limit > 50)) {
+            throw new BizErrorException(400, "分页大小须为1至50");
+        }
+        return ResultUtil.success(turnService.listConversations(
+                passengerId, limit, beforeConversationNo));
+    }
+
+    @GetMapping("/{conversationNo}/requests/{requestNo}")
+    public ResponseVo<AiRequestStatusResponse> requestStatus(
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @PathVariable String conversationNo,
+            @PathVariable String requestNo) {
+        requireLogin(passengerId);
+        return ResultUtil.success(turnService.requestStatus(
+                passengerId, conversationNo, requestNo));
+    }
+
+    @DeleteMapping("/{conversationNo}")
+    public ResponseVo<AiConversationDeleteResponse> deleteConversation(
+            @RequestHeader(value = USER_ID_HEADER, required = false) Long passengerId,
+            @PathVariable String conversationNo) {
+        requireLogin(passengerId);
+        return ResultUtil.success(turnService.deleteConversation(passengerId, conversationNo));
     }
 
     @PostMapping("/{conversationNo}/messages/stream")

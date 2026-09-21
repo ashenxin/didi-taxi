@@ -1,6 +1,7 @@
 package com.sx.map.service;
 
 import com.sx.map.exception.AmapApiException;
+import com.sx.map.exception.AmapRouteNotFoundException;
 import com.sx.map.model.dto.AmapPoiCandidate;
 import com.sx.map.model.dto.PassengerRouteCandidate;
 import com.sx.map.model.dto.Point;
@@ -62,6 +63,7 @@ class WaypointRoutePlanningServiceTest {
             assertThat(candidate.passageMode()).isEqualTo(PassengerRouteCandidate.PASSAGE_MODE_PASS_TOLL_CHANNEL);
             assertThat(candidate.passageVerification()).isEqualTo("TOLL_ARRIVAL_MATCHED");
             assertThat(candidate.route().getDurationSeconds()).isEqualTo(2_900L);
+            assertThat(candidate.navigationSteps()).hasSize(2);
         });
         ArgumentCaptor<RouteRequest> requestCaptor = ArgumentCaptor.forClass(RouteRequest.class);
         verify(drivingRouteService).drivingRoutes(requestCaptor.capture());
@@ -84,7 +86,7 @@ class WaypointRoutePlanningServiceTest {
 
         assertThatThrownBy(() -> service.planCandidates(
                 point(120.020, 30.543), point(120.061, 30.254), List.of(wuchang), "TOLL_STATION"))
-                .isInstanceOf(AmapApiException.class)
+                .isInstanceOf(AmapRouteNotFoundException.class)
                 .hasMessageContaining("没有找到已验证经过指定地点的路线");
         verify(drivingRouteService).drivingRoutes(any());
     }
@@ -241,7 +243,9 @@ class WaypointRoutePlanningServiceTest {
     }
 
     private static AmapDrivingRouteService.DrivingRouteOption option(RouteResponse route) {
-        return new AmapDrivingRouteService.DrivingRouteOption(route, List.of());
+        return new AmapDrivingRouteService.DrivingRouteOption(route, List.of(
+                new AmapDrivingRouteService.NavigationStep(
+                        "沿测试道路行驶", "直行", "", "", "测试道路", route.getPolyline())));
     }
 
     private static RouteResponse route(long distanceMeters, long durationSeconds) {

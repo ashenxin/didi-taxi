@@ -71,4 +71,58 @@
         ORDER BY id
         LIMIT #{limit}
     </select>
+
+    <select id="findActiveByCustomer"
+            resultType="com.sx.passenger.ai.entity.PassengerAiConversation">
+        SELECT c.id,
+               c.conversation_no,
+               c.customer_id,
+               c.create_idempotency_key,
+               c.scene_code,
+               COALESCE(NULLIF(c.title, ''),
+                        (SELECT m.content
+                         FROM passenger_ai_message m
+                         WHERE m.conversation_id = c.id
+                           AND m.role = 'USER'
+                         ORDER BY m.sequence_no ASC
+                         LIMIT 1),
+                        '新对话') AS title,
+               c.status,
+               c.last_message_sequence,
+               c.memory_summary,
+               c.summary_through_sequence,
+               c.row_version,
+               c.active_request_no,
+               c.active_request_started_at,
+               c.last_message_at,
+               c.delete_reason,
+               c.delete_operation_no,
+               c.deleted_at,
+               c.created_at,
+               c.updated_at
+        FROM passenger_ai_conversation c
+        WHERE c.customer_id = #{customerId}
+          AND c.status = 'ACTIVE'
+          AND c.deleted_at IS NULL
+          <if test="beforeLastMessageAt != null and beforeId != null">
+              AND (c.last_message_at &lt; #{beforeLastMessageAt}
+                   OR (c.last_message_at = #{beforeLastMessageAt} AND c.id &lt; #{beforeId}))
+          </if>
+        ORDER BY c.last_message_at DESC, c.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markDeleted">
+        UPDATE passenger_ai_conversation
+        SET status = 'DELETED',
+            active_request_no = NULL,
+            active_request_started_at = NULL,
+            delete_reason = 'USER_DELETE',
+            deleted_at = #{deletedAt},
+            row_version = row_version + 1,
+            updated_at = #{deletedAt}
+        WHERE id = #{id}
+          AND row_version = #{expectedRowVersion}
+          AND deleted_at IS NULL
+    </update>
 </mapper>

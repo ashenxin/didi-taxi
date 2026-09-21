@@ -4,7 +4,10 @@ import com.sx.passenger.ai.AiIdentifierGenerator;
 import com.sx.passenger.ai.dao.PassengerAiConversationMapper;
 import com.sx.passenger.ai.dao.PassengerAiMessageMapper;
 import com.sx.passenger.ai.dto.AiConversationCreateResponse;
+import com.sx.passenger.ai.dto.AiConversationDeleteResponse;
+import com.sx.passenger.ai.dto.AiConversationListResponse;
 import com.sx.passenger.ai.dto.AiMessageListResponse;
+import com.sx.passenger.ai.dto.AiRequestStatusResponse;
 import com.sx.passenger.ai.dto.AiTurnBeginResponse;
 import com.sx.passenger.ai.dto.AiTurnCompleteResponse;
 import com.sx.passenger.ai.dto.AiTurnFailResponse;
@@ -57,6 +60,7 @@ public class AiConversationService {
     /** 历史分页默认与上限（文档约定分页大小上限 50）。 */
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 50;
+    private static final String REQUEST_PROCESSING = "PROCESSING";
 
     private final PassengerAiConversationMapper conversations;
     private final PassengerAiMessageMapper messages;
@@ -256,6 +260,7 @@ public class AiConversationService {
     public AiTurnCompleteResponse complete(String conversationNo, String requestNo, long customerId,
                                            String messageType, String content, String payloadJson) {
         PassengerAiConversation snapshot = requireConversation(conversationNo, customerId);
+        requireAvailable(snapshot);
         PassengerAiMessage replayed = messages.findAssistantByRequestNo(snapshot.getId(), requestNo);
         if (replayed != null) {
             return completeView(replayed);
@@ -311,6 +316,7 @@ public class AiConversationService {
     public AiTurnFailResponse fail(String conversationNo, String requestNo, long customerId,
                                    String failureCode, String failureMessage) {
         PassengerAiConversation snapshot = requireConversation(conversationNo, customerId);
+        requireAvailable(snapshot);
         PassengerAiMessage replayed = messages.findAssistantByRequestNo(snapshot.getId(), requestNo);
         if (replayed != null) {
             return failView(replayed);
@@ -391,6 +397,75 @@ public class AiConversationService {
                         message.getSequenceNo(), message.getStatus(), message.getCreatedAt()))
                 .toList();
         return new AiMessageListResponse(views, hasMore);
+    }
+
+    /** 列出当前乘客未删除的会话；游标只能引用该乘客仍可见的会话。 */
+    public AiConversationListResponse listConversations(long customerId, Integer limit,
+                                                        String beforeConversationNo) {
+        int pageSize = limit == null ? DEFAULT_PAGE_SIZE : Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
+        PassengerAiConversation cursor = null;
+        if (beforeConversationNo != null && !beforeConversationNo.isBlank()) {
+            cursor = requireConversation(beforeConversationNo.strip(), customerId);
+            requireAvailable(cursor);
+        }
+        List<PassengerAiConversation> page = conversations.findActiveByCustomer(
+                customerId,
+                cursor == null ? null : cursor.getLastMessageAt(),
+                cursor == null ? null : cursor.getId(),
+                pageSize + 1);
+        boolean hasMore = page.size() > pageSize;
+        if (hasMore) {
+            page = page.subList(0, pageSize);
+        }
+        List<AiConversationListResponse.ConversationView> views = page.stream()
+                .map(conversation -> new AiConversationListResponse.ConversationView(
+                        conversation.getConversationNo(), conversation.getTitle(),
+                        conversation.getStatus(), conversation.getLastMessageAt(),
+                        conversation.getCreatedAt()))
+                .toList();
+        String nextCursor = hasMore && !page.isEmpty()
+                ? page.getLast().getConversationNo() : null;
+        return new AiConversationListResponse(views, hasMore, nextCursor);
+    }
+
+    /** 查询一轮是否仍在处理或已经落库为最终成功／失败。 */
+    public AiRequestStatusResponse requestStatus(String conversationNo, String requestNo,
+                                                 long customerId) {
+        PassengerAiConversation conversation = requireConversation(conversationNo, customerId);
+        requireAvailable(conversation);
+        PassengerAiMessage userMessage = messages.findUserByRequestNo(conversation.getId(), requestNo);
+        if (userMessage == null) {
+            throw new AiConversationNotFoundException();
+        }
+        PassengerAiMessage assistant = messages.findAssistantByRequestNo(
+                conversation.getId(), requestNo);
+        String status = assistant == null ? REQUEST_PROCESSING : assistant.getStatus();
+        return new AiRequestStatusResponse(requestNo, userMessage.getSequenceNo(),
+                userMessage.getClientMessageNo(), status, assistantView(assistant));
+    }
+
+    /** 逻辑删除会话并撤销活动请求；删除之后的 complete/fail 会按会话不存在拒绝。 */
+    public AiConversationDeleteResponse deleteConversation(String conversationNo, long customerId) {
+        return databaseTransaction.execute(status -> {
+            PassengerAiConversation conversation = requireConversationForUpdate(conversationNo, customerId);
+            if (conversation.getDeletedAt() != null || !STATUS_ACTIVE.equals(conversation.getStatus())) {
+                if (conversation.getDeletedAt() != null) {
+                    return new AiConversationDeleteResponse(conversationNo, conversation.getDeletedAt());
+                }
+                throw new AiConversationNotFoundException();
+            }
+            LocalDateTime deletedAt = PassengerPersistenceTime.now();
+            int changed = conversations.markDeleted(
+                    conversation.getId(), conversation.getRowVersion(), deletedAt);
+            if (changed != 1) {
+                throw new AiConversationConflictException(
+                        AiConversationConflictException.AI_REQUEST_IN_PROGRESS,
+                        "会话状态已变化，请重试删除");
+            }
+            // DATETIME(3) 会截断更高精度；返回数据库中的最终值，保证首次删除与幂等重放完全一致。
+            PassengerAiConversation deleted = requireConversationForUpdate(conversationNo, customerId);
+            return new AiConversationDeleteResponse(conversationNo, deleted.getDeletedAt());
+        });
     }
 
     private AiTurnBeginResponse replayResponse(PassengerAiConversation snapshot, PassengerAiMessage replayed) {
