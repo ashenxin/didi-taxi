@@ -363,17 +363,19 @@ public class AdminOrderService {
 
     /**
      * 操作人类型转中文展示文案。
+     *
+     * <p>与 order_event.operator_type 的权威口径一致：0 系统、1 乘客、2 司机；
+     * 未定义值统一展示为“未知”，不把缺少依据的编号猜测为客服或运营。</p>
      */
-    private String operatorTypeText(Integer operatorType) {
+    static String operatorTypeText(Integer operatorType) {
         if (operatorType == null) {
-            return "系统";
+            return "未知";
         }
         return switch (operatorType) {
             case 0 -> "系统";
             case 1 -> "乘客";
             case 2 -> "司机";
-            case 3 -> "客服";
-            default -> "其他";
+            default -> "未知";
         };
     }
 }

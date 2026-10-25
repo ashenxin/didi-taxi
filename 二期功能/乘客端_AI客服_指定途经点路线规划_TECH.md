@@ -96,7 +96,7 @@ passenger-api 先从本会话最新一张已持久化的路线卡片读取 `rout
 
 “从 A 到 B 有没有经过 X 的路线”是存在性查询，只回答本次查询条件下能否给出经过 X 的已验证路线，不展示路线卡，也不把新算路线写为当前路线。模型提取 `intent=ROUTE_EXISTS`、`checkPlaceName` 和可选 `checkPlaceRegion`，不提取核查含义；地点缺失时先追问地点，不调用地图。
 
-两端与地点都确定后，passenger-api 复用途经点算路能力：本会话有可核查路线时按该 `routeRef` 调用，没有路线时以 `routeRef=null`、本轮条件版本调用 `/prepare` 与 `/via`，由地图按两端真实算路并验证是否经过该地点。地图状态只映射为本次查询范围内的结论：`ROUTE_READY` → FOUND，`ROUTE_NOT_FOUND` → NOT_FOUND_IN_QUERY，`PLACE_NOT_FOUND` 与 `PLACE_UNVERIFIABLE` → UNVERIFIABLE，`NEEDS_PLACE_CHOICE` → 带 `flow=ROUTE_EXISTS` 的地点选项并继续同一查询，`CONTEXT_UNAVAILABLE` → 要求重新提供两端。结论不得把本次未找到说成“所有道路都没有经过路线”。
+两端与地点都确定后，passenger-api 复用途经点算路能力：本会话有可核查路线时按该 `routeRef` 调用，没有路线时以 `routeRef=null`、本轮条件版本调用 `/prepare` 与 `/via`，由地图按两端真实算路并验证是否经过该地点。地图状态只映射为本次查询范围内的结论：`ROUTE_READY` → FOUND，`ROUTE_NOT_FOUND` → NOT_FOUND_IN_QUERY，`PLACE_NOT_FOUND` 与 `PLACE_UNVERIFIABLE` → UNVERIFIABLE，`NEEDS_PLACE_CHOICE` → 带 `flow=ROUTE_EXISTS` 的地点选项并继续同一查询，`CONTEXT_UNAVAILABLE` → 保留同一查询的地点上下文并要求重新提供两端。结论不得把本次未找到说成“所有道路都没有经过路线”。
 
 终态一律发送 `answer.completed`，payload 顶层为 `routeExists`（`place` 展示摘要、`conclusion`、可选 `detail`），不向公开载荷暴露被核查路线的 `routeRef`。追问、地点选项等未终态消息沿用核查续接上下文（`intent=ROUTE_EXISTS`）持久化，乘客补齐端点或选择地点后由服务端恢复同一查询，不重新猜测地点，也不因该查询改写本会话当前路线。
 
@@ -112,13 +112,13 @@ passenger-api 先从本会话最新一张已持久化的路线卡片读取 `rout
 
 ## 7. 对话消息、临时上下文与 SSE
 
-公开文字轮次采用两段短事务：passenger-service 的 begin 在会话行锁内核对幂等键和活动请求，再保存乘客消息、分配顺序号并占用本会话活动请求；同键并发只允许一个请求开始执行。活动请求超过接管阈值时，begin 先为旧请求落库失败客服消息并释放占用，同键重试重放该失败，不再重复调用模型和地图；不同键可在同一事务内开启新轮次。旧请求迟到的 complete 不能覆盖失败消息。模型和地图调用在事务外完成；complete 或 fail 获取会话行锁后重查同一请求的客服消息，命中时重放已有结果，否则保存客服回复、追问、卡片展示摘要或失败说明，并释放活动请求。乘客补充或修正起终点、选择地点或核查含义也各自作为本会话消息持久化；路线方案选择须等目标能力实现。结果消息保存成功后才发送最终 SSE 内容事件；最新路线卡片一经持久化，即成为后续“这条路线”的来源。断线后若已知 requestNo，H5 先读取请求状态，再读取历史合并最终回复；若未收到 turn.started，则用历史乘客消息的 clientMessageNo 找回 requestNo。完整折线与导航步骤不写入 passenger-service。
+公开文字轮次采用两段短事务：passenger-service 的 begin 在会话行锁内核对幂等键和活动请求，再保存乘客消息、分配顺序号并占用本会话活动请求；同键并发只允许一个请求开始执行。活动请求超过接管阈值时，begin 先为旧请求落库失败客服消息并释放占用，同键重试重放该失败，不再重复调用模型和地图；不同键可在同一事务内开启新轮次。旧请求迟到的 complete 不能覆盖失败消息。模型和地图调用在事务外完成；complete 或 fail 获取会话行锁后重查同一请求的客服消息，命中时重放已有结果，否则保存客服回复、追问、卡片展示摘要或失败说明，并释放活动请求。乘客补充或修正起终点、选择地点或核查含义也各自作为本会话消息持久化；路线方案选择须等目标能力实现。结果消息保存成功后才发送最终 SSE 内容事件；最新路线卡片一经持久化，即成为后续“这条路线”的来源。断线后若已知 requestNo，H5 先读取请求状态，再读取历史合并最终回复；若未收到 turn.started，则用历史乘客消息的 clientMessageNo 找回 requestNo。页面刷新后，H5 检查最新历史页末尾是否为已落库但无客服回复的乘客消息；若是，则按 requestNo 定时读取状态并合并最终回复，期间禁止新发送，不重新提交原请求；切换会话或离开页面时取消轮询。完整折线与导航步骤不写入 passenger-service。
 
 会话列表只查询当前乘客 `ACTIVE` 且未删除的记录，按 `last_message_at,id` 倒序并以 `beforeConversationNo` 解析服务端游标；标题回落到首条乘客消息，不复制地图事实。请求状态以会话归属和 requestNo 查询已保存乘客消息及可选客服终态，不触发重算。删除在会话行锁内执行乐观版本更新，设置 `DELETED`、删除原因和时间并清空活动请求；complete／fail 在任何幂等重放前先检查会话可用性，防止删除后的迟到结果写回。
 
 map-service 以可信乘客 ID 和会话编号短时缓存已核对的起终点、单端点、待选择地点与原始意图、地点选项及核查含义选项；路线方案选项尚未接入。单端点续接用上一条服务端追问 requestNo 和原条件版本读取，补齐时以本轮 requestVersion 建立新条件版本，从而使旧路线和旧选项失效；直接地点与重名后选择地点都遵守同一规则。缓存失效或选项过期时，不靠聊天摘要恢复旧坐标或旧路线；客服要求乘客重新说明地点。
 
-当前最终内容事件为 answer.completed、route.card、place.choices、route-check.choices，一轮最多一类；失败发送 turn.failed；route.options 是未实现的目标事件。追问与未终态的选项消息（缺少端点的 answer.completed、place.choices、route-check.choices）在持久化 payload 顶层另存内部续接上下文 `checkContext`（`intent` 为 CURRENT_ROUTE_CHECK 或 ROUTE_EXISTS、地点片段与可选区域、受控 `checkMode`、被核查路线 `routeRef`、`routeShown`、`previousRouteExpired`），只供服务端恢复同一次核查；实时 SSE 事件、历史消息与请求状态响应一律剥离该字段，剥离后没有其余公开字段时按无载荷返回，已给出终态结论的回复不写该字段。路线卡消息的 payload 以 `routeCard` 摘要为主，核查同轮下发时并列携带 `routeCheck`（含 `routeRef`、`status`、`verdict` 和目标地点展示摘要）。`route-check.choices` 持久化为 `ROUTE_CHECK_CHOICES` 消息，payload 只包含 `taskNo`、目标地点展示摘要、允许的含义选项、失效时间和请求版本，不包含 `routeRef`、坐标或导航步骤。前端点击后显示“我想确认：从这里驶出高速”等自然语言乘客消息，不显示 `RCT-...` 或枚举值。相同幂等键重放已落库的失败轮次时，按原失败码和乘客可读说明发送 turn.failed，不发送成功内容事件或 turn.completed，也不重新调用模型和地图。路线卡以 payload.routeCard 保存无折线摘要；兼容旧版平铺 payload。重放时 BFF 仅从已归属校验的卡片消息取得 routeRef，调用 map-service 内部 replay 接口，后者按当前已确认条件、乘客、会话和快照有效期复核后返回完整路线；缓存或当前条件失效时 BFF 以 payload.routeCard 返回落库摘要并标记 expired，不从文字重建地图事实。place.choices 与 route-check.choices 的 taskNo、选项成员和有效期由 map-service 的短时缓存管理，不要求 passenger-service 持久化路线任务；未来 route.options 也应遵守同一边界。乘客选择时先由 map-service 核对归属、条件版本和有效期；passenger-service 仅按现有会话幂等和消息顺序规则追加选择及客服结果。地点选择请求同时携带已展示的名称和城市供会话正文回显，但业务选择只使用 `placeChoiceId`；消息中不保存或展示内部选项编号。旧选项失效则重新提供两端并重新查询。单会话活动请求、消息幂等和迟到结果隔离仍须保留。
+当前最终内容事件为 answer.completed、route.card、place.choices、route-check.choices，一轮最多一类；失败发送 turn.failed；route.options 是未实现的目标事件。追问与未终态的选项消息（缺少端点的 answer.completed、place.choices、route-check.choices）在持久化 payload 顶层另存内部续接上下文 `checkContext`（`intent` 为 CURRENT_ROUTE_CHECK 或 ROUTE_EXISTS、地点片段与可选区域、受控 `checkMode`、被核查路线 `routeRef`、`routeShown`、`previousRouteExpired`），只供服务端恢复同一次核查；实时 SSE 事件、历史消息与请求状态响应一律剥离该字段，剥离后没有其余公开字段时按无载荷返回，已给出终态结论的回复不写该字段。路线卡消息的 payload 以 `routeCard` 摘要为主，核查同轮下发时并列携带 `routeCheck`（含 `routeRef`、`status`、`verdict` 和目标地点展示摘要）。`route-check.choices` 持久化为 `ROUTE_CHECK_CHOICES` 消息，payload 只包含 `taskNo`、目标地点展示摘要、允许的含义选项、失效时间和请求版本，不包含 `routeRef`、坐标或导航步骤。前端点击后显示“我想确认：从这里驶出高速”等自然语言乘客消息，不显示 `RCT-...` 或枚举值。相同幂等键重放已落库的失败轮次时，按原失败码和乘客可读说明发送 turn.failed，不发送成功内容事件或 turn.completed，也不重新调用模型和地图。路线卡以 payload.routeCard 保存无折线摘要；兼容旧版平铺 payload。重放时 BFF 仅从已归属校验的卡片消息取得 routeRef，调用 map-service 内部 replay 接口，后者按当前已确认条件、乘客、会话和快照有效期复核后返回完整路线；缓存或当前条件失效时 BFF 以 payload.routeCard 返回落库摘要并标记 expired，不从文字重建地图事实。place.choices 与 route-check.choices 的 taskNo、选项成员和有效期由 map-service 的短时缓存管理，不要求 passenger-service 持久化路线任务；未来 route.options 也应遵守同一边界。地点选择时 passenger-api 先从本会话已持久化的 `place.choices` 摘要按任务、版本和 `placeChoiceId` 取回名称与城市，生成乘客消息正文；客户端名称和城市仅保留兼容，不作为正文依据。摘要不匹配时在 begin 前返回 `AI_PLACE_CHOICE_INVALID`；map-service 仍核对可信地点、条件版本和有效期。passenger-service 按既有幂等和消息顺序规则保存选择及回复，消息不展示内部编号。旧选项失效则重新提供两端并重新查询。单会话活动请求、消息幂等和迟到结果隔离仍须保留。
 
 ## 8. 既有 SQL 与最简落库范围
 
@@ -151,11 +151,11 @@ map:
 
 | 时长 | 当前值与代码入口 | 生效方式 |
 | --- | --- | --- |
-| 会话活动请求接管 | `passenger.ai.turn-stale-seconds` 默认 60 秒，`AiConversationService`、`AiConversationStaleRequestReconciler` | 从 `activeRequestStartedAt` 计算；后续 `begin` 仍会在会话行锁内接管，启动及每 30 秒的后台对账也会逐行加锁复核并写入旧轮次失败。同键重试只重放旧失败，迟到 complete 不得覆盖。 |
+| 会话活动请求接管 | `passenger.ai.turn-stale-seconds` 默认 120 秒，有效下限也是 120 秒，`AiConversationService`、`AiConversationStaleRequestReconciler` | 从 `activeRequestStartedAt` 计算；旧配置小于 120 秒时自动提升并记录警告，避免在 90 秒 SSE 窗口内将有效轮次判为失联。后续 `begin` 仍会在会话行锁内接管，启动及每 30 秒的后台对账也会逐行加锁复核并写入旧轮次失败。同键重试只重放旧失败，迟到 complete 不得覆盖。 |
 | 地图短时上下文 | 最多 5 分钟，当前已装配 `PassengerRouteConditionsCache`、`PassengerRouteSnapshotCache`、`PassengerRoutePlaceChoiceCache`、`PassengerRoutePartialEndpointCache`、`PassengerCurrentRouteClarificationCache`、`PassengerDefaultRouteService` 及 `PassengerViaRouteService` | 各记录从自身生成时间计算失效时间；Redis TTL 和读取时的失效校验共同生效，读取不续期。路线方案缓存仍未装配。 |
-| SSE 连接 | `SSE_TIMEOUT_MILLIS` 为 90,000 毫秒，15 秒发送一次 ping，`PassengerAiConversationController` | SSE 时限覆盖 60 秒失联判定并留出传输余量；超时取消对应 worker，客户端断线只停止心跳、不取消已开始的业务轮次，最终结果仍可通过历史消息恢复。 |
+| SSE 连接 | `SSE_TIMEOUT_MILLIS` 为 90,000 毫秒，15 秒发送一次 ping，`PassengerAiConversationController` | 失联阈值比 SSE 时限多至少 30 秒，留出取消和跨服务落库余量；SSE 超时取消对应 worker，客户端断线只停止心跳、不取消已开始的业务轮次，最终结果仍可通过历史消息恢复。 |
 
-调整单轮执行时间时，应同时核对活动请求接管阈值、90 秒 SSE 连接时限和下游模型／地图调用预算，避免正常运行的旧轮次被新请求接管或在完成前断流。调整地图有效期时，应同时修改生成失效时间、缓存写入上限、读取校验及依赖记录的有效期约束；5 分钟从各记录生成时分别起算，不随 SSE 断开或会话继续而延长。旧的 `WaypointRoutePlanningService` 候选缓存也独立使用 5 分钟，改动该能力时需一并核对。
+失联阈值是故障恢复宽限期，不等于 PRD 的 60 秒单轮执行上限；当前仍缺少严格的端到端 60 秒执行截止，应另行实现与验收。调整单轮执行时间时，应同时核对活动请求接管阈值、90 秒 SSE 连接时限和下游模型／地图调用预算，避免正常运行的旧轮次被新请求接管或在完成前断流。调整地图有效期时，应同时修改生成失效时间、缓存写入上限、读取校验及依赖记录的有效期约束；5 分钟从各记录生成时分别起算，不随 SSE 断开或会话继续而延长。旧的 `WaypointRoutePlanningService` 候选缓存也独立使用 5 分钟，改动该能力时需一并核对。
 
 ## 10. 后续讨论顺序
 

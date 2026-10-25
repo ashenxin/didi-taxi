@@ -5,7 +5,7 @@
 -- 状态码与 TripOrderWriteService 一致：0创建 1已分配 2已接单 3到达 4行程中 5完成 6取消 7待司机确认
 -- 事件类型与实现一致：ORDER_CREATED / ORDER_ASSIGNED / ORDER_ACCEPTED / ORDER_DRIVER_ARRIVED /
 --   ORDER_TRIP_STARTED / ORDER_FINISHED / ORDER_CANCELLED
--- operator_type：0系统 1乘客 2司机（与代码常量一致；非表注释中的 3 系统）
+-- operator_type：0系统 1乘客 2司机（与代码常量和 order_schema.sql 表注释一致）
 -- =============================================================================
 
 USE `order`;

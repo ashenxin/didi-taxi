@@ -39,7 +39,10 @@ public class CapacityJobHandlers {
 
     /**
      * offer 超时打回后的改派 / 下一轮确认窗口。
+     *
+     * @deprecated 仅保留处理历史 {@code ASSIGNED} 待改派数据；正常派单不再产生该状态组合。
      */
+    @Deprecated
     @XxlJob("capacityOfferRescheduleScan")
     public void offerRescheduleScan() {
         final long startMs = System.currentTimeMillis();

@@ -78,7 +78,7 @@
 | JobHandler（capacity-executor） | 建议周期 |
 |-----------------------------------|----------|
 | `capacityLateDispatchScan` | **15s** |
-| `capacityOfferRescheduleScan` | **5s**（历史 `ASSIGNED` 待改派兜底） |
+| `capacityOfferRescheduleScan` | 仅存量清理时验证（已 `@Deprecated`，正常链路不产生输入） |
 | `capacityDriverPresenceCleanup` | **30s**（司机 Presence 过期清理） |
 
 更完整的配置键说明见 `第一期MVP_乘客派单司机闭环_TECH.md` **§6**。

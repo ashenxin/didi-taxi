@@ -281,7 +281,7 @@ mvn verify
 
 - `DispatchRequestedConsumerTest`：正常派单、重复事件短路、Top3 首候选冲突后换候选、无司机结论与 ack。
 - `ProcessedEventServiceTest`：H2 真实唯一索引下 `(consumer_group,event_id)` 去重，以及不同 consumer group 的隔离。
-- `OfferRescheduleServiceTest`：同司机续开确认窗、跨司机改派、改派失败不移动 Redis 待确认索引。
+- `OfferRescheduleServiceTest`：同司机续开确认窗、跨司机改派、改派失败不移动 Redis 待确认索引。该服务与 `capacityOfferRescheduleScan` 已标记 `@Deprecated`，仅覆盖历史 `ASSIGNED` 残留数据，不代表正常派单仍依赖该链路。
 
 端到端验收还应保存：订单三张关键表快照、Redis GEO/Presence/隔离键、Kafka offset、XXL 执行日志和同一 orderNo 的跨服务日志。
 

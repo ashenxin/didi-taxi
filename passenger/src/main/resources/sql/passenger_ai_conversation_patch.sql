@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS `passenger_ai_conversation` (
     `active_request_no` VARCHAR(64) NULL
         COMMENT '当前正在执行的Agent请求编号；请求完成、失败或超时恢复后清空',
     `active_request_started_at` DATETIME(3) NULL
-        COMMENT '当前Agent请求开始时间，用于判断超过60秒的失联请求',
+        COMMENT '当前Agent请求开始时间，用于按配置阈值判断失联请求',
     `last_message_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
         COMMENT '最近一条消息时间，用于会话列表排序',
     `delete_reason` VARCHAR(32) NULL

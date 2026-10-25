@@ -63,6 +63,10 @@ public class TripOrderWriteService {
     private static final int STATUS_CANCELLED = 6;
     /** 待司机在 offer 窗口内确认（派单确认） */
     private static final int STATUS_PENDING_DRIVER_CONFIRM = 7;
+    /**
+     * order_event.operator_type 权威口径：0 系统、1 乘客、2 司机。
+     * 新增取值时必须同步 order_schema.sql 注释、后台展示和存量库迁移脚本。
+     */
     private static final int OPERATOR_PASSENGER = 1;
     private static final int OPERATOR_DRIVER = 2;
     private static final int OPERATOR_SYSTEM = 0;
@@ -646,7 +650,10 @@ public class TripOrderWriteService {
 
     /**
      * 改派：{@code ASSIGNED} 且当前无进行中的确认窗口时，更换司机/车辆；重置 {@code offer_round}，保留 {@code last_offer_at} 以便调度列表仍能识别待推进订单。
+     *
+     * @deprecated 仅属于旧的 {@code ASSIGNED} 待改派兜底链路；正常派单使用 assign + openDriverOffer。
      */
+    @Deprecated
     @Transactional(propagation = Propagation.REQUIRED)
     public void reassign(String orderNo, AssignOrderBody body) {
         if (orderNo == null || orderNo.isBlank()) {
@@ -959,7 +966,10 @@ public class TripOrderWriteService {
 
     /**
      * 历史兼容待调度队列：{@code ASSIGNED}、无进行中的确认窗口、曾发起过 offer，按 {@code updated_at} 升序。
+     *
+     * @deprecated 仅供已废弃的 {@code OfferRescheduleService} 处理历史残留数据；正常状态机不再产生该状态组合。
      */
+    @Deprecated
     public List<AssignedAwaitingRescheduleDto> listAssignedAwaitingReschedule(int limit) {
         int lim = (limit <= 0 || limit > 200) ? 50 : limit;
         List<TripOrder> list = tripOrderEntityMapper.selectList(Wrappers.<TripOrder>lambdaQuery()

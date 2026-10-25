@@ -1,5 +1,6 @@
 package com.sx.adminapi.model.order;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.sx.adminapi.common.jackson.FlexibleLocalDateTimeDeserializer;
@@ -22,6 +23,8 @@ public class AdminOrderEventVO {
     private String operatorTypeText;
     private String operatorId;
     private String reasonDesc;
+    /** 订单事件原始扩展 JSON；order-service 的字段名为 eventPayload。 */
+    @JsonAlias("eventPayload")
     private String extJson;
     @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     @JsonSerialize(using = LocalDateTimeDisplaySerializer.class)

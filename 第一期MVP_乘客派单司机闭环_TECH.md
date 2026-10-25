@@ -247,7 +247,7 @@ PRD 新增口径：乘客/司机退出登录，在司机到达前视为“取消
 | `orderCreatedDispatchTimeoutScan` | **30s** | 同 `order.dispatch.timeout-scan-interval-ms` |
 | `orderOutboxPublish` | **2～5s**（建议 **3s**） | Outbox 投递；无同名 Spring 定时 |
 | `capacityLateDispatchScan` | **15s** | 同 `late-match-scan-interval-ms` |
-| `capacityOfferRescheduleScan` | **5s** | 同 `offer-reschedule.scan-interval-ms`；历史 `ASSIGNED` 待改派兜底 |
+| `capacityOfferRescheduleScan` | 仅存量清理时按需启用 | 已标记 `@Deprecated`；仅处理历史残留 `ASSIGNED`，正常状态机不再产生输入 |
 | `capacityDriverPresenceCleanup` | **30s** | 清理超过 `driver-heartbeat-timeout-seconds` 未续心跳的司机，移除 Presence/GEO 并落库下线 |
 
 ---

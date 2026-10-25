@@ -706,9 +706,14 @@
 | eventType | string | 是 | 事件类型 |
 | fromStatus | number\|null | 否 | 来源状态 |
 | toStatus | number\|null | 否 | 目标状态 |
+| operatorType | number | 是 | 操作方：0系统 1乘客 2司机 |
+| operatorId | number\|null | 否 | 操作人ID |
 | reasonCode | string\|null | 否 | 原因码 |
 | reasonDesc | string\|null | 否 | 原因描述 |
+| eventPayload | string\|null | 否 | 原始扩展 JSON |
 | occurredAt | string | 是 | 发生时间 |
+
+> `admin-api` 后台详情将 `eventPayload` 映射为对外字段 `extJson`；`operator_type` 未定义值在后台展示为“未知”。
 
 **响应示例（字段节选）**
 

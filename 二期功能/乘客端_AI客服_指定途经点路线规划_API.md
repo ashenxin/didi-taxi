@@ -58,7 +58,7 @@ routeRef 是地图服务生成的随机、不透明路线快照引用，可随�
 
 当前路线核查结果包含已展示卡片的 routeRef、地点摘要、`checkMode` 和 verdict。`checkMode` 只允许 `PASS_NEARBY`、`USE_EXIT`、`ENTER_HIGHWAY`、`VISIT_PLACE`、`UNSPECIFIED`；verdict 只允许 PASSED、NOT_PASSED、UNVERIFIABLE、CONFLICT。PASSED 和 NOT_PASSED 均针对这条具体路线及已确认含义；地图证据或地点身份不足时必须使用 UNVERIFIABLE，不把另一条可达路线当作当前路线。CONFLICT 表示已确认动作与地图地点角色或目标附近的有序路线状态矛盾，响应同时返回稳定 `reason` 和可读 `detail`；当前原因包括 `TARGET_ROLE_CONFLICT`、`ALREADY_ON_HIGHWAY_BEFORE_TARGET`。
 
-给定起终点的“有没有经过 XX 的路线”使用 FOUND、NOT_FOUND_IN_QUERY、UNVERIFIABLE，避免把本次未找到说成所有道路都不存在。该查询已实现为只发送 `answer.completed`：payload 顶层为 `routeExists`，包含地点展示摘要 `place`（`name`，可选 `city`）、`conclusion` 和可选 `detail`；本轮不返回 route.card，也不含 routeRef、折线、坐标或导航步骤。两端或地点未定时先追问，地点有歧义时先返回 place.choices，乘客选择完成后继续本次查询。
+给定起终点的“有没有经过 XX 的路线”使用 FOUND、NOT_FOUND_IN_QUERY、UNVERIFIABLE，避免把本次未找到说成所有道路都不存在。该查询已实现为只发送 `answer.completed`：payload 顶层为 `routeExists`，包含地点展示摘要 `place`（`name`，可选 `city`）、`conclusion` 和可选 `detail`；本轮不返回 route.card，也不含 routeRef、折线、坐标或导航步骤。本轮未提供两端时可沿用本会话最新有效路线的可信起终点；没有可用路线、只提供一端或地点未定时先追问，地点有歧义时先返回 place.choices，乘客选择完成后继续本次查询。
 
 追问与选项类客服消息（缺少端点的 answer.completed、place.choices、route-check.choices）的服务端持久化 payload 顶层另存内部续接上下文 `checkContext`，包含 `intent`（当前路线核查为 CURRENT_ROUTE_CHECK，存在性查询为 ROUTE_EXISTS）、地点片段与可选区域、受控 `checkMode`、被核查路线的 `routeRef`、`routeShown` 和 `previousRouteExpired`。它只供服务端在后续轮次恢复同一次核查，不属于客户端契约：实时 SSE 事件、历史消息与请求状态响应一律剥离该字段，剥离后没有其余公开字段时按无载荷返回。已给出终态结论（含存在性结论与选择完成后的结论）的回复不写该字段。
 
@@ -157,7 +157,7 @@ POST /app/api/v1/ai/conversations/{conversationNo}/route-tasks/{taskNo}/place-ch
 {"expectedRequestVersion": 5, "placeChoiceId": "PC-example", "choiceName": "三墩收费站", "choiceCity": "杭州"}
 ~~~
 
-`choiceName` 和可选的 `choiceCity` 必须来自上一条 `place.choices` 的展示摘要，只用于把乘客选择保存成可读的聊天正文；地图业务决策只使用 `placeChoiceId`。`taskNo`、地点选项及成员关系由 map-service 短时缓存，不要求 passenger-service 保存路线任务。passenger-api 先核对乘客和会话归属，map-service 再核对条件版本、有效期及选项成员关系，从可信地点快照继续原先被暂停的意图。乘客选择与客服结果都作为消息经 passenger-service 持久化，正文不得展示 `PC-...` 内部编号。若原意图是指定地点规划，验证成功返回 route.card；若原意图是核查当前路线，已有有效路线时返回 answer.completed，没有有效路线但两端仍有效时先生成并展示默认路线，再以带 routeCheck 的 route.card 返回；若原意图是查询有无经过路线，则返回 answer.completed。此动作可能调用地图，沿用消息 begin、外部调用、complete 两段短事务；选项或上下文过期时要求重新提供并定位两端。客户端不得提交 POI ID、坐标或入口出口。
+`choiceName` 仍是请求校验要求的非空兼容字段，`choiceCity` 可选；两者不作为聊天正文或地点身份的可信来源。passenger-api 在 begin 前按会话归属，从已持久化的 `place.choices` 摘要中用 `taskNo`、`expectedRequestVersion` 和 `placeChoiceId` 取回名称及城市，生成可读的乘客正文；查无对应摘要时发送 `AI_PLACE_CHOICE_INVALID`，不创建乘客轮次。`taskNo`、地点选项及成员关系仍由 map-service 短时缓存，不要求 passenger-service 保存路线任务。map-service 再核对条件版本、有效期及选项成员关系，从可信地点快照继续原先被暂停的意图。乘客选择与客服结果经 passenger-service 持久化，正文不得展示 `PC-...` 内部编号；前端以 `turn.started` 或历史消息中的服务端正文覆盖本地乐观展示。若原意图是指定地点规划，验证成功返回 route.card；若原意图是核查当前路线，已有有效路线时返回 answer.completed，没有有效路线但两端仍有效时先生成并展示默认路线，再以带 routeCheck 的 route.card 返回；若原意图是查询有无经过路线，则返回 answer.completed。此动作可能调用地图，沿用消息 begin、外部调用、complete 两段短事务；选项或上下文过期时要求重新提供并定位两端。客户端不得提交 POI ID、坐标或入口出口。
 
 当前默认路线起终点流程中，两端都有歧义时先选择起点，再选择终点；两端身份确定后立即生成路线卡，不再复述完整起终点或等待文字确认。已选地点从 map-service 的选项快照恢复，不再次让模型猜测同名地点。
 
@@ -189,7 +189,7 @@ POST /app/api/v1/ai/conversations/{conversationNo}/route-tasks/{taskNo}/route-op
 
 ## 5. SSE 事件
 
-所有流式接口采用 text/event-stream;charset=UTF-8；SSE 连接上限为 90 秒，每 15 秒发送一次 ping。受理后先发送 turn.started，可发送 turn.status 和必要的 answer.delta，最终在结果成功持久化后发送一个完整内容事件，随后 turn.completed 并关闭流。模型未拿到地图验证结果前，answer.delta 不得提前声称已经过或报出预计分钟数。当前断线恢复先按已知 requestNo 查询请求状态，再读取历史消息合并最终文字、里程和时间；若断线早于 turn.started，则继续用历史乘客消息的 clientMessageNo 找回 requestNo。完整折线只在地图缓存有效时重新读取，不依赖半截路线 JSON。
+所有流式接口采用 text/event-stream;charset=UTF-8；SSE 连接上限为 90 秒，每 15 秒发送一次 ping。受理后先发送 turn.started，可发送 turn.status 和必要的 answer.delta，最终在结果成功持久化后发送一个完整内容事件，随后 turn.completed 并关闭流。模型未拿到地图验证结果前，answer.delta 不得提前声称已经过或报出预计分钟数。当前断线恢复先按已知 requestNo 查询请求状态，再读取历史消息合并最终文字、里程和时间；若断线早于 turn.started，则继续用历史乘客消息的 clientMessageNo 找回 requestNo。页面刷新后，H5 从本会话最新历史页识别末尾已持久化且尚无客服回复的乘客轮次，按 requestNo 定时查询状态并合并终态回复；恢复期间禁止在该会话发起新轮次，切换会话或离开页面停止轮询，不重新发送原请求。完整折线只在地图缓存有效时重新读取，不依赖半截路线 JSON。
 
 | 事件 | 用途 |
 | --- | --- |
@@ -288,7 +288,7 @@ map-service 从自身仍有效的临时会话上下文取得已确认的地图�
 
 当前路线核查的提取响应包含 `intent`、`checkPlaceName`、可选的 `checkPlaceRegion` 和受控 `checkMode`，不包含模型判定的 `checkPlaceBusinessType`。内部 `current-check` 请求传递 `checkMode`，map-service 对未知值按 `UNSPECIFIED` 处理；它仍按地点原文无类型搜索高德，再以 POI `typecode` 识别受支持类型。地图规范名称与乘客原词不同或存在多个候选时返回 `place.choices`，每个选项必须带完整规范名称、展示类型、城市或地址。地点确定而 `checkMode=UNSPECIFIED` 时返回核查含义选项；内部 `/api/v1/internal/ai/route/current-check/mode-choice` 只恢复服务端缓存的路线、地点与允许含义。
 
-存在性查询的提取响应以 `intent=ROUTE_EXISTS` 携带 `checkPlaceName` 和可选的 `checkPlaceRegion`，不携带 `checkMode`；地点缺失时 BFF 先追问地点，不调用地图。两端与地点确定后复用途经点算路能力：本会话没有可核查路线时以 `routeRef=null`、`conditionVersion=requestVersion=本轮条件版本` 调用 `/prepare` 和 `/via`，已有有效路线时按该 `routeRef` 核查。BFF 只映射结论：`ROUTE_READY` → FOUND，`ROUTE_NOT_FOUND` → NOT_FOUND_IN_QUERY，`PLACE_NOT_FOUND`、`PLACE_UNVERIFIABLE` → UNVERIFIABLE，`NEEDS_PLACE_CHOICE` → 带 `flow=ROUTE_EXISTS` 的 place.choices 并继续同一查询，`CONTEXT_UNAVAILABLE` → 要求重新提供两端。该查询不生成或展示路线卡，也不把新算路线写为当前路线。
+存在性查询的提取响应以 `intent=ROUTE_EXISTS` 携带 `checkPlaceName` 和可选的 `checkPlaceRegion`，不携带 `checkMode`；地点缺失时 BFF 先追问地点，不调用地图。本轮明确提供完整两端时先调用 `/prepare` 固化真实地点，再以 `routeRef=null`、`conditionVersion=requestVersion=本轮条件版本` 调用 `/via`；本轮未提供两端时，BFF 从本会话最新已持久化路线卡取得 `routeRef`，由 map-service 复验其归属、条件和有效期，再以 `conditionVersion=0` 调用 `/via`。没有可用路线或本轮只提供一端时先追问完整两端，不拼接旧路线端点；追问消息保留 `ROUTE_EXISTS` 的核查地点和 `previousRouteExpired` 上下文，下一轮补齐端点后继续同一查询。BFF 只映射结论：`ROUTE_READY` → FOUND，`ROUTE_NOT_FOUND` → NOT_FOUND_IN_QUERY，`PLACE_NOT_FOUND`、`PLACE_UNVERIFIABLE` → UNVERIFIABLE，`NEEDS_PLACE_CHOICE` → 带 `flow=ROUTE_EXISTS` 的 place.choices 并继续同一查询，`CONTEXT_UNAVAILABLE` → 保留同一查询上下文并要求重新提供两端。该查询不生成或展示路线卡，也不把新算路线写为当前路线。
 
 指定地点规划的提取响应以 `intent=VIA_ROUTE_PLAN` 携带 `viaPlaceName` 和可选的 `viaPlaceRegion`。已有路线时 passenger-api 只从本会话最新已持久化路线卡取得 `routeRef`；首轮同时给出起点、终点和途经点时，先通过 `prepare` 固化两端，再按 `conditionVersion` 调用 `via`。途经地点有歧义时只返回不透明 `placeChoiceId`；`via/place-choice` 从 map-service 短时缓存恢复 POI 身份、业务类型和导航点。`ROUTE_NOT_FOUND`、`PLACE_UNVERIFIABLE` 与地图服务故障分别处理，不能把无路线或证据不足统一报成上游不可用。
 
@@ -317,6 +317,7 @@ passenger-service 只使用现有会话表和消息表保存乘客与客服对�
 | AI_REQUEST_PROCESSING | 同幂等请求仍执行中 |
 | AI_REQUEST_EXPIRED | 活动请求超时后已落库为失败；同键重试重放失败，迟到成功结果不得覆盖 |
 | AI_IDEMPOTENCY_CONFLICT | 同一幂等键对应的请求内容不一致 |
+| AI_PLACE_CHOICE_INVALID | 本会话已保存的选项摘要中找不到所选任务、版本或地点；未创建新轮次 |
 | AI_POI_LOOKUP_FAILED | 地点查询服务暂时失败 |
 | AI_ROUTE_NOT_FOUND | 本次条件下未找到可行路线 |
 | AI_ROUTE_UNVERIFIABLE | 已找到驾车路线，但无法证实所选收费站起终点的通行方向；不生成成功路线卡 |

@@ -747,6 +747,16 @@ public class AiRouteTurnService {
             return;
         }
         CheckContext context = checkContext(ROUTE_EXISTS, extracted, null, false, false);
+        // 本轮未重述两端时，可沿用本会话最新路线；地图服务仍会校验快照归属、条件和有效期。
+        if (!hasText(extracted.originName()) && !hasText(extracted.destinationName())) {
+            String routeRef = latestPersistedRouteRef(customerId, conversationNo);
+            if (routeRef != null) {
+                requestRouteExists(sink, customerId, conversationNo, requestNo,
+                        requestVersion, content, extracted.checkPlaceName(),
+                        extracted.checkPlaceRegion(), routeRef, 0);
+                return;
+            }
+        }
         if (!hasText(extracted.originName()) || !hasText(extracted.destinationName())) {
             askForCheckEndpoints(sink, customerId, conversationNo, requestNo, context);
             return;
@@ -791,8 +801,8 @@ public class AiRouteTurnService {
                             + detailOrFallback(result.detail(), "地图地点信息不足") + "。",
                     routeExistsPayloadJson(context, "UNVERIFIABLE", requestedPlaceName,
                             detailOrFallback(result.detail(), "地图地点信息不足")));
-            case "CONTEXT_UNAVAILABLE" -> completeText(sink, customerId, conversationNo, requestNo,
-                    "路线条件已过期，请重新告诉我完整的起点和终点。", null);
+            case "CONTEXT_UNAVAILABLE" -> askForCheckEndpoints(sink, customerId, conversationNo,
+                    requestNo, context.withRouteRef(null, false).asPreviousRouteExpired());
             case NEEDS_PLACE_CHOICE -> completeViaPlaceChoices(sink, customerId, conversationNo,
                     requestNo, requestVersion, requestedPlaceName, result, ROUTE_EXISTS, context);
             default -> throw new IllegalStateException("未知的路线存在性查询状态: " + result.status());
@@ -987,8 +997,16 @@ public class AiRouteTurnService {
                                   String taskNo, String placeChoiceId, long expectedRequestVersion,
                                   String choiceName, String choiceCity, String idempotencyKey) {
         String requestNo = null;
-        String content = selectedPlaceContent(choiceName, choiceCity);
+        String content;
         try {
+            // 客户端名称只是兼容旧请求的展示提示，落库正文必须来自本会话已保存的选项摘要。
+            content = persistedPlaceChoiceContent(customerId, conversationNo, taskNo,
+                    placeChoiceId, expectedRequestVersion);
+            if (content == null) {
+                sink.turnFailed(new TurnFailedEvent(null, "AI_PLACE_CHOICE_INVALID",
+                        "这组地点选项已失效，请重新选择或描述地点。"));
+                return;
+            }
             AiTurnBeginResponse begin = unwrap(passengerAi.begin(conversationNo,
                     new AiTurnBeginRequest(customerId, idempotencyKey, content)), "begin");
             requestNo = begin.requestNo();
@@ -1569,11 +1587,50 @@ public class AiRouteTurnService {
         }
     }
 
-    /** 选择编号只用于接口关联；会话正文保存乘客实际看到的地点，不暴露内部 PC 编号。 */
+    /** 选择编号只用于接口关联；会话正文保存服务端展示摘要，不暴露内部 PC 编号。 */
     private static String selectedPlaceContent(String choiceName, String choiceCity) {
         String name = hasText(choiceName) ? choiceName.strip() : "所选地点";
         String city = hasText(choiceCity) ? choiceCity.strip() : null;
         return "已选择地点：" + name + (city == null ? "" : "（" + city + "）");
+    }
+
+    /** 跨页找回同一任务的已完成选项，兼容同键重放；不把客户端传入的名称当作可信正文。 */
+    private String persistedPlaceChoiceContent(long customerId, String conversationNo,
+                                               String taskNo, String placeChoiceId,
+                                               long expectedRequestVersion) {
+        Long beforeSequence = null;
+        while (true) {
+            AiMessageListResponse page = unwrap(passengerAi.listMessages(
+                    conversationNo, customerId, MESSAGE_PAGE_SIZE, beforeSequence), "placeChoiceHistory");
+            List<MessageView> messages = page.messages() == null ? List.of() : page.messages();
+            for (int index = messages.size() - 1; index >= 0; index--) {
+                MessageView message = messages.get(index);
+                if (!"ASSISTANT".equals(message.role()) || !"PLACE_CHOICES".equals(message.messageType())
+                        || !"COMPLETED".equals(message.status())) {
+                    continue;
+                }
+                try {
+                    JsonNode choices = objectMapper.readTree(message.payloadJson()).path("placeChoices");
+                    if (!taskNo.equals(choices.path("taskNo").asText(null))
+                            || expectedRequestVersion != choices.path("requestVersion").asLong(0)) {
+                        continue;
+                    }
+                    for (JsonNode choice : choices.path("choices")) {
+                        if (placeChoiceId.equals(choice.path("placeChoiceId").asText(null))
+                                && hasText(choice.path("name").asText(null))) {
+                            return selectedPlaceContent(choice.path("name").asText(),
+                                    choice.path("city").asText(null));
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // 旧版或损坏的消息不能授权产生地点选择正文。
+                }
+            }
+            if (!page.hasMore() || messages.isEmpty()) return null;
+            long nextBefore = messages.getFirst().sequenceNo();
+            if (nextBefore <= 0 || (beforeSequence != null && nextBefore >= beforeSequence)) return null;
+            beforeSequence = nextBefore;
+        }
     }
 
     private void completeText(AiTurnEventSink sink, long customerId, String conversationNo,

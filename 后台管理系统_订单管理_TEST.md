@@ -39,7 +39,7 @@
 
 测试 pageNo=0、负数、pageSize=0、超大 pageSize、超末页。
 
-预期：非法参数拒绝或按统一上限裁剪；超末页返回空 list、total 保持正确；不得 OOM。
+预期：非法参数拒绝或按统一上限裁剪；超末页返回空 list、total 保持正确；不得 OOM。分页由 `order-service` 数据库执行，`total` 为 count 结果，不得回到全量加载后切片。
 
 ### T-ADMIN-ORDER-06 列表防 N+1
 
@@ -75,13 +75,13 @@
 
 ### T-ADMIN-ORDER-11 事件时间线
 
-预期：事件按 occurredAt、id 稳定升序；相同时间不乱序；eventType、from/to status、reasonCode 与订单动作对应。
+预期：事件按 occurredAt、id 稳定升序；相同时间不乱序；eventType、from/to status 与订单动作对应；`operatorTypeText` 按 0 系统 / 1 乘客 / 2 司机展示，未定义值为“未知”。当前 `AdminOrderEventVO` 尚未暴露 `reasonCode`，该字段断言在补齐前不能记为通过。
 
 ### T-ADMIN-ORDER-12 异常 payload
 
 准备 payload 为空或历史 JSON 字段不完整的事件。
 
-预期：详情仍可展示基本事件；单条 payload 解析失败不应让整个订单详情 500，除非当前契约明确失败。
+预期：详情仍可展示基本事件；事件 `extJson` 与 `order_event.event_payload` 一致，空值可为 `null` 或 `{}`；单条 payload 解析失败不应让整个订单详情 500，除非当前契约明确失败。
 
 ## 4. 下游异常
 
@@ -123,3 +123,11 @@
 - `PENDING_DRIVER_CONFIRM(7)` 已显示为“待司机确认”；创建事件无前置状态时显示 `- → 已创建`，不再误显示“未知”。
 - 未识别的新事件类型会保留原始 `eventType`，避免统一降级成“其他事件”而丢失排障信息。
 - 管理后台浏览器控制台无 error/warning；`/capacity/cars` 重复动态路由告警已消除。
+
+## 9. 2026-10-25 本轮修改验证
+
+- `order` 模块全量测试 123 项通过，`mvn -pl order verify` 成功；分页由 `TripOrderPaginationTest` 覆盖数据库 `selectPage`、总数、第三页和同时间稳定排序。
+- `admin-api` 全量测试 19 项通过；新增 `AdminOrderEventVOMappingTest` 验证 `eventPayload → extJson` 映射且对外字段名保持 `extJson`。
+- `capacity` 的 `OfferRescheduleServiceTest` 3 项通过；该测试只覆盖已标记 `@Deprecated` 的历史兜底链路，不代表正常派单仍依赖它。
+- `passenger-api` 编译通过；前端 `didi-Vue` 的 `npm test`（39 条 API 契约）和 `npm run build` 通过。
+- 本轮未重新启动后端服务，也未执行真实后台浏览器回归；本文件中的环境验收项仍需按发布前流程执行。

@@ -39,7 +39,7 @@ public class OrderEvent {
     private Integer toStatus;
 
     /**
-     * 操作人类型：0 系统，1 乘客，2 司机（与业务常量一致）。
+     * 操作人类型：0 系统，1 乘客，2 司机；其它值未定义，展示层按“未知”处理。
      */
     private Integer operatorType;
     /** 操作人业务 ID（乘客/司机 ID 等），系统事件可为 null */

@@ -40,6 +40,7 @@
 
 - 当需要按手机筛选时：`admin-api` 先调用 `passenger-service` 的「按手机号查乘客」获取 `passengerId`；若乘客不存在则直接返回空页（业务 200）。
 - 列表行不返回乘客手机号（避免 N+1，详见 PRD）。
+- 列表分页由 `order-service` 数据库执行（MyBatis-Plus `selectPage` + `PaginationInnerInterceptor`）；`total` 为同一过滤条件的 count 结果；相同 `createdAt` 按 `id` 倒序，保证翻页稳定。
 
 **成功响应**
 
@@ -55,12 +56,15 @@
 
 - HTTP：200
 - `data`：`AdminOrderDetailVO`（订单字段 + `events` 列表 + 详情内乘客手机号等，以实现为准）
+- `events` 中每个事件的 `extJson` 为 `order_event.event_payload` 原始 JSON 字符串；没有扩展数据时可为 `null` 或 `{}`
+- 事件 `operatorTypeText` 按 `0 系统 / 1 乘客 / 2 司机` 展示，未定义值显示“未知”
+- 当前 `AdminOrderEventVO` 尚未返回 `reasonCode`；`reasonDesc` 可正常展示，`reasonCode` 相关断言待补齐后再验收
 
 **失败响应**
 
 - 订单不存在或不在数据域内：HTTP 404，`msg` 如「订单不存在」
 
-### 2.3 派单诊断聚合（近期增强）
+### 2.3 派单诊断聚合（规划，当前未实现）
 
 > **规划接口，当前未实现。** `AdminOrderController` 目前只提供列表和详情；前端不得将本节路径作为可用接口。
 
@@ -95,7 +99,7 @@
 - `capacityEvents` 展示 `resultStatus`、`driverId`、`errorMessage`。
 - `FAILED` outbox 可显示“重试”操作。
 
-### 2.4 Outbox 手动重试（近期增强）
+### 2.4 Outbox 手动重试（规划，当前未实现）
 
 > **规划接口，当前未实现。** 当前只有 order-service 内部诊断/重试能力，admin-api 尚未提供对外聚合入口。
 
@@ -174,7 +178,7 @@
 | 订单号 | `OD202604150001`～`OD202604150015` 共 15 条；可重复执行（会先删除同前缀订单及事件再插入） |
 | 状态分布 | 覆盖创建、分配、接单、到达、行程中、完单、取消等，便于筛选验收 |
 | 事件类型 | `ORDER_CREATED`、`ORDER_ASSIGNED`、`ORDER_ACCEPTED`、`ORDER_DRIVER_ARRIVED`、`ORDER_TRIP_STARTED`、`ORDER_FINISHED`、`ORDER_CANCELLED` |
-| 操作方 `operator_type` | 0 系统、1 乘客、2 司机（以代码为准） |
+| 操作方 `operator_type` | 0 系统、1 乘客、2 司机；未定义值统一展示为“未知”（以代码为准） |
 
 **下游路径（订单服务）**
 
@@ -196,3 +200,4 @@
 | 2026-04-03 | 首版：从原订单 TODO 提炼；对齐 JWT、§4.7、当前 BFF 路径 |
 | 2026-04-15 | 增补 `order_seed.sql` 联调数据、`operator_type`、直辖市区县展示与编码约定 |
 | 2026-06-13 | 补充后台派单诊断聚合与 outbox 手动重试接口建议，供前端排障页设计使用 |
+| 2026-10-25 | 同步订单列表数据库分页、事件 `extJson` 映射和 `operator_type` 口径；明确 `reasonCode` 尚未暴露 |

@@ -2,6 +2,7 @@ package com.sx.order.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sx.order.common.util.ResultUtil;
 import com.sx.order.common.vo.ResponseVo;
 import com.sx.order.dao.TripOrderEntityMapper;
@@ -168,7 +169,10 @@ public class TripOrderController {
     /**
      * 内部：历史兼容，处理旧确认超时路径遗留的 {@code ASSIGNED} 待改派订单列表。
      * {@code GET /api/v1/orders/internal/assigned-awaiting-reschedule?limit=}
+     *
+     * @deprecated 仅供已废弃的 {@code OfferRescheduleService} 处理历史残留数据；新调用方不要使用。
      */
+    @Deprecated
     @GetMapping("/internal/assigned-awaiting-reschedule")
     public ResponseVo<List<AssignedAwaitingRescheduleDto>> internalAssignedAwaitingReschedule(
             @RequestParam(required = false, defaultValue = "50") Integer limit) {
@@ -178,7 +182,10 @@ public class TripOrderController {
     /**
      * 内部：改派（无进行中确认窗口时更换司机），供运力调度调用。
      * {@code POST /api/v1/orders/internal/reassign/{orderNo}}
+     *
+     * @deprecated 仅供已废弃的旧确认窗口改派链路使用；正常派单使用 assign + openDriverOffer。
      */
+    @Deprecated
     @PostMapping("/internal/reassign/{orderNo}")
     public ResponseVo<Void> internalReassign(@PathVariable String orderNo, @RequestBody @Valid AssignOrderBody body) {
         try {
@@ -396,7 +403,8 @@ public class TripOrderController {
     }
 
     /**
-     * 分页查询订单列表（内存分页，MVP）。
+     * 分页查询订单列表（数据库分页）。
+     * 同一创建时间按 id 倒序，保证翻页时顺序稳定。
      * {@code GET /api/v1/orders?orderNo=&passengerId=&provinceCode=&cityCode=&status=&createdAtStart=&createdAtEnd=&pageNo=&pageSize=}
      */
     @GetMapping
@@ -421,16 +429,13 @@ public class TripOrderController {
                 .eq(status != null, TripOrder::getStatus, status)
                 .ge(createdAtStart != null, TripOrder::getCreatedAt, createdAtStart)
                 .le(createdAtEnd != null, TripOrder::getCreatedAt, createdAtEnd)
-                .orderByDesc(TripOrder::getCreatedAt);
+                .orderByDesc(TripOrder::getCreatedAt, TripOrder::getId);
 
-        List<TripOrder> allRows = tripOrderEntityMapper.selectList(wrapper);
-        int from = Math.max(0, (current - 1) * size);
-        int to = Math.min(allRows.size(), from + size);
-        List<TripOrder> rows = from >= allRows.size() ? List.of() : allRows.subList(from, to);
+        Page<TripOrder> result = tripOrderEntityMapper.selectPage(new Page<>(current, size), wrapper);
 
         Map<String, Object> resp = new HashMap<>();
-        resp.put("list", rows);
-        resp.put("total", allRows.size());
+        resp.put("list", result.getRecords());
+        resp.put("total", result.getTotal());
         resp.put("pageNo", current);
         resp.put("pageSize", size);
         return ResultUtil.success(resp);

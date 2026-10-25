@@ -10,6 +10,7 @@ import com.sx.passenger.ai.dto.AiTurnFailResponse;
 import com.sx.passenger.ai.exception.AiConversationConflictException;
 import com.sx.passenger.ai.exception.AiConversationNotFoundException;
 import com.sx.passenger.ai.service.AiConversationService;
+import com.sx.passenger.time.PassengerPersistenceTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,7 +30,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@SpringBootTest
+@SpringBootTest(properties = "passenger.ai.turn-stale-seconds=60")
 @ActiveProfiles("test")
 class AiConversationServiceIntegrationTest {
 
@@ -195,6 +196,29 @@ class AiConversationServiceIntegrationTest {
                 .satisfies(e -> assertThat(((AiConversationConflictException) e).getCode())
                         .isEqualTo("AI_REQUEST_EXPIRED"));
         assertThat(messageCount(conversationNo)).isEqualTo(2);
+    }
+
+    @Test
+    void legacySixtySecondSettingCannotExpireActiveTurnWithinSseWindow() {
+        String conversationNo = service.create(CUSTOMER_ID, "create-1").conversationNo();
+        AiTurnBeginResponse begin = service.begin(conversationNo, CUSTOMER_ID, "turn-1", "从A到B");
+        jdbc.update("UPDATE passenger_ai_conversation SET active_request_started_at = ? WHERE conversation_no = ?",
+                Timestamp.valueOf(PassengerPersistenceTime.now().minusSeconds(70)), conversationNo);
+
+        assertThat(service.expireStaleRequests(10)).isZero();
+        assertThatThrownBy(() -> service.begin(conversationNo, CUSTOMER_ID, "turn-1", "从A到B"))
+                .isInstanceOf(AiConversationConflictException.class)
+                .satisfies(e -> assertThat(((AiConversationConflictException) e).getCode())
+                        .isEqualTo(AiConversationConflictException.AI_REQUEST_PROCESSING));
+        assertThatThrownBy(() -> service.begin(conversationNo, CUSTOMER_ID, "turn-2", "另一条消息"))
+                .isInstanceOf(AiConversationConflictException.class)
+                .satisfies(e -> assertThat(((AiConversationConflictException) e).getCode())
+                        .isEqualTo(AiConversationConflictException.AI_REQUEST_IN_PROGRESS));
+        assertThat(conversationRow(conversationNo).get("ACTIVE_REQUEST_NO")).isEqualTo(begin.requestNo());
+        assertThat(messageCount(conversationNo)).isEqualTo(1);
+
+        service.complete(conversationNo, begin.requestNo(), CUSTOMER_ID, "TEXT", "已完成", null);
+        assertThat(singleMessage(conversationNo, "ASSISTANT").get("STATUS")).isEqualTo("COMPLETED");
     }
 
     @Test

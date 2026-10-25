@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS `order_event` (
     `from_status` INT NULL COMMENT '变更前状态，首个事件可空',
     `to_status` INT NULL COMMENT '变更后状态',
 
-    `operator_type` INT NOT NULL COMMENT '操作方：1乘客 2司机 3系统 4运营',
+    `operator_type` INT NOT NULL COMMENT '操作方：0系统 1乘客 2司机',
     `operator_id` BIGINT NULL COMMENT '操作人ID（系统事件可空）',
 
     `reason_code` VARCHAR(64) NULL COMMENT '原因编码（如取消原因码）',

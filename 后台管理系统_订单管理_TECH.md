@@ -14,10 +14,10 @@
   - 校验 JWT、执行数据域（`AdminDataScope`）校验与合并
   - 通过 Feign/HTTP 调用 `order-service`、`passenger-service`
   - **不直连订单库**
-  - 近期增强：聚合 `order-service` Outbox 诊断与 `capacity-service` Kafka 消费结果，形成后台排障接口
+  - 后续规划（当前未实现）：聚合 `order-service` Outbox 诊断与 `capacity-service` Kafka 消费结果，形成后台排障接口
 - **`order-service`**
   - 订单主表（如 `trip_order`）、订单事件表（如 `order_event`）
-  - 提供分页、详情、事件列表查询接口
+  - 提供数据库分页（MyBatis-Plus `selectPage` + `PaginationInnerInterceptor`）、详情、事件列表查询接口
   - 提供内部 outbox / dispatch-trace 诊断接口
 - **`passenger-service`**
   - 按手机号查乘客、按 id 查乘客（用于列表筛选与详情补手机号）
@@ -49,6 +49,7 @@
 
 ### 3.1 列表
 
+- **数据库分页**：`order-service` 使用 `selectPage` + `PaginationInnerInterceptor` 执行 `COUNT` 与 `LIMIT`，不加载全量后在 Controller/BFF 内切片；相同 `createdAt` 按 `id` 倒序保证翻页稳定。
 - **禁止逐行补手机号**：列表接口不返回 `passengerPhone`
 - 当按 `phone` 筛选时：
   - 先调用 `passenger-service: /customers/by-phone` 得到 `passengerId`
@@ -81,7 +82,9 @@
 → `order-service GET /api/v1/orders/{orderNo}/events`  
 →（可选）`passenger-service GET /api/v1/customers/{passengerId}`
 
-### 4.4 派单诊断聚合（近期增强）
+### 4.4 派单诊断聚合（规划，当前未实现）
+
+> `admin-api` 目前没有该聚合入口；本节描述目标调用链，落地前不得作为可用接口或验收通过项。
 
 `didi-Vue` → `admin-api GET /admin/api/v1/orders/{orderNo}/dispatch-diagnostics`
 → `order-service GET /api/v1/orders/internal/dispatch-trace/{orderNo}`
@@ -112,10 +115,13 @@
 - `capacity_seed.sql`：司机/车辆/公司（如后续需要在详情聚合展示）
 - `order_seed.sql`：15 笔订单 + `ORDER_*` 事件时间线
 
-### 6.2 事件排序
+### 6.2 事件排序与字段映射
 
 - 下游 `GET /api/v1/orders/{orderNo}/events` 建议按 `occurredAt` 升序返回
 - 若存在缺失时间，前端可用 `createdAt` 兜底展示（是否兜底属于产品/前端策略）
+- order-service 返回的事件字段名为 `eventPayload`；admin-api 通过 `@JsonAlias("eventPayload")` 映射到对外 `extJson`，不改变响应字段名
+- `operator_type` 只定义 `0 系统 / 1 乘客 / 2 司机`；未定义值后台展示“未知”
+- 当前 `AdminOrderEventVO` 尚未暴露 `reasonCode`，仅有 `reasonDesc`；补齐前相关测试不能标记通过
 
 ### 6.3 行政区划展示（前端）
 
@@ -123,9 +129,10 @@
 
 ---
 
-## 7. 前端联调建议（近期增强）
+## 7. 前端联调建议（诊断接口落地后）
 
 - 订单排障页先做只读聚合，重试按钮仅对 `FAILED` outbox 显示。
 - 状态文案统一展示英文状态 + 中文释义，例如 `PENDING_DRIVER_CONFIRM（待司机确认）`。
+- 订单详情事件的操作方使用后端 `operatorTypeText`；前端本地兜底只映射 `0/1/2`，未定义值显示“未知”。
 - capacity 消费结果建议用不同颜色区分：`SUCCESS` 成功、`NO_DRIVER` 无司机、`FAILED` 失败、`INVALID` / `MALFORMED` 坏消息。
 - DLQ / 坏消息页后续独立建设，当前订单排障页只展示与该 `orderNo` 相关的消费结果。

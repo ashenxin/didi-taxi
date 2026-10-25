@@ -33,4 +33,13 @@ class AdminOrderServiceDisplayTextTest {
     void keepsUnknownEventNameVisibleForDiagnostics() {
         assertEquals("ORDER_NEW_EVENT", AdminOrderService.eventTypeText("ORDER_NEW_EVENT"));
     }
+
+    @Test
+    void mapsOnlyDefinedOrderOperatorTypes() {
+        assertEquals("系统", AdminOrderService.operatorTypeText(0));
+        assertEquals("乘客", AdminOrderService.operatorTypeText(1));
+        assertEquals("司机", AdminOrderService.operatorTypeText(2));
+        assertEquals("未知", AdminOrderService.operatorTypeText(3));
+        assertEquals("未知", AdminOrderService.operatorTypeText(null));
+    }
 }

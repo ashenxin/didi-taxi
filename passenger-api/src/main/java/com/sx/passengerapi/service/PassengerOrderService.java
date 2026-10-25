@@ -233,7 +233,11 @@ public class PassengerOrderService {
      * 调用：{@code order-service POST /api/v1/orders/{orderNo}/assign}
      *
      * MVP：ETA 先用 route.duration 作为占位；后续接入 map.matrix 后再替换为“司机到上车点 ETA”。
+     *
+     * @deprecated 两段式下单后由 order Outbox + Kafka + capacity 异步派单，本方法已无调用方；
+     *             保留仅作历史参考，新代码不得使用。
      */
+    @Deprecated
     public void assignOrder(String orderNo, NearestDriverResult driver, Long etaSeconds) {
         if (driver == null) {
             return;
@@ -759,7 +763,10 @@ public class PassengerOrderService {
 
     /**
      * 指派成功后写入运力侧订单池索引（派生缓存）；失败不影响主链路。
+     *
+     * @deprecated 随旧同步派单入口 {@link #assignOrder} 一起废弃；当前订单池索引由 capacity 消费端维护。
      */
+    @Deprecated
     private void registerPendingOrderIndex(Long driverId, String orderNo) {
         if (driverId == null || orderNo == null || orderNo.isBlank()) {
             return;

@@ -52,6 +52,8 @@ public class AiConversationService {
     static final String STATUS_FAILED = "FAILED";
     static final String SCENE_ROUTE_WAYPOINT = "ROUTE_WAYPOINT";
     static final String STALE_REQUEST_CODE = AiConversationConflictException.AI_REQUEST_EXPIRED;
+    // passenger-api 的 SSE 窗口为 90 秒；失联接管需留出取消与跨服务落库余量。
+    private static final long MIN_STALE_TURN_SECONDS = 120;
 
     /** fail 落库的面向乘客说明，不向乘客暴露内部失败细节。 */
     private static final String FAIL_CONTENT = "抱歉，服务暂时不可用，请稍后重试。";
@@ -72,13 +74,17 @@ public class AiConversationService {
                                  PassengerAiMessageMapper messages,
                                  AiIdentifierGenerator identifiers,
                                  PlatformTransactionManager transactionManager,
-                                 @Value("${passenger.ai.turn-stale-seconds:60}") long staleTurnSeconds) {
+                                 @Value("${passenger.ai.turn-stale-seconds:120}") long staleTurnSeconds) {
         this.conversations = conversations;
         this.messages = messages;
         this.identifiers = identifiers;
         this.databaseTransaction = new TransactionTemplate(transactionManager);
         this.databaseTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
-        this.staleTurnSeconds = staleTurnSeconds;
+        this.staleTurnSeconds = Math.max(staleTurnSeconds, MIN_STALE_TURN_SECONDS);
+        if (staleTurnSeconds < MIN_STALE_TURN_SECONDS) {
+            log.warn("AI 客服失联阈值配置过短 configured={}s effective={}s",
+                    staleTurnSeconds, this.staleTurnSeconds);
+        }
     }
 
     /** 创建会话；同一乘客相同幂等键重放返回原会话。 */

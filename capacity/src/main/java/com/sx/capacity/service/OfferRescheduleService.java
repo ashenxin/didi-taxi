@@ -17,7 +17,12 @@ import java.util.Objects;
 
 /**
  * offer 超时打回 {@code ASSIGNED} 后的调度：同司机在配置轮次内可再开确认窗口；否则 GEO 改派并重新打开窗口。
+ *
+ * @deprecated 正常状态机在确认窗口超时后直接回到 {@code CREATED} 并重新投递派单 Outbox，
+ *             不再产生 {@code ASSIGNED + last_offer_at} 记录；本服务仅保留处理历史残留数据，
+ *             新代码不得依赖该链路。
  */
+@Deprecated
 @Service
 @Slf4j
 public class OfferRescheduleService {
