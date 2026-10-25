@@ -14,9 +14,14 @@ public final class MapRouteDtos {
     private MapRouteDtos() {
     }
 
-    public record ExtractEndpointsRequest(String userText, String expectedEndpointRole) {
+    public record ExtractEndpointsRequest(String userText, String expectedEndpointRole,
+                                          boolean weatherContinuation) {
         public ExtractEndpointsRequest(String userText) {
-            this(userText, null);
+            this(userText, null, false);
+        }
+
+        public ExtractEndpointsRequest(String userText, String expectedEndpointRole) {
+            this(userText, expectedEndpointRole, false);
         }
     }
 
@@ -29,14 +34,17 @@ public final class MapRouteDtos {
                                            String viaPlaceRegion,
                                            String checkPlaceName,
                                            String checkPlaceRegion,
-                                           String checkMode) {
+                                           String checkMode,
+                                           String weatherPlaceName,
+                                           String weatherPlaceRegion,
+                                           Integer weatherDayOffset) {
 
         /** 保留默认路线现有调用和测试的构造方式。 */
         public ExtractEndpointsResponse(String originName, String destinationName,
                                         String originRegion, String destinationRegion,
                                         String intent) {
             this(originName, destinationName, originRegion, destinationRegion, intent,
-                    null, null, null, null, null);
+                    null, null, null, null, null, null, null, null);
         }
 
         public ExtractEndpointsResponse(String originName, String destinationName,
@@ -44,7 +52,7 @@ public final class MapRouteDtos {
                                         String intent, String checkPlaceName,
                                         String checkPlaceRegion) {
             this(originName, destinationName, originRegion, destinationRegion, intent,
-                    null, null, checkPlaceName, checkPlaceRegion, "UNSPECIFIED");
+                    null, null, checkPlaceName, checkPlaceRegion, null, null, null, null);
         }
 
         public ExtractEndpointsResponse(String originName, String destinationName,
@@ -52,7 +60,18 @@ public final class MapRouteDtos {
                                         String intent, String checkPlaceName,
                                         String checkPlaceRegion, String checkMode) {
             this(originName, destinationName, originRegion, destinationRegion, intent,
-                    null, null, checkPlaceName, checkPlaceRegion, checkMode);
+                    null, null, checkPlaceName, checkPlaceRegion, checkMode, null, null, null);
+        }
+
+        /** 兼容已有路线提取调用；天气字段为空。 */
+        public ExtractEndpointsResponse(String originName, String destinationName,
+                                        String originRegion, String destinationRegion,
+                                        String intent, String viaPlaceName,
+                                        String viaPlaceRegion, String checkPlaceName,
+                                        String checkPlaceRegion, String checkMode) {
+            this(originName, destinationName, originRegion, destinationRegion, intent,
+                    viaPlaceName, viaPlaceRegion, checkPlaceName, checkPlaceRegion, checkMode,
+                    null, null, null);
         }
     }
 
@@ -147,7 +166,7 @@ public final class MapRouteDtos {
                                         long requestVersion, String placeName, String placeRegion,
                                         String originalUserText) {
             this(customerId, conversationNo, routeRef, requestVersion, placeName, placeRegion,
-                    "UNSPECIFIED", originalUserText);
+                    null, originalUserText);
         }
     }
 

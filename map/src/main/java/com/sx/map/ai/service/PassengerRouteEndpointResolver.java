@@ -72,7 +72,8 @@ public class PassengerRouteEndpointResolver {
             }
             String candidateName = candidate.getName().strip();
             if (!directionCompatible(candidateName, candidate.getType(), role)
-                    || !relevantToRequest(name, candidate, highwayAccess, scenicPlace)) {
+                    || !relevantToRequest(name, candidate, highwayAccess, scenicPlace)
+                    || !endpointSelectable(candidateName)) {
                 continue;
             }
             String id = blankToNull(candidate.getPoiId());
@@ -137,6 +138,17 @@ public class PassengerRouteEndpointResolver {
     private static boolean isScenicPlaceRequest(String name) {
         return name.contains("湿地") || name.contains("公园") || name.contains("景区")
                 || name.contains("风景区");
+    }
+
+    /**
+     * 与 {@link PassengerRouteEndpointDirectionValidator} 的端点身份规则对齐：
+     * “XX高速入口/出口”如果没有可核对的“收费站”身份，后续必然无法证明上下高速方向，
+     * 因此不能作为可选项展示给乘客。
+     */
+    private static boolean endpointSelectable(String name) {
+        String base = name.split("[（(]", 2)[0].strip().replaceFirst("(入口|出口)$", "");
+        return base.contains("收费站")
+                || !(name.contains("高速") && (name.contains("入口") || name.contains("出口")));
     }
 
     private static boolean relevantToRequest(String requestedName, AmapPoiCandidate candidate,

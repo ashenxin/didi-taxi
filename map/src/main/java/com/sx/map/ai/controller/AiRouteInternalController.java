@@ -82,7 +82,7 @@ public class AiRouteInternalController {
     @PostMapping("/extract")
     public ResponseVo<ExtractEndpointsResponse> extract(@RequestBody ExtractEndpointsRequest request) {
         return ResultUtil.success(extractionService.extract(
-                request.userText(), request.expectedEndpointRole()));
+                request.userText(), request.expectedEndpointRole(), request.weatherContinuation()));
     }
 
     @PostMapping("/partial")

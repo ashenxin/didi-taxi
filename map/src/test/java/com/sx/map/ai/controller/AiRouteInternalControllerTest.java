@@ -50,6 +50,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -120,7 +121,7 @@ class AiRouteInternalControllerTest {
 
     @Test
     void extractReturnsModelExtractionResult() throws Exception {
-        when(extractionService.extract(any(), any())).thenReturn(new ExtractEndpointsResponse(
+        when(extractionService.extract(any(), any(), anyBoolean())).thenReturn(new ExtractEndpointsResponse(
                 "德清高速路口", "西溪湿地", null, null, "DEFAULT_ROUTE"));
 
         mvc.perform(post("/api/v1/internal/ai/route/extract")
@@ -335,7 +336,7 @@ class AiRouteInternalControllerTest {
 
     @Test
     void unexpectedInternalFailureReturns500WithStableCode() throws Exception {
-        when(extractionService.extract(any(), any())).thenThrow(new IllegalStateException("unexpected"));
+        when(extractionService.extract(any(), any(), anyBoolean())).thenThrow(new IllegalStateException("unexpected"));
 
         mvc.perform(post("/api/v1/internal/ai/route/extract")
                         .contentType(MediaType.APPLICATION_JSON)

@@ -44,6 +44,11 @@ class CurrentRoutePassageServiceTest {
                 .isEqualTo(CurrentRoutePassageService.Verdict.PASSED);
         assertThat(service.check(bypassWuchang, wuchang).verdict())
                 .isEqualTo(CurrentRoutePassageService.Verdict.UNVERIFIABLE);
+        CurrentRoutePassageService.RelationCheck bypassRelation =
+                service.checkRelation(bypassWuchang, wuchang);
+        assertThat(bypassRelation.verdict()).isEqualTo(CurrentRoutePassageService.Verdict.PASSED);
+        assertThat(bypassRelation.mode()).isEqualTo(CurrentRouteCheckMode.PASS_NEARBY);
+        assertThat(bypassRelation.reason()).isEqualTo("MAINLINE_BYPASSES_TOLL_STATION");
         assertThat(service.check(bypassWuchang, wuchang, CurrentRouteCheckMode.PASS_NEARBY).verdict())
                 .isEqualTo(CurrentRoutePassageService.Verdict.PASSED);
         assertThat(service.check(bypassWuchang, wuchang, CurrentRouteCheckMode.USE_EXIT).verdict())
@@ -236,6 +241,67 @@ class CurrentRoutePassageServiceTest {
         assertThat(result.verdict()).isEqualTo(CurrentRoutePassageService.Verdict.CONFLICT);
         assertThat(result.reason()).isEqualTo("TARGET_ROLE_CONFLICT");
         assertThat(result.detail()).contains("高速入口").contains("不能作为驶出高速的出口核查");
+    }
+
+    @Test
+    void relationPrefersProvenArrivalOverNearbyDistance() {
+        AmapPoiCandidate wuchang = toll("五常收费站(G25长深高速出口千岛湖方向)",
+                point(120.046785, 30.279236));
+        Point arrival = point(120.046877, 30.279328);
+        var arrivalStep = step("五常互通", "沿五常互通到达收费站", "到达收费站",
+                point(120.0468, 30.2800), arrival);
+        var route = option("gaode",
+                List.of(point(120.020, 30.543), arrivalStep.polyline().getFirst(), arrival,
+                        point(120.061, 30.254)), arrivalStep);
+
+        CurrentRoutePassageService.RelationCheck result = service.checkRelation(route, wuchang);
+
+        assertThat(result.verdict()).isEqualTo(CurrentRoutePassageService.Verdict.PASSED);
+        assertThat(result.mode()).isEqualTo(CurrentRouteCheckMode.VISIT_PLACE);
+        assertThat(result.reason()).isEqualTo("PLACE_ARRIVAL_MATCHED");
+    }
+
+    @Test
+    void relationReportsNearbyOnlyWhenArrivalIsNotProven() {
+        AmapPoiCandidate wuchang = toll("五常收费站", point(120.046785, 30.279236));
+        Point start = point(120.040, 30.279);
+        Point end = point(120.054, 30.279);
+        var road = step("文一西路", "沿文一西路行驶", "", start, end);
+        var route = option("gaode", List.of(start, end), road);
+
+        CurrentRoutePassageService.RelationCheck result = service.checkRelation(route, wuchang);
+
+        assertThat(result.verdict()).isEqualTo(CurrentRoutePassageService.Verdict.PASSED);
+        assertThat(result.mode()).isEqualTo(CurrentRouteCheckMode.PASS_NEARBY);
+        assertThat(result.reason()).isEqualTo("ROUTE_PASSES_NEARBY_ONLY");
+        assertThat(result.detail()).contains("没有证据表明实际通过");
+    }
+
+    @Test
+    void relationReportsNotOnRouteWhenClearlyFarAway() {
+        AmapPoiCandidate wuchang = toll("五常收费站", point(120.046785, 30.279236));
+        Point start = point(120.200, 30.400);
+        Point end = point(120.300, 30.500);
+        var road = step("沪杭高速", "沿沪杭高速行驶", "", start, end);
+        var route = option("gaode", List.of(start, end), road);
+
+        CurrentRoutePassageService.RelationCheck result = service.checkRelation(route, wuchang);
+
+        assertThat(result.verdict()).isEqualTo(CurrentRoutePassageService.Verdict.NOT_PASSED);
+        assertThat(result.mode()).isEqualTo(CurrentRouteCheckMode.PASS_NEARBY);
+        assertThat(result.reason()).isEqualTo("ROUTE_MISSES_PLACE");
+    }
+
+    @Test
+    void relationIsUnknownWithoutCompleteGeometry() {
+        AmapPoiCandidate wuchang = toll("五常收费站", point(120.046785, 30.279236));
+        var route = option("gaode", List.of());
+
+        CurrentRoutePassageService.RelationCheck result = service.checkRelation(route, wuchang);
+
+        assertThat(result.verdict()).isEqualTo(CurrentRoutePassageService.Verdict.UNVERIFIABLE);
+        assertThat(result.mode()).isEqualTo(CurrentRouteCheckMode.PASS_NEARBY);
+        assertThat(result.reason()).isEqualTo("ROUTE_GEOMETRY_MISSING");
     }
 
     private static AmapPoiCandidate toll(String name, Point center) {

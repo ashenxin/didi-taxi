@@ -42,6 +42,7 @@ public class PassengerRouteExtractionService {
     private static final String CURRENT_ROUTE_CHECK = "CURRENT_ROUTE_CHECK";
     private static final String ROUTE_EXISTS = "ROUTE_EXISTS";
     private static final String VIA_ROUTE_PLAN = "VIA_ROUTE_PLAN";
+    private static final String WEATHER_QUERY = "WEATHER_QUERY";
 
     private final ObjectProvider<PassengerRouteExtractionModel> extractionModelProvider;
     private final ObjectMapper objectMapper;
@@ -70,6 +71,15 @@ public class PassengerRouteExtractionService {
      * 单端点续接时明确告知模型本轮只需补哪一端；这只是字段归类提示，地点文字仍须来自本轮原话。
      */
     public ExtractEndpointsResponse extract(String userText, String expectedEndpointRole) {
+        return extract(userText, expectedEndpointRole, false);
+    }
+
+    /**
+     * `weatherContinuation` 只表示上一轮是天气回答，用于让模型把“明天呢/那里呢”识别为
+     * 天气追问；它不携带聊天正文，城市仍由 passenger-api 从已持久化天气 payload 恢复。
+     */
+    public ExtractEndpointsResponse extract(String userText, String expectedEndpointRole,
+                                            boolean weatherContinuation) {
         if (expectedEndpointRole != null
                 && !"ORIGIN".equals(expectedEndpointRole)
                 && !"DESTINATION".equals(expectedEndpointRole)) {
@@ -83,7 +93,8 @@ public class PassengerRouteExtractionService {
         CompletableFuture<org.springframework.ai.chat.model.ChatResponse> future;
         try {
             future = CompletableFuture.supplyAsync(
-                    () -> extractionModel.call(buildPrompt(userText, expectedEndpointRole)), extractionExecutor);
+                    () -> extractionModel.call(buildPrompt(userText, expectedEndpointRole,
+                            weatherContinuation)), extractionExecutor);
         } catch (RejectedExecutionException e) {
             throw new AiRouteBusinessException("AI_PROVIDER_BUSY", HttpStatus.SERVICE_UNAVAILABLE,
                     "模型服务繁忙，请稍后重试", e);
@@ -133,7 +144,9 @@ public class PassengerRouteExtractionService {
                     extracted.originName(), extracted.destinationName(),
                     extracted.originRegion(), extracted.destinationRegion(),
                     extracted.intent(), extracted.viaPlaceName(), extracted.viaPlaceRegion(),
-                    null, extracted.checkPlaceRegion(), extracted.checkMode());
+                    null, extracted.checkPlaceRegion(), extracted.checkMode(),
+                    extracted.weatherPlaceName(), extracted.weatherPlaceRegion(),
+                    extracted.weatherDayOffset());
         }
         if (VIA_ROUTE_PLAN.equals(extracted.intent())
                 && !isExactMention(extracted.viaPlaceName(), userText)) {
@@ -141,7 +154,18 @@ public class PassengerRouteExtractionService {
                     extracted.originName(), extracted.destinationName(),
                     extracted.originRegion(), extracted.destinationRegion(),
                     extracted.intent(), null, extracted.viaPlaceRegion(),
-                    extracted.checkPlaceName(), extracted.checkPlaceRegion(), extracted.checkMode());
+                    extracted.checkPlaceName(), extracted.checkPlaceRegion(), extracted.checkMode(),
+                    extracted.weatherPlaceName(), extracted.weatherPlaceRegion(),
+                    extracted.weatherDayOffset());
+        }
+        if (WEATHER_QUERY.equals(extracted.intent())
+                && !isExactMention(extracted.weatherPlaceName(), userText)) {
+            return new ExtractEndpointsResponse(
+                    extracted.originName(), extracted.destinationName(),
+                    extracted.originRegion(), extracted.destinationRegion(),
+                    extracted.intent(), extracted.viaPlaceName(), extracted.viaPlaceRegion(),
+                    extracted.checkPlaceName(), extracted.checkPlaceRegion(), extracted.checkMode(),
+                    null, extracted.weatherPlaceRegion(), extracted.weatherDayOffset());
         }
         return extracted;
     }
@@ -150,14 +174,21 @@ public class PassengerRouteExtractionService {
         return placeName == null || userText != null && userText.contains(placeName);
     }
 
-    private Prompt buildPrompt(String userText, String expectedEndpointRole) {
+    private Prompt buildPrompt(String userText, String expectedEndpointRole,
+                               boolean weatherContinuation) {
         String continuationInstruction = expectedEndpointRole == null ? "" : switch (expectedEndpointRole) {
             case "ORIGIN" -> "\n\n本轮是补充缺失的起点。只要消息表达了一个地点，即使没有‘从’字，也将该地点逐字放入 originName；不要放入 destinationName。";
             case "DESTINATION" -> "\n\n本轮是补充缺失的终点。只要消息表达了一个地点，即使没有‘到’字，也将该地点逐字放入 destinationName；不要放入 originName。";
             default -> throw new IllegalArgumentException("待补齐端点角色无效");
         };
+        String weatherInstruction = weatherContinuation
+                ? "\n\n本轮上一轮是天气回答。如果乘客只是补充日期或指代上一轮城市"
+                + "（如‘明天呢’‘那里呢’‘会下雨吗’），intent 使用 WEATHER_QUERY；"
+                + "weatherPlaceName 可为 null，由服务端复用上一轮城市。"
+                + "若乘客明确给出路线起终点或规划、改线、核查动作，仍按对应路线意图处理。"
+                : "";
         return new Prompt(java.util.List.of(
-                new SystemMessage(systemPrompt + continuationInstruction),
+                new SystemMessage(systemPrompt + continuationInstruction + weatherInstruction),
                 new UserMessage(userText)));
     }
 
@@ -202,6 +233,7 @@ public class PassengerRouteExtractionService {
             boolean currentRouteCheck = CURRENT_ROUTE_CHECK.equals(intent);
             boolean routeExists = ROUTE_EXISTS.equals(intent);
             boolean viaRoutePlan = VIA_ROUTE_PLAN.equals(intent);
+            boolean weatherQuery = WEATHER_QUERY.equals(intent);
             boolean checksPlace = currentRouteCheck || routeExists;
             return new ExtractEndpointsResponse(
                     textOrNull(node, "originName"),
@@ -213,7 +245,10 @@ public class PassengerRouteExtractionService {
                     viaRoutePlan ? textOrNull(node, "viaPlaceRegion") : null,
                     checksPlace ? textOrNull(node, "checkPlaceName") : null,
                     checksPlace ? textOrNull(node, "checkPlaceRegion") : null,
-                    currentRouteCheck ? normalizeCheckMode(textOrNull(node, "checkMode")) : null);
+                    currentRouteCheck ? normalizeCheckMode(textOrNull(node, "checkMode")) : null,
+                    weatherQuery ? textOrNull(node, "weatherPlaceName") : null,
+                    weatherQuery ? textOrNull(node, "weatherPlaceRegion") : null,
+                    weatherQuery ? intOrNull(node, "weatherDayOffset") : null);
         } catch (Exception e) {
             return null;
         }
@@ -228,15 +263,19 @@ public class PassengerRouteExtractionService {
         }
     }
 
-    /** 未识别或模型自造的核查含义统一进入追问分支。 */
+    /**
+     * 未识别、模型自造或明确为 UNSPECIFIED 的核查含义统一按“未指定动作”处理；
+     * map-service 会据此给出复合关系结论，不再追问乘客选择含义。
+     */
     private static String normalizeCheckMode(String mode) {
         if (mode == null) {
-            return CurrentRouteCheckMode.UNSPECIFIED.name();
+            return null;
         }
         try {
-            return CurrentRouteCheckMode.valueOf(mode).name();
+            String normalized = CurrentRouteCheckMode.valueOf(mode).name();
+            return CurrentRouteCheckMode.UNSPECIFIED.name().equals(normalized) ? null : normalized;
         } catch (IllegalArgumentException e) {
-            return CurrentRouteCheckMode.UNSPECIFIED.name();
+            return null;
         }
     }
 
@@ -254,6 +293,18 @@ public class PassengerRouteExtractionService {
     private static String textOrNull(JsonNode node, String field, String defaultValue) {
         String value = textOrNull(node, field);
         return value == null ? defaultValue : value;
+    }
+
+    private static Integer intOrNull(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull() || value.asText().isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(value.asText().strip());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static String loadSystemPrompt(Resource resource) {

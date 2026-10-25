@@ -3,6 +3,7 @@ package com.sx.passengerapi.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.sx.passengerapi.client.MapRouteAiClient;
+import com.sx.passengerapi.client.MapWeatherAiClient;
 import com.sx.passengerapi.client.PassengerAiConversationClient;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateRequest;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateResponse;
@@ -48,6 +49,10 @@ import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRoutePlaceChoiceV
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRoutePlaceChoicesView;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteResponse;
+import com.sx.passengerapi.client.dto.maproute.MapWeatherDtos.WeatherForecastRequest;
+import com.sx.passengerapi.client.dto.maproute.MapWeatherDtos.WeatherForecastResponse;
+import com.sx.passengerapi.client.dto.maproute.MapWeatherDtos.WeatherForecastResponse.Forecast;
+import com.sx.passengerapi.client.dto.maproute.MapWeatherDtos.WeatherForecastResponse.Location;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ai.AiSseEvents.ContentEvent;
 import com.sx.passengerapi.model.ai.AiSseEvents.TurnCompletedEvent;
@@ -84,13 +89,14 @@ class AiRouteTurnServiceTest {
 
     private final PassengerAiConversationClient passengerAi = mock(PassengerAiConversationClient.class);
     private final MapRouteAiClient mapRouteAi = mock(MapRouteAiClient.class);
+    private final MapWeatherAiClient mapWeatherAi = mock(MapWeatherAiClient.class);
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
     private AiRouteTurnService service;
     private RecordingSink sink;
 
     @BeforeEach
     void setUp() {
-        service = new AiRouteTurnService(passengerAi, mapRouteAi, objectMapper);
+        service = new AiRouteTurnService(passengerAi, mapRouteAi, mapWeatherAi, objectMapper);
         sink = new RecordingSink();
     }
 
@@ -346,6 +352,250 @@ class AiRouteTurnServiceTest {
     }
 
     @Test
+    void weatherQueryAnswersForecastWithoutRoutePreparation() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W", 5, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                "杭州", null, 1)));
+        when(mapWeatherAi.forecast(any())).thenReturn(success(new WeatherForecastResponse(
+                "OK",
+                new Location("杭州市", "浙江省", "杭州市", "西湖区", "330100"),
+                new Forecast("2026-10-26", "1", "多云", "小雨",
+                        24, 18, "东北", "1-3"),
+                null, null, "amap")));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-W", "REQ-W", 6, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "杭州明天天气", "turn-w");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "answer.completed", "turn.completed");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .isEqualTo("杭州明天（10月26日，星期一）白天多云，夜间小雨，气温 18~24℃，"
+                        + "东北风 1-3级。夜间有雨，出门记得带伞。");
+        assertThat(sink.lastContent().assistantMessage().payload().toString())
+                .contains("weather")
+                .contains("2026-10-26")
+                .contains("dayTemp=24")
+                .contains("windDirection=东北风")
+                .contains("windPower=1-3级");
+        verify(mapWeatherAi).forecast(new WeatherForecastRequest("REQ-W", "杭州", null, 1));
+        verify(mapRouteAi, never()).prepare(any());
+        verify(mapRouteAi, never()).checkCurrentRoute(any());
+    }
+
+    @Test
+    void weatherQueryWithoutCityAsksForCityAndDoesNotCallMap() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W", 5, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                null, null, 1)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-W", "REQ-W", 6, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "明天天气", "turn-w");
+
+        assertThat(sink.lastContent().assistantMessage().content())
+                .isEqualTo("请告诉我城市，例如：杭州明天天气。");
+        assertThat(sink.lastContent().assistantMessage().payload()).isNull();
+        ArgumentCaptor<AiTurnCompleteRequest> completed =
+                ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
+        verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-W"), completed.capture());
+        assertThat(completed.getValue().payloadJson())
+                .contains("\"weatherContext\"")
+                .contains("\"dayOffset\":1");
+        verify(mapWeatherAi, never()).forecast(any());
+    }
+
+    @Test
+    void weatherAskWithDateInTextPersistsDayOffset() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W", 5, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                null, null, null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-W", "REQ-W", 6, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "后天会下雨吗", "turn-w");
+
+        assertThat(sink.lastContent().assistantMessage().content())
+                .isEqualTo("请告诉我城市，例如：杭州后天天气。");
+        assertThat(sink.lastContent().assistantMessage().payload()).isNull();
+        ArgumentCaptor<AiTurnCompleteRequest> completed =
+                ArgumentCaptor.forClass(AiTurnCompleteRequest.class);
+        verify(passengerAi).complete(eq(CONVERSATION_NO), eq("REQ-W"), completed.capture());
+        assertThat(completed.getValue().payloadJson())
+                .contains("\"weatherContext\"")
+                .contains("\"dayOffset\":2");
+        verify(mapWeatherAi, never()).forecast(any());
+    }
+
+    @Test
+    void weatherCityReplyAfterAskResumesPendingWeather() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W2", 6,
+                        weatherAskReply(2), null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                "德清", null, null, null, "DEFAULT_ROUTE",
+                null, null, null, null, null, null, null, null)));
+        when(mapWeatherAi.forecast(any())).thenReturn(success(new WeatherForecastResponse(
+                "OK",
+                new Location("德清县", "浙江省", "湖州市", "德清县", "330521"),
+                new Forecast("2026-10-27", "2", "小雨", "小雨", 22, 16, "东北", "1-3"),
+                null, null, "amap")));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W2"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse(
+                        "AIM-W2", "REQ-W2", 7, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "德清", "turn-w2");
+
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("德清后天")
+                .doesNotContain("请告诉我起点和终点");
+        verify(mapWeatherAi).forecast(new WeatherForecastRequest("REQ-W2", "德清", null, 2));
+        ArgumentCaptor<ExtractEndpointsRequest> extract =
+                ArgumentCaptor.forClass(ExtractEndpointsRequest.class);
+        verify(mapRouteAi).extract(extract.capture());
+        assertThat(extract.getValue().weatherContinuation()).isTrue();
+    }
+
+    @Test
+    void weatherQueryOutOfRangeExplainsSupportedDays() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W", 5, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                "杭州", null, -1)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-W", "REQ-W", 6, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "下周六杭州天气", "turn-w");
+
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("今天、明天、后天、大后天");
+        verify(mapWeatherAi, never()).forecast(any());
+    }
+
+    @Test
+    void weatherQueryPlaceNotFoundExplainsWithoutFailure() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W", 5, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                "不存在市", null, 0)));
+        when(mapWeatherAi.forecast(any())).thenReturn(success(new WeatherForecastResponse(
+                "PLACE_NOT_FOUND", null, null, "PLACE_NOT_FOUND",
+                "没有找到「不存在市」对应的城市或区县", null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-W", "REQ-W", 6, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "不存在市今天天气", "turn-w");
+
+        assertThat(sink.eventNames()).containsExactly("turn.started", "answer.completed", "turn.completed");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .contains("没有找到")
+                .contains("补充省份");
+    }
+
+    @Test
+    void weatherQueryUpstreamFailureReturnsStableFailure() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W", 5, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                "杭州", null, 1)));
+        when(mapWeatherAi.forecast(any()))
+                .thenThrow(feignError(503, "X-Ai-Error-Code", "AI_WEATHER_UNAVAILABLE"));
+        when(passengerAi.fail(eq(CONVERSATION_NO), eq("REQ-W"), any()))
+                .thenReturn(success(new com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiTurnFailResponse(
+                        null, "REQ-W", 7L)));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "杭州明天天气", "turn-w");
+
+        assertThat(sink.lastFailed().code()).isEqualTo("AI_WEATHER_UNAVAILABLE");
+        assertThat(sink.lastFailed().message()).contains("天气服务暂时不可用");
+    }
+
+    @Test
+    void weatherFollowUpReusesPreviousWeatherCityAndDisclosesIt() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W2", 6,
+                        weatherReply("杭州市"), null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                null, null, 2)));
+        when(mapWeatherAi.forecast(any())).thenReturn(success(new WeatherForecastResponse(
+                "OK",
+                new Location("杭州市", "浙江省", "杭州市", "西湖区", "330100"),
+                new Forecast("2026-10-27", "2", "晴", "晴", 26, 18, "东北", "1-3"),
+                null, null, "amap")));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W2"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse(
+                        "AIM-W2", "REQ-W2", 7, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "后天呢", "turn-w2");
+
+        assertThat(sink.lastContent().assistantMessage().content())
+                .startsWith("按你刚才说的杭州查：")
+                .contains("杭州后天");
+        verify(mapWeatherAi).forecast(new WeatherForecastRequest("REQ-W2", "杭州", null, 2));
+        ArgumentCaptor<ExtractEndpointsRequest> extract =
+                ArgumentCaptor.forClass(ExtractEndpointsRequest.class);
+        verify(mapRouteAi).extract(extract.capture());
+        assertThat(extract.getValue().weatherContinuation()).isTrue();
+    }
+
+    @Test
+    void explicitWeatherCityOverridesPreviousWeatherContext() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W2", 6,
+                        weatherReply("杭州市"), null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                "上海", null, 1)));
+        when(mapWeatherAi.forecast(any())).thenReturn(success(new WeatherForecastResponse(
+                "OK",
+                new Location("上海市", "上海市", "上海市", "黄浦区", "310000"),
+                new Forecast("2026-10-26", "1", "多云", "多云", 25, 19, "东南风", "3级"),
+                null, null, "amap")));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W2"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse(
+                        "AIM-W2", "REQ-W2", 7, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "上海明天天气", "turn-w2");
+
+        assertThat(sink.lastContent().assistantMessage().content())
+                .doesNotStartWith("按你刚才说的")
+                .contains("上海明天");
+        verify(mapWeatherAi).forecast(new WeatherForecastRequest("REQ-W2", "上海", null, 1));
+    }
+
+    @Test
+    void weatherFollowUpWithoutWeatherContextAsksForCity() {
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-W2", 6,
+                        routeReply("{\"routeCard\":{\"routeRef\":\"route-ref\"}}"), null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "WEATHER_QUERY", null, null, null, null, null,
+                null, null, 1)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-W2"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse(
+                        "AIM-W2", "REQ-W2", 7, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "明天天气", "turn-w2");
+
+        assertThat(sink.lastContent().assistantMessage().content())
+                .isEqualTo("请告诉我城市，例如：杭州明天天气。");
+        verify(mapWeatherAi, never()).forecast(any());
+        ArgumentCaptor<ExtractEndpointsRequest> extract =
+                ArgumentCaptor.forClass(ExtractEndpointsRequest.class);
+        verify(mapRouteAi).extract(extract.capture());
+        assertThat(extract.getValue().weatherContinuation()).isFalse();
+    }
+
+    @Test
     void currentRouteCheckUsesLatestPersistedRouteCardAndReturnsPassedVerdict() {
         String routeRef = card().routeRef();
         when(passengerAi.begin(eq(CONVERSATION_NO), any()))
@@ -372,6 +622,41 @@ class AiRouteTurnServiceTest {
                 CUSTOMER_ID, CONVERSATION_NO, routeRef, 5,
                 "德清收费站", "湖州市德清县", "VISIT_PLACE", "当前路线经过德清收费站吗"));
         verify(mapRouteAi, never()).prepare(any());
+    }
+
+    @Test
+    void currentRouteCheckRelationAnswersNearbyWithoutAskingForMeaning() {
+        String routeRef = card().routeRef();
+        when(passengerAi.begin(eq(CONVERSATION_NO), any()))
+                .thenReturn(success(new AiTurnBeginResponse("REQ-3", 5, null, null)));
+        when(mapRouteAi.extract(any())).thenReturn(success(new ExtractEndpointsResponse(
+                null, null, null, null, "CURRENT_ROUTE_CHECK", "五常收费站", null)));
+        when(passengerAi.listMessages(CONVERSATION_NO, CUSTOMER_ID, 50, null))
+                .thenReturn(success(routeHistory(routeRef)));
+        when(mapRouteAi.checkCurrentRoute(any())).thenReturn(success(new CurrentRouteCheckResponse(
+                "CHECKED", "PASSED", "ROUTE_PASSES_NEARBY_ONLY",
+                "路线折线与目标地点最近约652米，但没有证据表明实际通过该地点",
+                new CurrentRouteCheckTargetView("五常收费站", "收费站", "杭州",
+                        "余杭区", "TOLL_STATION"), "PASS_NEARBY", null, null)));
+        when(passengerAi.complete(eq(CONVERSATION_NO), eq("REQ-3"), any()))
+                .thenReturn(success(new AiTurnCompleteResponse("AIM-6", "REQ-3", 6, LocalDateTime.now())));
+
+        service.execute(sink, CUSTOMER_ID, CONVERSATION_NO, "这条路线经过五常收费站吗", "turn-3");
+
+        assertThat(sink.eventNames())
+                .containsExactly("turn.started", "answer.completed", "turn.completed");
+        assertThat(sink.eventNames()).doesNotContain("route-check.choices");
+        assertThat(sink.lastContent().assistantMessage().content())
+                .isEqualTo("根据当前路线的地图信息，这条路线只是从「五常收费站」附近经过，"
+                        + "不能确认实际通过该收费站。具体来说，路线折线与目标地点最近约652米，"
+                        + "但没有证据表明实际通过该地点。"
+                        + "如果你要核查的是某个具体入口/出口，请补充入口/出口名称。");
+        assertThat(sink.lastContent().assistantMessage().payload().toString())
+                .contains("ROUTE_PASSES_NEARBY_ONLY")
+                .contains("checkMode=PASS_NEARBY");
+        verify(mapRouteAi).checkCurrentRoute(new CurrentRouteCheckRequest(
+                CUSTOMER_ID, CONVERSATION_NO, routeRef, 5,
+                "五常收费站", null, null, "这条路线经过五常收费站吗"));
     }
 
     @Test
@@ -431,7 +716,8 @@ class AiRouteTurnServiceTest {
         assertThat(sink.eventNames()).containsExactly("turn.started", "route.card", "turn.completed");
         assertThat(sink.lastContent().assistantMessage().content())
                 .contains("这是本轮新生成的默认路线。")
-                .contains("会经过「太湖服务区」附近");
+                .contains("只是从「太湖服务区」附近经过")
+                .contains("不能确认实际通过该服务区");
         Map<String, Object> payload = sink.lastContent().assistantMessage().payload();
         assertThat(payload).containsOnlyKeys("routeCard", "routeCheck");
         assertThat(payload.toString()).contains("polyline", routeRef);
@@ -841,7 +1127,8 @@ class AiRouteTurnServiceTest {
 
         assertThat(sink.eventNames()).containsExactly("turn.started", "answer.completed", "turn.completed");
         assertThat(sink.lastContent().assistantMessage().content())
-                .contains("会经过「南浔西收费站(S47湖杭高速出口)」附近")
+                .contains("只是从「南浔西收费站(S47湖杭高速出口)」附近经过")
+                .contains("不能确认实际通过该收费站")
                 .contains("最近约452米");
         verify(mapRouteAi).selectCurrentRouteCheckMode(new CurrentRouteCheckModeChoiceRequest(
                 CUSTOMER_ID, CONVERSATION_NO, routeRef, 9, 11, taskNo, "PASS_NEARBY"));
@@ -1215,6 +1502,22 @@ class AiRouteTurnServiceTest {
     private static AssistantMessageView routeReply(String payloadJson) {
         return new AssistantMessageView("AIM-4", "REQ-2", "ASSISTANT", "ROUTE_CARD",
                 "已为您规划路线", payloadJson, 4, LocalDateTime.now(), "COMPLETED", null, null);
+    }
+
+    private static AssistantMessageView weatherReply(String city) {
+        String payload = "{\"weather\":{\"location\":{\"name\":\"" + city + "\",\"city\":\""
+                + city + "\",\"district\":\"西湖区\",\"adcode\":\"330100\"},"
+                + "\"date\":\"2026-10-26\"}}";
+        return new AssistantMessageView("AIM-W", "REQ-W", "ASSISTANT", "TEXT",
+                "杭州明天天气", payload, 5, LocalDateTime.now(), "COMPLETED", null, null);
+    }
+
+    private static AssistantMessageView weatherAskReply(Integer dayOffset) {
+        String payload = dayOffset == null
+                ? "{\"weatherContext\":{}}"
+                : "{\"weatherContext\":{\"dayOffset\":" + dayOffset + "}}";
+        return new AssistantMessageView("AIM-W", "REQ-W", "ASSISTANT", "TEXT",
+                "请告诉我城市", payload, 5, LocalDateTime.now(), "COMPLETED", null, null);
     }
 
     private static AiMessageListResponse routeHistory(String routeRef) {

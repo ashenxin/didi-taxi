@@ -7,6 +7,7 @@ import com.sx.map.exception.AiRouteBusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -24,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class PassengerRouteExtractionServiceTest {
@@ -119,7 +121,7 @@ class PassengerRouteExtractionServiceTest {
         assertThat(result.intent()).isEqualTo("CURRENT_ROUTE_CHECK");
         assertThat(result.checkPlaceName()).isEqualTo("德清收费站");
         assertThat(result.checkPlaceRegion()).isEqualTo("湖州市德清县");
-        assertThat(result.checkMode()).isEqualTo("UNSPECIFIED");
+        assertThat(result.checkMode()).isNull();
     }
 
     @Test
@@ -180,7 +182,7 @@ class PassengerRouteExtractionServiceTest {
 
         assertThat(result.intent()).isEqualTo("CURRENT_ROUTE_CHECK");
         assertThat(result.checkPlaceName()).isEqualTo("三墩高速路口");
-        assertThat(result.checkMode()).isEqualTo("UNSPECIFIED");
+        assertThat(result.checkMode()).isNull();
     }
 
     @Test
@@ -197,7 +199,57 @@ class PassengerRouteExtractionServiceTest {
 
         ExtractEndpointsResponse unknown = service.extract("这条路线经过南浔西出口吗");
 
-        assertThat(unknown.checkMode()).isEqualTo("UNSPECIFIED");
+        assertThat(unknown.checkMode()).isNull();
+    }
+
+    @Test
+    void weatherContinuationAddsContextInstructionToPrompt() {
+        modelReturns("{\"intent\":\"WEATHER_QUERY\",\"weatherDayOffset\":1}");
+
+        ExtractEndpointsResponse result = service.extract("明天呢", null, true);
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        assertThat(prompt.getValue().getInstructions().get(0).getText())
+                .contains("上一轮是天气回答")
+                .contains("由服务端复用上一轮城市");
+        assertThat(result.intent()).isEqualTo("WEATHER_QUERY");
+        assertThat(result.weatherDayOffset()).isEqualTo(1);
+    }
+
+    @Test
+    void parsesWeatherQueryFieldsAndKeepsOnlyExactCityMention() {
+        modelReturns("{\"intent\":\"WEATHER_QUERY\",\"weatherPlaceName\":\"杭州\","
+                + "\"weatherDayOffset\":1}");
+
+        ExtractEndpointsResponse result = service.extract("杭州明天天气");
+
+        assertThat(result.intent()).isEqualTo("WEATHER_QUERY");
+        assertThat(result.weatherPlaceName()).isEqualTo("杭州");
+        assertThat(result.weatherDayOffset()).isEqualTo(1);
+        assertThat(result.checkMode()).isNull();
+
+        modelReturns("{\"intent\":\"WEATHER_QUERY\",\"weatherPlaceName\":\"杭州\","
+                + "\"weatherDayOffset\":1}");
+
+        ExtractEndpointsResponse unmentioned = service.extract("明天天气");
+
+        assertThat(unmentioned.intent()).isEqualTo("WEATHER_QUERY");
+        assertThat(unmentioned.weatherPlaceName()).isNull();
+        assertThat(unmentioned.weatherDayOffset()).isEqualTo(1);
+    }
+
+    @Test
+    void nonWeatherIntentDropsWeatherFields() {
+        modelReturns("{\"intent\":\"DEFAULT_ROUTE\",\"originName\":\"德清\","
+                + "\"destinationName\":\"杭州\",\"weatherPlaceName\":\"杭州\","
+                + "\"weatherDayOffset\":1}");
+
+        ExtractEndpointsResponse result = service.extract("从德清到杭州");
+
+        assertThat(result.intent()).isEqualTo("DEFAULT_ROUTE");
+        assertThat(result.weatherPlaceName()).isNull();
+        assertThat(result.weatherDayOffset()).isNull();
     }
 
     @Test

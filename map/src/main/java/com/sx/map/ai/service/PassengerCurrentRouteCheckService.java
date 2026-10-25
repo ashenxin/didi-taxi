@@ -11,7 +11,6 @@ import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.ChoiceSummary;
 import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.ChoiceTask;
 import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.PlaceCandidate;
 import com.sx.map.ai.service.PassengerRoutePlaceChoiceCache.SelectedChoice;
-import com.sx.map.ai.service.PassengerCurrentRouteClarificationCache.ClarificationTask;
 import com.sx.map.ai.service.PassengerCurrentRouteClarificationCache.SelectedMode;
 import com.sx.map.ai.tool.PassengerRoutePoiTools;
 import com.sx.map.model.dto.AmapPoiCandidate;
@@ -21,8 +20,11 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.function.Predicate;
 
 /**
  * 编排 AI 客服对“当前这条路线是否经过指定地点”的核查。
@@ -58,8 +60,11 @@ public class PassengerCurrentRouteCheckService {
     }
 
     /**
-     * 首次核查指定地点。名称完全一致的唯一可信候选可直接核查；重名或地图规范名称发生变化时，
-     * 只生成短时地点选项等待乘客确认，不能把地图的模糊匹配静默升级为乘客的真实意图。
+     * 首次核查指定地点。
+     *
+     * 乘客明确说“某收费站”且没有指定入口/出口时，按站名过滤同站入口/出口变体并做站级评估，
+     * 不再要求乘客选择方向；只有明确问入口/出口、站名本身有歧义，或常规地点名称与地图
+     * 规范名称不一致时，才生成短时地点选项等待确认。
      */
     public Result check(long customerId,
                         String conversationNo,
@@ -92,7 +97,13 @@ public class PassengerCurrentRouteCheckService {
         if (candidates.isEmpty()) {
             return Result.placeUnverifiable("地图结果不属于收费站、服务区或加油站，或缺少可核查的位置");
         }
-        if (candidates.size() > MAX_CHOICES) {
+        String stationBase = requestedStationBase(placeName);
+        boolean stationIntent = (requestedMode == CurrentRouteCheckMode.UNSPECIFIED
+                || requestedMode == CurrentRouteCheckMode.PASS_NEARBY)
+                && placeName.contains("收费站")
+                && !containsDirectionMarker(placeName)
+                && stationBase.length() >= 2;
+        if (!stationIntent && candidates.size() > MAX_CHOICES) {
             return Result.placeUnverifiable("同名地点过多，请补充城市或更具体的位置");
         }
 
@@ -100,11 +111,27 @@ public class PassengerCurrentRouteCheckService {
         if (latest == null) {
             return Result.contextUnavailable();
         }
+
+        if (stationIntent) {
+            List<Candidate> stationCandidates = candidates.stream()
+                    .filter(candidate -> candidate.cached().businessType() == BusinessType.TOLL_STATION
+                            && stationBaseOf(candidate.cached()).contains(stationBase))
+                    .toList();
+            if (stationCandidates.isEmpty()) {
+                return Result.placeNotFound();
+            }
+            Map<String, List<Candidate>> groups = groupByStation(stationCandidates);
+            if (groups.size() > 1) {
+                return Result.placeUnverifiable("找到多个同名收费站，请补充城市或地址");
+            }
+            return checkStationGroup(latest, groups.values().iterator().next());
+        }
+
         // 地图规范名称与乘客原词不一致时，即使只有一个结果也必须确认。
         // 这既允许“三墩高速路口”解析为“三墩收费站”，也防止把“五常”静默升级成收费站。
         if (candidates.size() == 1 && samePlaceName(placeName, candidates.getFirst().raw().getName())) {
             Candidate candidate = candidates.getFirst();
-            return checkOrClarify(latest, requestVersion, userText, requestedMode, candidate.cached());
+            return checkRequestedMode(latest, requestedMode, candidate.cached());
         }
 
         ChoiceTask task = placeChoiceCache.saveCurrentRouteCheck(customerId, latest.conversationNo(),
@@ -115,7 +142,7 @@ public class PassengerCurrentRouteCheckService {
         return Result.placeChoices(task.taskNo(), task.summaries(), task.expiresAt());
     }
 
-    /** 兼容旧内部调用；未提供语义时必须进入追问。 */
+    /** 兼容旧内部调用；未提供语义时按“实际通过/仅附近/不经过/无法确认”核查。 */
     public Result check(long customerId, String conversationNo, String routeRef,
                         long requestVersion, String placeName, String placeRegion,
                         String originalUserText) {
@@ -154,8 +181,7 @@ public class PassengerCurrentRouteCheckService {
                 || !latest.destination().equals(selected.destination())) {
             return Result.contextUnavailable();
         }
-        return checkOrClarify(latest, currentRequestVersion, selected.originalUserText(),
-                selected.checkMode(), selected.candidate());
+        return checkRequestedMode(latest, selected.checkMode(), selected.candidate());
     }
 
     /** 恢复含义选项时仍重新验证当前路线；选项不能携带或覆盖地点与路线事实。 */
@@ -192,23 +218,107 @@ public class PassengerCurrentRouteCheckService {
                 snapshot.conversationNo(), snapshot.conditionVersion()).orElse(null);
     }
 
-    private Result checkOrClarify(PassengerRouteSnapshot snapshot,
-                                  long requestVersion,
-                                  String originalUserText,
-                                  CurrentRouteCheckMode checkMode,
-                                  PlaceCandidate candidate) {
-        if (checkMode != CurrentRouteCheckMode.UNSPECIFIED) {
+    /** “三墩高速收费站” → “三墩”；只用于站级核查的站名相关性过滤。 */
+    private static String requestedStationBase(String placeName) {
+        String base = placeName.split("[（(]", 2)[0].strip();
+        return base.replace("高速收费站", "")
+                .replace("收费站", "")
+                .replace("高速路口", "")
+                .replace("高速口", "")
+                .replace("高速", "")
+                .strip();
+    }
+
+    /** 乘客明确问入口/出口或方向时，保留方向级候选，不合并成站级。 */
+    private static boolean containsDirectionMarker(String placeName) {
+        return placeName.contains("入口") || placeName.contains("出口")
+                || placeName.contains("东向") || placeName.contains("西向")
+                || placeName.contains("南向") || placeName.contains("北向");
+    }
+
+    /** 地图 POI 的站名部分，例如“三墩收费站(G25长深高速东入口)” → “三墩收费站”。 */
+    private static String stationBaseOf(PlaceCandidate candidate) {
+        String name = candidate.place().name().split("[（(]", 2)[0].strip();
+        return name.replaceFirst("(入口|出口)$", "").strip();
+    }
+
+    /** 同一收费站的不同入口/出口/方向变体归为一组；不同城市同名站不合并。 */
+    private static Map<String, List<Candidate>> groupByStation(List<Candidate> candidates) {
+        Map<String, List<Candidate>> groups = new LinkedHashMap<>();
+        for (Candidate candidate : candidates) {
+            PlaceCandidate cached = candidate.cached();
+            String location = hasText(cached.place().city())
+                    ? cached.place().city().strip() : cached.place().address();
+            String station = stationBaseOf(cached).replace("高速收费站", "收费站");
+            String key = station + "|" + (location == null ? "" : location.strip());
+            groups.computeIfAbsent(key, ignored -> new ArrayList<>()).add(candidate);
+        }
+        return groups;
+    }
+
+    /**
+     * 站级评估：同一收费站的所有入口/出口都作为该站的 access point。
+     * 有任一实际通过证据即回答通过；否则有任一附近证据回答附近；全部远离回答不经过；
+     * 其余情况无法确认。目标地点展示为站名，不再让乘客选择方向。
+     */
+    private Result checkStationGroup(PassengerRouteSnapshot snapshot, List<Candidate> group) {
+        if (group.isEmpty()) {
+            return Result.placeNotFound();
+        }
+        List<CurrentRoutePassageService.RelationCheck> checks = group.stream()
+                .map(candidate -> passageService.checkRelation(
+                        snapshot, toRawCandidate(candidate.cached())))
+                .toList();
+        CurrentRoutePassageService.RelationCheck through = firstMatching(checks,
+                check -> check.verdict() == CurrentRoutePassageService.Verdict.PASSED
+                        && check.mode() == CurrentRouteCheckMode.VISIT_PLACE);
+        if (through != null) {
+            return stationResult(group, through);
+        }
+        CurrentRoutePassageService.RelationCheck nearby = firstMatching(checks,
+                check -> check.verdict() == CurrentRoutePassageService.Verdict.PASSED
+                        && check.mode() == CurrentRouteCheckMode.PASS_NEARBY);
+        if (nearby != null) {
+            return stationResult(group, nearby);
+        }
+        if (checks.stream().allMatch(check ->
+                check.verdict() == CurrentRoutePassageService.Verdict.NOT_PASSED)) {
+            return stationResult(group, checks.getFirst());
+        }
+        CurrentRoutePassageService.RelationCheck unknown = firstMatching(checks,
+                check -> check.verdict() == CurrentRoutePassageService.Verdict.UNVERIFIABLE);
+        return stationResult(group, unknown == null ? checks.getFirst() : unknown);
+    }
+
+    private static CurrentRoutePassageService.RelationCheck firstMatching(
+            List<CurrentRoutePassageService.RelationCheck> checks,
+            Predicate<CurrentRoutePassageService.RelationCheck> predicate) {
+        return checks.stream().filter(predicate).findFirst().orElse(null);
+    }
+
+    private static Result stationResult(List<Candidate> group,
+                                        CurrentRoutePassageService.RelationCheck check) {
+        PlaceCandidate first = group.getFirst().cached();
+        String stationName = stationBaseOf(first).replace("高速收费站", "收费站");
+        TargetSummary target = new TargetSummary(stationName, first.displayType(),
+                first.place().city(), first.place().address(), BusinessType.TOLL_STATION);
+        return new Result(Status.CHECKED, check.verdict(), check.reason(), check.detail(),
+                target, check.mode(), null, List.of(), null, null);
+    }
+
+    /**
+     * 乘客没有指定“驶入/驶出/进入”动作时，不再追问核查含义，直接给出复合关系结论。
+     * 显式动作仍按原有动作证据和方向一致性核查。
+     */
+    private Result checkRequestedMode(PassengerRouteSnapshot snapshot,
+                                      CurrentRouteCheckMode checkMode,
+                                      PlaceCandidate candidate) {
+        if (checkMode != null && checkMode != CurrentRouteCheckMode.UNSPECIFIED) {
             return checked(passageService.check(snapshot, toRawCandidate(candidate), checkMode),
                     candidate, checkMode);
         }
-        List<CurrentRouteCheckMode> modes = clarificationModes(candidate);
-        ClarificationTask task = clarificationCache.save(snapshot, requestVersion,
-                originalUserText, candidate, modes);
-        TargetSummary target = targetSummary(candidate);
-        List<ModeChoiceSummary> choices = modes.stream()
-                .map(mode -> new ModeChoiceSummary(mode.name(), modeLabel(mode, candidate.businessType())))
-                .toList();
-        return Result.modeChoices(new ModeClarification(task.taskNo(), target, choices, task.expiresAt()));
+        return checkedRelation(passageService.checkRelation(snapshot, toRawCandidate(candidate)),
+                candidate);
     }
 
     private static Result checked(CurrentRoutePassageService.CheckResult check,
@@ -219,35 +329,16 @@ public class PassengerCurrentRouteCheckService {
                 target, checkMode, null, List.of(), null, null);
     }
 
+    private static Result checkedRelation(CurrentRoutePassageService.RelationCheck check,
+                                          PlaceCandidate candidate) {
+        return new Result(Status.CHECKED, check.verdict(), check.reason(), check.detail(),
+                targetSummary(candidate), check.mode(), null, List.of(), null, null);
+    }
+
     private static TargetSummary targetSummary(PlaceCandidate candidate) {
         TargetSummary target = new TargetSummary(candidate.place().name(), candidate.displayType(),
                 candidate.place().city(), candidate.place().address(), candidate.businessType());
         return target;
-    }
-
-    private static List<CurrentRouteCheckMode> clarificationModes(PlaceCandidate candidate) {
-        if (candidate.businessType() != BusinessType.TOLL_STATION) {
-            return List.of(CurrentRouteCheckMode.PASS_NEARBY, CurrentRouteCheckMode.VISIT_PLACE);
-        }
-        String name = candidate.place().name();
-        if (name.contains("出口")) {
-            return List.of(CurrentRouteCheckMode.PASS_NEARBY, CurrentRouteCheckMode.USE_EXIT);
-        }
-        if (name.contains("入口")) {
-            return List.of(CurrentRouteCheckMode.PASS_NEARBY, CurrentRouteCheckMode.ENTER_HIGHWAY);
-        }
-        return List.of(CurrentRouteCheckMode.PASS_NEARBY, CurrentRouteCheckMode.VISIT_PLACE);
-    }
-
-    private static String modeLabel(CurrentRouteCheckMode mode, BusinessType businessType) {
-        return switch (mode) {
-            case PASS_NEARBY -> "沿路线经过该地点附近";
-            case USE_EXIT -> "从该出口驶出高速";
-            case ENTER_HIGHWAY -> "从该入口驶入高速";
-            case VISIT_PLACE -> businessType == BusinessType.TOLL_STATION
-                    ? "实际通过该收费站" : "实际进入该地点";
-            case UNSPECIFIED -> throw new IllegalArgumentException("不能展示未明确的核查含义");
-        };
     }
 
     private Candidate trustedCandidate(AmapPoiCandidate raw) {
@@ -392,11 +483,6 @@ public class PassengerCurrentRouteCheckService {
         private static Result placeChoices(String taskNo, List<ChoiceSummary> choices, Instant expiresAt) {
             return new Result(Status.NEEDS_PLACE_CHOICE, null, null, null,
                     null, null, taskNo, choices, expiresAt, null);
-        }
-
-        private static Result modeChoices(ModeClarification clarification) {
-            return new Result(Status.NEEDS_CHECK_MODE_CHOICE, null, null, null,
-                    clarification.target(), null, null, List.of(), clarification.expiresAt(), clarification);
         }
 
         private static Result placeNotFound() {

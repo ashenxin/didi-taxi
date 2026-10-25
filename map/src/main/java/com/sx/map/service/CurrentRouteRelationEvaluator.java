@@ -45,6 +45,48 @@ public class CurrentRouteRelationEvaluator {
         return evaluateAction(route, place, navigationPoints, mode);
     }
 
+    /**
+     * 回答“这条路线是否经过 X”时不要求乘客先选择核查含义。
+     *
+     * 按证据强弱给出复合关系：实际通过/到达优先；没有到达证据时，路线进入地点附近
+     * 只能回答“仅附近经过”；明显远离回答“不经过”；缺少路线几何或地点位置时回答
+     * “无法确认”。显式上/下高速或进入动作仍由 {@link #evaluate} 核对动作和方向，
+     * 不能由本方法替乘客猜测。
+     */
+    public RelationEvaluation evaluateRelation(AmapDrivingRouteService.DrivingRouteOption route,
+                                                AmapPoiCandidate place,
+                                                List<Point> navigationPoints) {
+        if (place == null) {
+            return RelationEvaluation.unknown("PLACE_MISSING", "指定地点尚未确认");
+        }
+        if (route == null || route.route() == null || route.route().getPolyline() == null
+                || route.route().getPolyline().size() < 2) {
+            return RelationEvaluation.unknown("ROUTE_GEOMETRY_MISSING", "当前路线缺少完整折线");
+        }
+        WaypointRouteCandidateEvaluator.Evaluation arrival = arrivalEvaluator.evaluate(
+                place, navigationPoints, route);
+        if (arrival.status() == WaypointRouteCandidateEvaluator.Status.ACCEPTED) {
+            return RelationEvaluation.through("PLACE_ARRIVAL_MATCHED", arrival.detail());
+        }
+        if (arrival.status() == WaypointRouteCandidateEvaluator.Status.REJECTED) {
+            // 已证明路线沿目标站附近的高速主线驶过：只能回答“附近经过”，不能回答“不经过附近”。
+            if (arrival.reason() == WaypointRouteCandidateEvaluator.Reason.MAINLINE_BYPASSES_TOLL_STATION) {
+                return RelationEvaluation.nearby(arrival.reason().name(), arrival.detail());
+            }
+            return RelationEvaluation.notOnRoute(arrival.reason().name(), arrival.detail());
+        }
+        // 没有到达证据时只能用折线距离判断是否靠近；不能把靠近升级成实际通过。
+        Evaluation nearby = evaluateNearby(route.route().getPolyline(), place, navigationPoints);
+        if (nearby.status() == Status.ACCEPTED) {
+            return RelationEvaluation.nearby("ROUTE_PASSES_NEARBY_ONLY",
+                    nearby.detail() + "，但没有证据表明实际通过该地点");
+        }
+        if (nearby.status() == Status.REJECTED) {
+            return RelationEvaluation.notOnRoute("ROUTE_NOT_NEARBY", nearby.detail());
+        }
+        return RelationEvaluation.unknown(nearby.reason(), nearby.detail());
+    }
+
     private Evaluation evaluateNearby(List<Point> routePolyline,
                                       AmapPoiCandidate place,
                                       List<Point> navigationPoints) {
@@ -172,6 +214,32 @@ public class CurrentRouteRelationEvaluator {
     }
 
     public enum Status { ACCEPTED, REJECTED, AMBIGUOUS, CONFLICT }
+
+    /** 未指定动作时，路线与地点的复合关系；不向乘客追问具体含义。 */
+    public enum Relation { THROUGH, NEARBY, NOT_ON_ROUTE, UNKNOWN }
+
+    public record RelationEvaluation(Relation relation, CurrentRouteCheckMode mode,
+                                     String reason, String detail) {
+        private static RelationEvaluation through(String reason, String detail) {
+            return new RelationEvaluation(Relation.THROUGH, CurrentRouteCheckMode.VISIT_PLACE,
+                    reason, detail);
+        }
+
+        private static RelationEvaluation nearby(String reason, String detail) {
+            return new RelationEvaluation(Relation.NEARBY, CurrentRouteCheckMode.PASS_NEARBY,
+                    reason, detail);
+        }
+
+        private static RelationEvaluation notOnRoute(String reason, String detail) {
+            return new RelationEvaluation(Relation.NOT_ON_ROUTE, CurrentRouteCheckMode.PASS_NEARBY,
+                    reason, detail);
+        }
+
+        private static RelationEvaluation unknown(String reason, String detail) {
+            return new RelationEvaluation(Relation.UNKNOWN, CurrentRouteCheckMode.PASS_NEARBY,
+                    reason, detail);
+        }
+    }
 
     public record Evaluation(Status status, String reason, String detail) {
         private static Evaluation accepted(String reason, String detail) {

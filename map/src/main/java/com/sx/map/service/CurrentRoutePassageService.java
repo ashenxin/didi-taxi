@@ -70,6 +70,35 @@ public class CurrentRoutePassageService {
         return new CheckResult(verdict, evaluation.reason(), evaluation.detail());
     }
 
+    /**
+     * 未指定“驶入/驶出/进入”动作时，按实际通过、仅附近经过、不经过、无法确认
+     * 给出复合关系，不再要求乘客先选择核查含义。
+     */
+    public RelationCheck checkRelation(PassengerRouteSnapshot currentRoute, AmapPoiCandidate place) {
+        return checkRelation(toDrivingRouteOption(currentRoute), place);
+    }
+
+    public RelationCheck checkRelation(AmapDrivingRouteService.DrivingRouteOption currentRoute,
+                                       AmapPoiCandidate place) {
+        if (currentRoute == null || currentRoute.route() == null
+                || !"gaode".equals(currentRoute.route().getProvider())) {
+            return new RelationCheck(Verdict.UNVERIFIABLE, CurrentRouteCheckMode.PASS_NEARBY,
+                    "REAL_ROUTE_REQUIRED", "当前路线不是可核查的高德真实路线");
+        }
+        if (place == null) {
+            return new RelationCheck(Verdict.UNVERIFIABLE, CurrentRouteCheckMode.PASS_NEARBY,
+                    "PLACE_MISSING", "指定地点尚未确认");
+        }
+        CurrentRouteRelationEvaluator.RelationEvaluation evaluation = evaluator.evaluateRelation(
+                currentRoute, place, navigationPoints(place));
+        Verdict verdict = switch (evaluation.relation()) {
+            case THROUGH, NEARBY -> Verdict.PASSED;
+            case NOT_ON_ROUTE -> Verdict.NOT_PASSED;
+            case UNKNOWN -> Verdict.UNVERIFIABLE;
+        };
+        return new RelationCheck(verdict, evaluation.mode(), evaluation.reason(), evaluation.detail());
+    }
+
     private static AmapDrivingRouteService.DrivingRouteOption toDrivingRouteOption(
             PassengerRouteSnapshot snapshot) {
         if (snapshot == null) {
@@ -130,5 +159,10 @@ public class CurrentRoutePassageService {
     public enum Verdict { PASSED, NOT_PASSED, UNVERIFIABLE, CONFLICT }
 
     public record CheckResult(Verdict verdict, String reason, String detail) {
+    }
+
+    /** 复合关系结论：checkMode 是服务端按证据选定的展示语义，不是乘客选择。 */
+    public record RelationCheck(Verdict verdict, CurrentRouteCheckMode mode,
+                                String reason, String detail) {
     }
 }

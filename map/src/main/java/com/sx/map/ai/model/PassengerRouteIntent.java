@@ -9,5 +9,6 @@ public enum PassengerRouteIntent {
     ROUTE_EXISTS,
     VIA_ROUTE_PLAN,
     TOLL_ROUTE_OPTIONS,
+    WEATHER_QUERY,
     DEFAULT_ROUTE
 }

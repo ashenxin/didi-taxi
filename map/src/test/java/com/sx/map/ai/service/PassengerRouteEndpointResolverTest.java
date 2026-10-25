@@ -116,6 +116,24 @@ class PassengerRouteEndpointResolverTest {
     }
 
     @Test
+    void originDoesNotOfferHighwayEntranceWithoutTollStationIdentity() {
+        AmapPoiCandidate noToll = poi("P-NO-TOLL", "德清高速入口", "湖州", "德清", 120, 30);
+        noToll.setType("交通设施;高速路入口");
+        AmapPoiCandidate toll = poi("P-TOLL", "德清收费站(G25长深高速入口)",
+                "湖州", "德清", 120.001, 30);
+        toll.setType("交通设施;高速路入口");
+        when(poiSearchService.search("德清高速入口", null, null)).thenReturn(List.of(noToll, toll));
+
+        Resolution result = resolver.resolve("德清高速入口", null, EndpointRole.ORIGIN);
+
+        assertThat(result.candidates())
+                .extracting(PassengerRouteEndpointResolver.CandidateSummary::name)
+                .containsExactly(toll.getName());
+        assertThat(result.selectableCandidates()).singleElement()
+                .satisfies(choice -> assertThat(choice.place().placeId()).isEqualTo("P-TOLL"));
+    }
+
+    @Test
     void destinationFiltersHighwayEntrancesAndKeepsOrdinaryVenueEntrance() {
         AmapPoiCandidate entrance = poi("P-ENTRY", "莫干山收费站入口", "湖州", "德清", 120, 30);
         entrance.setType("高速路入口");
@@ -344,6 +362,25 @@ class PassengerRouteEndpointResolverTest {
         var ordinary = step("驶向收费站出口", "", "地面道路", 120.0005, 120.001);
         PassengerRouteEndpointDirectionValidator.validate(origin, exit,
                 new AmapDrivingRouteService.DrivingRouteOption(endingAtExit, List.of(highway, ordinary)));
+    }
+
+    @Test
+    void originEntranceWhoseInterchangeStepMentionsHighwayIsAccepted() {
+        PassengerRouteSnapshot.Place origin = new PassengerRouteSnapshot.Place(
+                "P-ENTRY", "德清收费站(G25长深高速入口)", "德清", "湖州",
+                new PassengerRouteSnapshot.GeoPoint(120, 30));
+        PassengerRouteSnapshot.Place destination = new PassengerRouteSnapshot.Place(
+                "P-DEST", "西溪国家湿地公园洪园", "杭州", "西湖区",
+                new PassengerRouteSnapshot.GeoPoint(120.2, 30));
+        RouteResponse route = new RouteResponse();
+        route.setPolyline(List.of(point(120, 30), point(120.0005, 30), point(120.2, 30)));
+        var first = step("沿德清互通向东南行驶87米靠右", "靠右", "德清互通", 120, 120.0005);
+        var second = step("沿德清互通途径G25长深高速、东苕溪大桥、分庄漾桥"
+                        + "向东南行驶20.9千米向右前方行驶进入右岔路",
+                "向右前方行驶", "德清互通", 120.0005, 120.2);
+
+        PassengerRouteEndpointDirectionValidator.validate(origin, destination,
+                new AmapDrivingRouteService.DrivingRouteOption(route, List.of(first, second)));
     }
 
     @Test

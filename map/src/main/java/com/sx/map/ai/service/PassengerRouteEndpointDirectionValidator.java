@@ -11,6 +11,7 @@ import com.sx.map.service.CurrentRouteSemanticConsistencyEvaluator;
 import com.sx.map.service.WaypointRouteCandidateEvaluator;
 
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** 对收费站端点检查同一路径上的到达事件及上下高速方向，证据不足时不出路线卡。 */
@@ -93,6 +94,57 @@ final class PassengerRouteEndpointDirectionValidator {
     private static boolean originRampProven(PassengerRouteSnapshot.Place place, Point station,
                                             AmapDrivingRouteService.DrivingRouteOption option) {
         if (!place.name().contains("入口") || option.steps().isEmpty()) return false;
+        String highwayNumber = firstHighwayNumber(place.name());
+        if (highwayNumber != null
+                && interchangeStepEntersHighway(place, highwayNumber, option)) {
+            return true;
+        }
+        return firstStepRampPattern(place, station, option);
+    }
+
+    /**
+     * 高德常把收费站入口写成“沿德清互通途径G25长深高速……”：首段是互通/匝道，
+     * 高速公路编号只出现在 instruction 里，roadName 不会切换成高速。
+     *
+     * 本方法只在入口起点、路线前 1 公里内，且步骤从该站附近的互通/匝道起步并写明
+     * “途径/进入/驶入 + 同编号高速”时成立；仍排除掉头、折返和驶出高速。
+     */
+    private static boolean interchangeStepEntersHighway(
+            PassengerRouteSnapshot.Place place, String highwayNumber,
+            AmapDrivingRouteService.DrivingRouteOption option) {
+        String stationBase = tollStationBase(place.name());
+        if (stationBase == null) return false;
+        Pattern entry = Pattern.compile("(?i)(?:途径|途经|进入|驶入)\\s*"
+                + Pattern.quote(highwayNumber) + "(?!\\d)");
+        double traveled = 0D;
+        for (AmapDrivingRouteService.NavigationStep step : option.steps()) {
+            if (step == null || step.polyline().size() < 2) return false;
+            String text = step.roadName() + " " + step.action() + " "
+                    + step.assistantAction() + " " + step.instruction();
+            if (text.contains("掉头") || text.contains("折返") || text.contains("驶出高速")) {
+                return false;
+            }
+            String road = step.roadName();
+            boolean interchange = road.contains("互通") || road.contains("枢纽")
+                    || road.contains("入口") || road.contains("收费站");
+            boolean namedForStation = road.contains(stationBase)
+                    || step.instruction().contains(stationBase);
+            boolean startsOnRoad = step.instruction().startsWith("沿" + road);
+            if (traveled <= TRANSITION_MAX_TRAVEL_METERS
+                    && roadState(step) != RoadState.HIGHWAY
+                    && interchange && namedForStation && startsOnRoad
+                    && entry.matcher(step.instruction()).find()) {
+                return true;
+            }
+            traveled += polylineLength(step.polyline());
+            if (traveled > TRANSITION_MAX_TRAVEL_METERS) break;
+        }
+        return false;
+    }
+
+    /** 原严格规则：首段道路名本身就是“XX高速入口”，instruction 写明途径同编号高速。 */
+    private static boolean firstStepRampPattern(PassengerRouteSnapshot.Place place, Point station,
+                                                 AmapDrivingRouteService.DrivingRouteOption option) {
         AmapDrivingRouteService.NavigationStep first = option.steps().getFirst();
         if (first == null || first.polyline().size() < 2
                 || !near(station, first.polyline().getFirst())) return false;
@@ -103,8 +155,22 @@ final class PassengerRouteEndpointDirectionValidator {
         if (action.contains("掉头") || action.contains("折返") || action.contains("驶出高速")) return false;
         int via = instruction.indexOf("途径");
         if (!instruction.startsWith("沿" + ramp) || via < 0) return false;
-        var roadNumber = HIGHWAY_NUMBER.matcher(ramp);
+        Matcher roadNumber = HIGHWAY_NUMBER.matcher(ramp);
         return roadNumber.find() && instruction.substring(via + 2).contains(roadNumber.group());
+    }
+
+    private static String firstHighwayNumber(String name) {
+        Matcher matcher = HIGHWAY_NUMBER.matcher(name);
+        return matcher.find() ? matcher.group() : null;
+    }
+
+    /** 从“德清收费站(G25长深高速入口)”得到“德清”，用于核对互通步骤是否属于该站。 */
+    private static String tollStationBase(String name) {
+        String base = name.split("[（(]", 2)[0].strip();
+        int index = base.indexOf("收费站");
+        if (index <= 0) return null;
+        String result = base.substring(0, index).strip();
+        return result.isEmpty() ? null : result;
     }
 
     private static boolean endpointTransitionProven(Point station, EndpointRole role,

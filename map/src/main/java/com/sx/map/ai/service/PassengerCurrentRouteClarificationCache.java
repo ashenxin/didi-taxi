@@ -22,6 +22,9 @@ import java.util.UUID;
 /**
  * 保存“经过”含义澄清所需的可信服务端上下文。
  *
+ * 仅用于兼容已持久化的旧会话；新请求不再生成含义选项，只问“是否经过”时由
+ * {@link PassengerCurrentRouteCheckService} 直接给出复合关系结论。
+ *
  * 客户端只能提交 taskNo 与缓存中允许的枚举选项；地点、坐标、routeRef、路线条件和
  * 原始提问均从服务端上下文恢复。该任务不授权读取路线，恢复时仍要重新验证 routeRef。
  */

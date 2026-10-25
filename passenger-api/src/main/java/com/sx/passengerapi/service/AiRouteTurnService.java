@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sx.passengerapi.client.MapRouteAiClient;
+import com.sx.passengerapi.client.MapWeatherAiClient;
 import com.sx.passengerapi.client.PassengerAiConversationClient;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateRequest;
 import com.sx.passengerapi.client.dto.ai.AiConversationDtos.AiConversationCreateResponse;
@@ -40,6 +41,8 @@ import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.PartialEndpointCompl
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRoutePlaceChoiceRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteRequest;
 import com.sx.passengerapi.client.dto.maproute.MapRouteDtos.ViaRouteResponse;
+import com.sx.passengerapi.client.dto.maproute.MapWeatherDtos.WeatherForecastRequest;
+import com.sx.passengerapi.client.dto.maproute.MapWeatherDtos.WeatherForecastResponse;
 import com.sx.passengerapi.common.exception.BizErrorException;
 import com.sx.passengerapi.common.vo.ResponseVo;
 import com.sx.passengerapi.model.ai.AiSseEvents.AssistantMessageEvent;
@@ -61,7 +64,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * AI 客服路线轮次编排：确认两端、生成默认或指定途经点路线卡，以及核查当前路线。
+ * AI 客服轮次编排：确认两端、生成默认或指定途经点路线卡、核查当前路线，以及天气 skill 的单轮问答。
  *
  * 地图地点、路线与分钟数只来自 map-service 确定性能力，模型只负责提取地点名称；
  * 本类按结构化状态决定分支，不依赖模型文本作为业务权威。事件顺序遵循 API 契约：
@@ -84,10 +87,12 @@ public class AiRouteTurnService {
     static final String CURRENT_ROUTE_CHECK = "CURRENT_ROUTE_CHECK";
     static final String VIA_ROUTE_PLAN = "VIA_ROUTE_PLAN";
     static final String ROUTE_EXISTS = "ROUTE_EXISTS";
+    static final String WEATHER_QUERY = "WEATHER_QUERY";
 
     private static final String DEFAULT_PLACE_CHOICE_FLOW = "ROUTE_PREPARATION";
     private static final String PARTIAL_ENDPOINT_FLOW = "PARTIAL_ENDPOINT";
     private static final String CHECK_CONTEXT_FIELD = "checkContext";
+    private static final String WEATHER_CONTEXT_FIELD = "weatherContext";
     private static final int MESSAGE_PAGE_SIZE = 50;
 
     private static final String ASK_FOR_ENDPOINTS =
@@ -105,18 +110,25 @@ public class AiRouteTurnService {
     private static final String ASK_FOR_ROUTE_EXISTS_PLACE =
             "请告诉我要查询的收费站、服务区或加油站名称。";
     private static final String NEW_DEFAULT_ROUTE_PREFIX = "这是本轮新生成的默认路线。";
+    private static final String ASK_FOR_WEATHER =
+            "请告诉我城市和日期，例如：杭州明天天气。";
+    private static final String WEATHER_DATE_RANGE =
+            "目前只能查今天、明天、后天、大后天这四天的预报，请换个日期。";
     private static final Set<String> CHECK_MODES =
             Set.of("PASS_NEARBY", "USE_EXIT", "ENTER_HIGHWAY", "VISIT_PLACE");
 
     private final PassengerAiConversationClient passengerAi;
     private final MapRouteAiClient mapRouteAi;
+    private final MapWeatherAiClient mapWeatherAi;
     private final ObjectMapper objectMapper;
 
     public AiRouteTurnService(PassengerAiConversationClient passengerAi,
                               MapRouteAiClient mapRouteAi,
+                              MapWeatherAiClient mapWeatherAi,
                               ObjectMapper objectMapper) {
         this.passengerAi = passengerAi;
         this.mapRouteAi = mapRouteAi;
+        this.mapWeatherAi = mapWeatherAi;
         this.objectMapper = objectMapper;
     }
 
@@ -134,7 +146,7 @@ public class AiRouteTurnService {
             return page;
         }
         return new AiMessageListResponse(page.messages().stream()
-                .map(this::withoutCheckContext).toList(), page.hasMore());
+                .map(this::withoutInternalContext).toList(), page.hasMore());
     }
 
     public AiConversationListResponse listConversations(long customerId, Integer limit,
@@ -149,7 +161,7 @@ public class AiRouteTurnService {
                 conversationNo, requestNo, customerId), "requestStatus");
         return new AiRequestStatusResponse(status.requestNo(), status.requestVersion(),
                 status.clientMessageNo(), status.status(),
-                withoutCheckContext(status.assistantReply()));
+                withoutInternalContext(status.assistantReply()));
     }
 
     public AiConversationDeleteResponse deleteConversation(long customerId,
@@ -233,9 +245,17 @@ public class AiRouteTurnService {
                                  String requestNo, long conditionVersion, String content,
                                  AssistantMessageView latestAssistantMessage) {
         PartialEndpointPayload pending = parsePartialEndpointPayload(latestAssistantMessage);
+        WeatherContextResolver.Context weatherContext =
+                WeatherContextResolver.from(latestAssistantMessage, objectMapper);
         ExtractEndpointsResponse extracted = unwrap(mapRouteAi.extract(
                 new ExtractEndpointsRequest(content,
-                        pending == null ? null : pending.missingRole())), "extract");
+                        pending == null ? null : pending.missingRole(),
+                        weatherContext.anyWeatherContext())), "extract");
+        if (WEATHER_QUERY.equals(extracted.intent())) {
+            handleWeatherQuery(sink, customerId, conversationNo, requestNo,
+                    content, extracted, weatherContext);
+            return;
+        }
         if (CURRENT_ROUTE_CHECK.equals(extracted.intent())) {
             handleCurrentRouteCheck(sink, customerId, conversationNo, requestNo,
                     conditionVersion, content, extracted);
@@ -256,6 +276,17 @@ public class AiRouteTurnService {
                 askForCheckEndpoints(sink, customerId, conversationNo, requestNo, pendingCheck);
             }
             return;
+        }
+        // 上一轮是天气追问（例如“请告诉我城市”）：本轮只回一个城市时继续天气，
+        // 不把它当成路线起点。若乘客明确给出两端或路线动作，仍按路线处理。
+        if (weatherContext.pendingAsk()) {
+            ExtractEndpointsResponse weatherReply =
+                    weatherReplyFromPending(extracted, content, weatherContext);
+            if (weatherReply != null) {
+                handleWeatherQuery(sink, customerId, conversationNo, requestNo,
+                        content, weatherReply, weatherContext);
+                return;
+            }
         }
         boolean hasOrigin = hasText(extracted.originName());
         boolean hasDestination = hasText(extracted.destinationName());
@@ -526,6 +557,174 @@ public class AiRouteTurnService {
         String text = "地图找到以下可能对应「" + requestedPlaceName + "」的地点，请确认具体地点。";
         sendChoiceMessage(sink, customerId, conversationNo, requestNo, "PLACE_CHOICES",
                 "place.choices", text, payloadJson, context);
+    }
+
+    /**
+     * 天气 skill：单城市、单日、文本回答。缺城市或日期超出范围时追问/说明，
+     * 不调用地图；只有城市明确时才请求 map-service，天气事实不从模型文本生成。
+     */
+    private void handleWeatherQuery(AiTurnEventSink sink, long customerId,
+                                    String conversationNo, String requestNo,
+                                    String content, ExtractEndpointsResponse extracted,
+                                    WeatherContextResolver.Context weatherContext) {
+        Integer requestedOffset = extracted.weatherDayOffset();
+        if (requestedOffset == null) {
+            requestedOffset = dayOffsetFromText(content);
+        }
+        if (requestedOffset == null) {
+            requestedOffset = weatherContext.pendingDayOffset();
+        }
+        if (requestedOffset != null && (requestedOffset < 0 || requestedOffset > 3)) {
+            completeText(sink, customerId, conversationNo, requestNo, WEATHER_DATE_RANGE, null);
+            return;
+        }
+        String requestedPlace = extracted.weatherPlaceName();
+        boolean inferred = false;
+        if (!hasText(requestedPlace)) {
+            requestedPlace = weatherContext.city();
+            if (!hasText(requestedPlace)) {
+                completeWeatherAsk(sink, customerId, conversationNo, requestNo, requestedOffset);
+                return;
+            }
+            inferred = true;
+        }
+        String queryPlace = inferred
+                ? WeatherContextResolver.displayCity(requestedPlace) : requestedPlace;
+        if (!hasText(queryPlace)) {
+            completeWeatherAsk(sink, customerId, conversationNo, requestNo, requestedOffset);
+            return;
+        }
+        int dayOffset = requestedOffset == null ? 0 : requestedOffset;
+        WeatherForecastResponse result = unwrap(mapWeatherAi.forecast(
+                new WeatherForecastRequest(requestNo, queryPlace,
+                        inferred ? null : extracted.weatherPlaceRegion(), dayOffset)),
+                "weatherForecast");
+        switch (result.status()) {
+            case WeatherForecastResponse.STATUS_OK -> {
+                String text = WeatherAnswerFormatter.text(result, dayOffset, queryPlace);
+                if (inferred) {
+                    text = "按你刚才说的" + queryPlace + "查：" + text;
+                }
+                completeText(sink, customerId, conversationNo, requestNo, text,
+                        weatherPayloadJson(result));
+            }
+            case WeatherForecastResponse.STATUS_PLACE_REQUIRED ->
+                    completeWeatherAsk(sink, customerId, conversationNo, requestNo,
+                            requestedOffset);
+            case WeatherForecastResponse.STATUS_PLACE_NOT_FOUND ->
+                    completeText(sink, customerId, conversationNo, requestNo,
+                            "没有找到「" + queryPlace
+                                    + "」这个城市，请补充省份或换一个名称。", null);
+            case WeatherForecastResponse.STATUS_DATE_OUT_OF_RANGE ->
+                    completeText(sink, customerId, conversationNo, requestNo,
+                            WEATHER_DATE_RANGE, null);
+            default -> throw new IllegalStateException("未知的天气查询状态: " + result.status());
+        }
+    }
+
+    /**
+     * 上一轮是天气追问时，本轮只回一个城市应继续天气；若乘客明确给出路线动作或两端，
+     * 返回 null，让路线分支接管。
+     */
+    private ExtractEndpointsResponse weatherReplyFromPending(
+            ExtractEndpointsResponse extracted, String content,
+            WeatherContextResolver.Context context) {
+        if (hasText(extracted.destinationName())
+                || hasText(extracted.viaPlaceName())
+                || hasText(extracted.checkPlaceName())
+                || containsRouteVerb(content)) {
+            return null;
+        }
+        String city = hasText(extracted.weatherPlaceName())
+                ? extracted.weatherPlaceName()
+                : hasText(extracted.originName()) ? extracted.originName() : null;
+        if (!hasText(city) && isBareCityText(content)) {
+            city = content.strip();
+        }
+        if (!hasText(city)) {
+            return null;
+        }
+        Integer offset = extracted.weatherDayOffset() != null
+                ? extracted.weatherDayOffset() : context.pendingDayOffset();
+        return new ExtractEndpointsResponse(null, null, null, null, WEATHER_QUERY,
+                null, null, null, null, null, city, null, offset);
+    }
+
+    private static Integer dayOffsetFromText(String content) {
+        if (content.contains("大后天")) return 3;
+        if (content.contains("后天")) return 2;
+        if (content.contains("明天")) return 1;
+        if (content.contains("今天")) return 0;
+        return null;
+    }
+
+    private static boolean containsRouteVerb(String content) {
+        return content.contains("从") || content.contains("到")
+                || content.contains("规划") || content.contains("路线")
+                || content.contains("经过") || content.contains("途经")
+                || content.contains("改走") || content.contains("导航")
+                || content.contains("怎么走") || content.contains("去")
+                || content.contains("回");
+    }
+
+    private static boolean isBareCityText(String content) {
+        String text = content.strip();
+        return text.length() >= 2 && text.length() <= 20
+                && !containsRouteVerb(text)
+                && !text.contains("今天") && !text.contains("明天")
+                && !text.contains("后天") && !text.contains("天气")
+                && !text.contains("下雨") && !text.contains("气温")
+                && !text.contains("度") && !text.contains("呢");
+    }
+
+    /** 天气追问也要把原始日期偏移写进服务端上下文，下一轮乘客只回城市时才能续接。 */
+    private void completeWeatherAsk(AiTurnEventSink sink, long customerId,
+                                    String conversationNo, String requestNo,
+                                    Integer dayOffset) {
+        String text = weatherAskText(dayOffset);
+        String payloadJson = weatherAskPayload(dayOffset);
+        AiTurnCompleteResponse done = unwrap(passengerAi.complete(conversationNo, requestNo,
+                new AiTurnCompleteRequest(customerId, "TEXT", text, payloadJson)), "complete");
+        sink.content("answer.completed", new ContentEvent(requestNo, new AssistantMessageEvent(
+                done.messageNo(), requestNo, "ASSISTANT", "TEXT", text,
+                clientPayload(payloadJson), done.createdAt())));
+    }
+
+    private static String weatherAskText(Integer dayOffset) {
+        if (dayOffset != null && dayOffset >= 0 && dayOffset <= 3) {
+            return "请告诉我城市，例如：杭州" + weatherDayLabel(dayOffset) + "天气。";
+        }
+        return ASK_FOR_WEATHER;
+    }
+
+    private String weatherAskPayload(Integer dayOffset) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        if (dayOffset != null) {
+            context.put("dayOffset", dayOffset);
+        }
+        try {
+            return objectMapper.writeValueAsString(Map.of(WEATHER_CONTEXT_FIELD, context));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("天气追问上下文序列化失败", e);
+        }
+    }
+
+    private static String weatherDayLabel(int dayOffset) {
+        return switch (dayOffset) {
+            case 0 -> "今天";
+            case 1 -> "明天";
+            case 2 -> "后天";
+            case 3 -> "大后天";
+            default -> "";
+        };
+    }
+
+    private String weatherPayloadJson(WeatherForecastResponse result) {
+        try {
+            return objectMapper.writeValueAsString(WeatherAnswerFormatter.payload(result));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("天气结果序列化失败", e);
+        }
     }
 
     /** 当前路线优先取自本会话已持久化的最新路线卡，模型不能提交 routeRef。 */
@@ -917,7 +1116,11 @@ public class AiRouteTurnService {
             case "VISIT_PLACE" -> "实际进入或通过「" + placeName + "」";
             default -> "经过「" + placeName + "」";
         };
-        String detail = detailOrFallback(result.detail(), "当前路线缺少足够的地图证据");
+        String detail = stripSentenceEnd(detailOrFallback(
+                result.detail(), "当前路线缺少足够的地图证据"));
+        if ("PASS_NEARBY".equals(checkMode)) {
+            return nearbyRelationText(placeName, result, detail);
+        }
         return switch (result.verdict()) {
             case "PASSED" -> "根据当前路线的地图信息，这条路线会" + relation + "（" + detail + "）。";
             case "NOT_PASSED" -> "根据当前路线的地图信息，这条路线不会" + relation + "（" + detail + "）。";
@@ -925,6 +1128,53 @@ public class AiRouteTurnService {
             case "CONFLICT" -> semanticConflictText(result.reason(), detail, placeName);
             default -> throw new IllegalStateException("未知的当前路线核查结论: " + result.verdict());
         };
+    }
+
+    /**
+     * “附近经过”是最容易被读成“实际通过”的结论。正文先明确没有确认实际通过，
+     * 再给距离/证据，最后提示需要核查具体入口/出口时应如何补充，避免用户看走眼。
+     */
+    private static String nearbyRelationText(String placeName, CurrentRouteCheckResponse result,
+                                             String detail) {
+        String kind = placeKind(result);
+        return switch (result.verdict()) {
+            case "PASSED" -> "根据当前路线的地图信息，这条路线只是从「" + placeName
+                    + "」附近经过，不能确认实际通过" + kind + "。具体来说，" + detail + "。"
+                    + nearbyCheckHint(result);
+            case "NOT_PASSED" -> "根据当前路线的地图信息，这条路线没有经过「" + placeName
+                    + "」附近。具体来说，" + detail + "。";
+            case "UNVERIFIABLE" -> "暂时无法确认当前路线是否从「" + placeName
+                    + "」附近经过：" + detail + "。地图证据不足，不能当作已经经过或通过该地点。";
+            case "CONFLICT" -> semanticConflictText(result.reason(), detail, placeName);
+            default -> throw new IllegalStateException("未知的当前路线核查结论: " + result.verdict());
+        };
+    }
+
+    private static String placeKind(CurrentRouteCheckResponse result) {
+        String type = result.target() == null ? null : result.target().businessType();
+        if ("TOLL_STATION".equals(type)) return "该收费站";
+        if ("SERVICE_AREA".equals(type)) return "该服务区";
+        if ("GAS_STATION".equals(type)) return "该加油站";
+        return "该地点";
+    }
+
+    private static String nearbyCheckHint(CurrentRouteCheckResponse result) {
+        String type = result.target() == null ? null : result.target().businessType();
+        if ("TOLL_STATION".equals(type)) {
+            return "如果你要核查的是某个具体入口/出口，请补充入口/出口名称。";
+        }
+        if ("SERVICE_AREA".equals(type) || "GAS_STATION".equals(type)) {
+            return "如果你要核查的是某个具体入口，请补充入口名称。";
+        }
+        return "如果你要核查的是更具体的地点，请补充地点名称。";
+    }
+
+    private static String stripSentenceEnd(String value) {
+        String text = value == null ? "" : value.strip();
+        while (text.endsWith("。") || text.endsWith(".")) {
+            text = text.substring(0, text.length() - 1).strip();
+        }
+        return text;
     }
 
     private static String semanticConflictText(String reason, String detail, String placeName) {
@@ -1417,15 +1667,18 @@ public class AiRouteTurnService {
 
     private Map<String, Object> clientPayload(String payloadJson) {
         Map<String, Object> payload = parsePayloadJson(payloadJson);
-        if (payload == null || !payload.containsKey(CHECK_CONTEXT_FIELD)) {
+        if (payload == null
+                || (!payload.containsKey(CHECK_CONTEXT_FIELD)
+                    && !payload.containsKey(WEATHER_CONTEXT_FIELD))) {
             return payload;
         }
         Map<String, Object> clientView = new LinkedHashMap<>(payload);
         clientView.remove(CHECK_CONTEXT_FIELD);
+        clientView.remove(WEATHER_CONTEXT_FIELD);
         return clientView.isEmpty() ? null : clientView;
     }
 
-    private MessageView withoutCheckContext(MessageView message) {
+    private MessageView withoutInternalContext(MessageView message) {
         String payloadJson = strippedPayloadJson(message.payloadJson());
         if (payloadJson == null || payloadJson.equals(message.payloadJson())) {
             return message;
@@ -1435,7 +1688,7 @@ public class AiRouteTurnService {
                 message.sequenceNo(), message.status(), message.createdAt());
     }
 
-    private AssistantMessageView withoutCheckContext(AssistantMessageView reply) {
+    private AssistantMessageView withoutInternalContext(AssistantMessageView reply) {
         if (reply == null) {
             return null;
         }
@@ -1490,7 +1743,7 @@ public class AiRouteTurnService {
         }
     }
 
-    /** 只有地图认识的含义才透传；UNSPECIFIED 与模型自造值交给地图按原话追问。 */
+    /** 只有地图认识的显式动作才透传；UNSPECIFIED 与模型自造值交给地图按复合关系核查。 */
     private static String normalizeCheckMode(String checkMode) {
         if (!hasText(checkMode)) {
             return null;
@@ -1942,6 +2195,8 @@ public class AiRouteTurnService {
                             "已找到驾车路线，但无法确认从所选收费站按正确方向通行；请换个明确的高速出入口或普通地点重试");
                     case "AI_MAP_UNAVAILABLE" -> new TurnFailedEvent(requestNo, upstreamCode,
                             "地图算路暂时不可用，请稍后重试");
+                    case "AI_WEATHER_UNAVAILABLE" -> new TurnFailedEvent(requestNo, upstreamCode,
+                            "天气服务暂时不可用，请稍后重试");
                     case "AI_PROVIDER_TIMEOUT" -> new TurnFailedEvent(requestNo, upstreamCode,
                             "客服理解请求超时，请稍后重试");
                     case "AI_PROVIDER_UNAVAILABLE" -> new TurnFailedEvent(requestNo, upstreamCode,
