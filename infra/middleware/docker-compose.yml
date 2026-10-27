@@ -94,6 +94,43 @@ services:
       retries: 20
       start_period: 30s
 
+  nacos:
+    image: nacos/nacos-server:${NACOS_VERSION}
+    container_name: didi-taxi-nacos
+    restart: "no"
+    ports:
+      - "127.0.0.1:8848:8848"   # 主端口
+      - "127.0.0.1:9848:9848"   # 客户端 gRPC：Spring Cloud Alibaba 3.x 必需
+      - "127.0.0.1:9849:9849"   # 集群 gRPC
+      - "127.0.0.1:8080:8080"   # 控制台
+    environment:
+      MODE: standalone
+      NACOS_DEPLOYMENT_TYPE: merged
+      # 镜像默认关闭鉴权，必须显式打开，否则服务拿不到 token 会全部启动失败。
+      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_ADMIN_ENABLE: "true"
+      NACOS_AUTH_CONSOLE_ENABLE: "true"
+      NACOS_AUTH_IDENTITY_KEY: ${NACOS_AUTH_IDENTITY_KEY}
+      NACOS_AUTH_IDENTITY_VALUE: ${NACOS_AUTH_IDENTITY_VALUE}
+      NACOS_AUTH_TOKEN: ${NACOS_AUTH_TOKEN}
+      # 与迁移前本地启动参数一致（实测 RSS 约 500MB）。
+      JVM_XMS: 512m
+      JVM_XMX: 512m
+      JVM_XMN: 256m
+      TZ: Asia/Shanghai
+    volumes:
+      - nacos-data:/home/nacos/data
+    healthcheck:
+      # 镜像未暴露 actuator 健康端点（/nacos/actuator/health 返回 404），
+      # 改用登录接口：既证明 HTTP 已就绪，也证明 derby 中的用户表已加载。
+      test:
+        - CMD-SHELL
+        - curl -fsS -X POST http://localhost:8848/nacos/v1/auth/login -d 'username=nacos&password=nacos' | grep -q accessToken
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
 volumes:
   mysql-data:
     name: didi-taxi-mysql-data
@@ -101,3 +138,5 @@ volumes:
     name: didi-taxi-redis-data
   kafka-data:
     name: didi-taxi-kafka-data
+  nacos-data:
+    name: didi-taxi-nacos-data
