@@ -1,0 +1,103 @@
+name: didi-taxi-middleware
+
+# 本地开发中间件：MySQL + Redis + Kafka
+#
+# 设计约束（与 brew 版本对齐，切换后 Nacos / xxl-job-admin 配置零改动）：
+#   1. 宿主端口严格保持 127.0.0.1:3306 / 6379 / 9092，且只绑定回环地址。
+#   2. 镜像版本锁定为当前装机版本，避免 SQL / 协议差异。
+#   3. restart: "no" —— 不随 Docker Desktop 启动而自启，停止后不自动拉起。
+#   4. 时区统一 Asia/Shanghai（calculate 福利签到硬校验该时区）。
+
+services:
+  mysql:
+    image: mysql:${MYSQL_VERSION}
+    container_name: didi-taxi-mysql
+    restart: "no"
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      # 现状是 root + 空密码，保持不动以免改动 10 个 Nacos Data ID。
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      # 官方镜像默认只建 root@localhost；宿主机经端口映射连入时源地址是 docker 网关。
+      MYSQL_ROOT_HOST: "%"
+      TZ: Asia/Shanghai
+    command:
+      - --default-time-zone=+08:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # 本地开发不需要 binlog，避免 datadir 膨胀（原 brew 实例 902MB 里大半是 binlog）。
+      - --skip-log-bin
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  redis:
+    image: redis:${REDIS_VERSION}
+    container_name: didi-taxi-redis
+    restart: "no"
+    ports:
+      - "127.0.0.1:6379:6379"
+    environment:
+      TZ: Asia/Shanghai
+    # 保留原实例的快照策略，并补开 AOF：本地开发改代码频繁重启服务，AOF 丢数据更少。
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "3600 1 300 100 60 10000"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:${KAFKA_VERSION}
+    container_name: didi-taxi-kafka
+    restart: "no"
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      TZ: Asia/Shanghai
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      # 必须 localhost：宿主机上的 JVM 拿到的就是这条地址。
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_LOG_RETENTION_HOURS: "168"
+      KAFKA_HEAP_OPTS: -Xmx512m -Xms512m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  mysql-data:
+    name: didi-taxi-mysql-data
+  redis-data:
+    name: didi-taxi-redis-data
+  kafka-data:
+    name: didi-taxi-kafka-data
